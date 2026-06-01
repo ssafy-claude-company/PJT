@@ -1,0 +1,76 @@
+"""Communication: Request/Response를 Discord 메시지로 인코딩/디코딩한다.
+
+규약(Discord.md 포맷):
+- To        = 멘션된 Organt (`<@id>`)
+- RepliesTo = 이 메시지가 reply면, 그 대상(Request)에 대한 Response
+- 식별      = Discord 메시지 ID
+- kind/결과 = 본문 태그 `[REQ:<kind>]` / `[RESP:<result>]`
+
+이 모듈은 포맷팅/파싱만 담당하는 순수 로직이다(네트워크 없음).
+"""
+from dataclasses import dataclass
+from typing import List, Optional
+
+REQ_PREFIX = "[REQ:"
+RESP_PREFIX = "[RESP:"
+
+
+@dataclass(frozen=True)
+class Request:
+    from_id: int
+    to_id: Optional[int]
+    kind: str                         # 예: "work"
+    text: str
+    request_id: Optional[str] = None  # 전송 후 Discord 메시지 ID
+
+
+@dataclass(frozen=True)
+class Response:
+    from_id: int
+    replies_to: str                   # 대상 Request의 메시지 ID
+    result: str                       # "accept" | "redo" | "report" ...
+    text: str
+    response_id: Optional[str] = None
+
+
+def format_request(to_id: int, kind: str, text: str) -> str:
+    """Request를 보낼 메시지 본문으로 만든다(To는 멘션)."""
+    return f"{REQ_PREFIX}{kind}] <@{to_id}> {text}".strip()
+
+
+def format_response(result: str, text: str) -> str:
+    """Response를 보낼 메시지 본문으로 만든다(reply로 전송)."""
+    return f"{RESP_PREFIX}{result}] {text}".strip()
+
+
+def _split_tag(content: str, prefix: str):
+    """'[PFX:value] rest' → (value, rest). 형식이 아니면 (None, None)."""
+    if not content.startswith(prefix) or "]" not in content:
+        return None, None
+    close = content.index("]")
+    value = content[len(prefix):close]
+    rest = content[close + 1:].strip()
+    return value, rest
+
+
+def parse_message(*, message_id, author_id, mention_ids: List[int],
+                  reply_to_id, content: str):
+    """Discord 메시지(primitive)를 Request/Response/None으로 해석한다."""
+    c = (content or "").strip()
+
+    # reply + [RESP:...] → Response
+    result, rest = _split_tag(c, RESP_PREFIX)
+    if result is not None and reply_to_id is not None:
+        return Response(from_id=author_id, replies_to=str(reply_to_id),
+                        result=result, text=rest, response_id=str(message_id))
+
+    # [REQ:...] + 멘션 → Request
+    kind, rest = _split_tag(c, REQ_PREFIX)
+    if kind is not None:
+        to_id = mention_ids[0] if mention_ids else None
+        if to_id is not None:
+            rest = rest.replace(f"<@{to_id}>", "").replace(f"<@!{to_id}>", "").strip()
+        return Request(from_id=author_id, to_id=to_id, kind=kind, text=rest,
+                       request_id=str(message_id))
+
+    return None
