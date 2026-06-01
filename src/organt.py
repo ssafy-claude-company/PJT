@@ -7,6 +7,7 @@ claude-agent-sdk의 ClaudeSDKClient로 Organt를 구동한다.
 - 인격(CLAUDE.md)·세션 보존(resume)은 Step2,
 - Discord 소통 툴은 기능5, audit 훅은 기능6에서 옵션 override로 붙인다.
 """
+from pathlib import Path
 from typing import List, Optional
 
 from claude_agent_sdk import (
@@ -16,7 +17,7 @@ from claude_agent_sdk import (
     TextBlock,
 )
 
-from .config import Config
+from .config import ROOT, Config
 
 # Organt 기본 인격(최소). Step2에서 CLAUDE.md 로딩으로 확장한다.
 ORGANT_PERSONA = (
@@ -26,6 +27,19 @@ ORGANT_PERSONA = (
     "불필요한 단계 없이 요청만 처리하고, 간결하게 한국어로 답합니다."
 )
 
+# Organt 인격 파일(CLAUDE.md) 경로. 인격·기억·Rule/Guide 목록을 담는다.
+PERSONA_PATH = ROOT / "organt" / "CLAUDE.md"
+
+
+def load_persona(path=None) -> str:
+    """Organt 인격(CLAUDE.md)을 읽어 system_prompt로 쓴다. 없거나 비면 기본 인격."""
+    p = Path(path) if path is not None else PERSONA_PATH
+    try:
+        text = p.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ORGANT_PERSONA
+    return text or ORGANT_PERSONA
+
 
 def build_options(config: Config, **overrides) -> ClaudeAgentOptions:
     """Organt용 ClaudeAgentOptions를 만든다.
@@ -34,7 +48,7 @@ def build_options(config: Config, **overrides) -> ClaudeAgentOptions:
     """
     opts = dict(
         model=config.model,                       # None이면 SDK 기본 모델
-        system_prompt=ORGANT_PERSONA,
+        system_prompt=load_persona(),             # CLAUDE.md 인격 로딩(없으면 기본)
         cwd=str(config.workspace_dir),            # 작업공간 안에서만 파일 작업
         allowed_tools=["Read", "Write", "Edit", "Bash"],  # 내장 파일/셸 툴(Step1 범위)
         permission_mode="acceptEdits",            # 파일 편집 자동 승인(권한 훅은 Step2)
