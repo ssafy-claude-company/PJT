@@ -6,12 +6,12 @@ import os
 
 
 def organt_allowed_tools(discord_tool_names):
-    """Organt 기본 허용 도구: 파일(Read/Write/Edit) + 도구탐색 + Discord 소통.
+    """Organt 기본 허용 도구: 파일(Read/Write/Edit) + 도구탐색 + 위임(Task) + Discord 소통.
 
     그 외(Bash, Web 등)는 PreToolUse 훅이 차단한다.
-    ToolSearch는 MCP(Discord) 툴 로딩에 필요해 허용한다.
+    ToolSearch는 MCP(Discord) 툴 로딩에, Task는 서브에이전트 위임에 쓰인다.
     """
-    return ["Read", "Write", "Edit", "ToolSearch", *discord_tool_names]
+    return ["Read", "Write", "Edit", "ToolSearch", "Task", "Agent", *discord_tool_names]
 
 
 def _within(cwd, target) -> bool:
