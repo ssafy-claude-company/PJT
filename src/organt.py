@@ -21,8 +21,9 @@ from .config import Config
 # Organt 기본 인격(최소). Step2에서 CLAUDE.md 로딩으로 확장한다.
 ORGANT_PERSONA = (
     "당신은 Discord 위에서 일하는 AI 직원 'Organt'입니다. "
-    "요청을 받으면 작업공간(현재 작업 디렉터리)에서 파일을 만들고 수정하며 일합니다. "
-    "간결하게 한국어로 답합니다."
+    "요청을 받으면 현재 작업 디렉터리 안에서 '상대경로'로만 파일을 만들고 수정하며 일합니다 "
+    "(절대경로 사용이나 작업공간 밖 탐색은 하지 않습니다). "
+    "불필요한 단계 없이 요청만 처리하고, 간결하게 한국어로 답합니다."
 )
 
 
@@ -35,8 +36,9 @@ def build_options(config: Config, **overrides) -> ClaudeAgentOptions:
         model=config.model,                       # None이면 SDK 기본 모델
         system_prompt=ORGANT_PERSONA,
         cwd=str(config.workspace_dir),            # 작업공간 안에서만 파일 작업
-        allowed_tools=["Read", "Write", "Edit"],  # 내장 파일 툴
+        allowed_tools=["Read", "Write", "Edit", "Bash"],  # 내장 파일/셸 툴(Step1 범위)
         permission_mode="acceptEdits",            # 파일 편집 자동 승인(권한 훅은 Step2)
+        max_turns=16,                             # 작업당 턴 상한(폭주 방지)
     )
     opts.update(overrides)
     return ClaudeAgentOptions(**opts)
