@@ -7,6 +7,8 @@ claude-agent-sdk의 ClaudeSDKClient로 Organt를 구동한다.
 - 인격(CLAUDE.md)·세션 보존(resume)은 Step2,
 - Discord 소통 툴은 기능5, audit 훅은 기능6에서 옵션 override로 붙인다.
 """
+import dataclasses
+import json
 from pathlib import Path
 from typing import List, Optional
 
@@ -59,24 +61,54 @@ def build_options(config: Config, **overrides) -> ClaudeAgentOptions:
 
 
 class Organt:
-    """파일시스템에 접근하는 Organt(LLM) 본체."""
+    """파일시스템에 접근하고, 세션 resume로 State를 보존하는 Organt(LLM) 본체."""
 
-    def __init__(self, config: Config, options: Optional[ClaudeAgentOptions] = None):
+    def __init__(self, config: Config, options: Optional[ClaudeAgentOptions] = None,
+                 state_path=None):
         self.config = config
         self.options = options or build_options(config)
+        # State(작업 맥락)는 세션 ID로 보존한다. 재시작(새 인스턴스) 시 파일에서 복원.
+        self.state_path = (Path(state_path) if state_path is not None
+                           else config.audit_log_path.parent / "organt_state.json")
+        self.session_id = self._load_session_id()
+
+    def _load_session_id(self) -> Optional[str]:
+        try:
+            return json.loads(self.state_path.read_text(encoding="utf-8")).get("session_id")
+        except (OSError, ValueError):
+            return None
+
+    def _save_session_id(self, sid: str) -> None:
+        self.session_id = sid
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(json.dumps({"session_id": sid}), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _options_for_call(self) -> ClaudeAgentOptions:
+        """직전 세션이 있으면 resume를 붙인 옵션을 만든다."""
+        if self.session_id:
+            return dataclasses.replace(self.options, resume=self.session_id)
+        return self.options
 
     async def handle(self, prompt: str) -> str:
-        """요청 한 건을 처리하고 Organt의 최종 텍스트 응답을 돌려준다.
+        """요청 한 건을 처리하고 최종 텍스트 응답을 돌려준다.
 
-        지속 세션(resume)으로 State를 보존하는 것은 Step2 범위이므로,
-        여기서는 요청마다 단발 세션으로 처리한다.
+        직전 세션이 있으면 resume로 이어가고, 끝나면 세션 ID를 저장한다(State 보존).
         """
         texts: List[str] = []
-        async with ClaudeSDKClient(options=self.options) as client:
+        captured_sid: Optional[str] = None
+        async with ClaudeSDKClient(options=self._options_for_call()) as client:
             await client.query(prompt)
             async for msg in client.receive_response():
+                sid = getattr(msg, "session_id", None)
+                if sid:
+                    captured_sid = sid
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             texts.append(block.text)
+        if captured_sid:
+            self._save_session_id(captured_sid)
         return "".join(texts).strip()
