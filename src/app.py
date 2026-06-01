@@ -15,6 +15,7 @@ from .discord_tools import DISCORD_TOOL_NAMES, DiscordIO, build_discord_server
 from .gateway import Gateway
 from .organt import Organt, build_options
 from .permissions import make_pre_tool_use_hook, organt_allowed_tools
+from .subagents import organt_subagents
 
 
 class App:
@@ -37,6 +38,7 @@ class App:
         self.organt = Organt(config, build_options(
             config,
             mcp_servers={"discord": build_discord_server(self.io)},
+            agents=organt_subagents(),   # 실작업은 서브에이전트에 위임
             allowed_tools=allowed,
             hooks={
                 "PreToolUse": [HookMatcher(hooks=[pre_hook])],
