@@ -14,6 +14,7 @@ from .config import Config
 from .discord_tools import DISCORD_TOOL_NAMES, DiscordIO, build_discord_server
 from .gateway import Gateway
 from .organt import Organt, build_options
+from .permissions import make_pre_tool_use_hook, organt_allowed_tools
 
 
 class App:
@@ -27,14 +28,20 @@ class App:
             on_collect=self._on_collect,
             on_route=self._schedule_route,
         )
-        # 발신·읽기는 Organt 봇으로. 모든 툴 호출은 PostToolUse 훅이 audit에 남긴다.
+        # 발신·읽기는 Organt 봇으로.
         self.io = DiscordIO(self.gateway.organt_bot, config.channel_id)
-        hook = make_post_tool_use_hook(self.audit)
+        # 권한: 허용 도구만 통과(PreToolUse 차단), 모든 툴 호출은 PostToolUse가 audit 기록.
+        allowed = organt_allowed_tools(DISCORD_TOOL_NAMES)
+        pre_hook = make_pre_tool_use_hook(self.audit, allowed)
+        post_hook = make_post_tool_use_hook(self.audit)
         self.organt = Organt(config, build_options(
             config,
             mcp_servers={"discord": build_discord_server(self.io)},
-            allowed_tools=["Read", "Write", "Edit"] + DISCORD_TOOL_NAMES,
-            hooks={"PostToolUse": [HookMatcher(hooks=[hook])]},
+            allowed_tools=allowed,
+            hooks={
+                "PreToolUse": [HookMatcher(hooks=[pre_hook])],
+                "PostToolUse": [HookMatcher(hooks=[post_hook])],
+            },
         ))
         self._route_tasks = set()
 
