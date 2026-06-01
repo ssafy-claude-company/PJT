@@ -80,6 +80,10 @@ class CommError(Exception):
     """통신 규약 위반(베턴/순서 등)."""
 
 
+class RedoLimitExceeded(CommError):
+    """Redo 한계 초과 → 상신(escalate)해야 함."""
+
+
 @dataclass
 class Frame:
     """열린 요청 한 건(요청 스택의 프레임)."""
@@ -97,12 +101,16 @@ class CommunicationManager:
     - 모든 요청이 닫히면 흐름이 시작점(origin)으로 복귀하고 종료된다.
     """
 
-    def __init__(self, origin_id: int):
+    def __init__(self, origin_id: int, redo_limit: int = 2):
         self.origin = origin_id
         self.alive = origin_id
         self._stack: List[Frame] = []
         self.history: list = []
         self.done = False
+        self.redo_limit = redo_limit
+        self._redo_counts: dict = {}
+        self.escalations: list = []
+        self.escalated_to_origin = False
 
     @property
     def open_requests(self) -> List[Frame]:
@@ -116,6 +124,8 @@ class CommunicationManager:
             raise CommError("흐름이 이미 종료되었습니다.")
         if from_id != self.alive:
             raise CommError(f"활성 Organt만 요청할 수 있습니다(현재 활성={self.alive}).")
+        if kind == "work" and to_id in self._participants():
+            raise CommError(f"{to_id} 는 미완 Work 보유/흐름 참여 중 → Work Request 거부(겹침·순환 방지).")
         frame = Frame(from_id, to_id, str(request_id), kind)
         self._stack.append(frame)
         self.alive = to_id  # receiver wake, sender sleep
@@ -135,4 +145,44 @@ class CommunicationManager:
         if not self._stack:             # 모든 요청 닫힘 → 시작점 복귀·종료
             self.done = True
             self.alive = self.origin
+        return frame
+
+    def _participants(self) -> set:
+        """현재 흐름에 참여 중인(미완 Work 보유) Organt 집합."""
+        s = {self.origin}
+        for f in self._stack:
+            s.add(f.from_id)
+            s.add(f.to_id)
+        return s
+
+    def is_busy(self, organt_id) -> bool:
+        """미완 Work 보유(또는 흐름 참여 중)인가 → Work Request 금지 대상."""
+        return organt_id in self._participants()
+
+    def redo(self, from_id: int, to_id: int, request_id) -> Frame:
+        """직전 응답이 불만족 → 같은 대상에 재요청(Redo). 한계 초과 시 RedoLimitExceeded."""
+        if from_id != self.alive:
+            raise CommError(f"활성 Organt만 redo할 수 있습니다(현재 활성={self.alive}).")
+        key = (from_id, to_id)
+        count = self._redo_counts.get(key, 0) + 1
+        if count > self.redo_limit:
+            raise RedoLimitExceeded(f"redo 한계({self.redo_limit}) 초과 → 상신 필요.")
+        self._redo_counts[key] = count
+        self.history.append(("redo", from_id, to_id, str(request_id), count))
+        return self.request(from_id, to_id, request_id, kind="work")
+
+    def escalate(self, reason: str = "") -> Frame:
+        """top 요청을 강제 close하고 상신(위로). 타임아웃/죽은 Organt로 인한 교착 방지."""
+        if self.done:
+            raise CommError("흐름이 이미 종료되었습니다.")
+        if not self._stack:
+            raise CommError("상신할 열린 요청이 없습니다.")
+        frame = self._stack.pop()       # 강제 close
+        self.alive = frame.from_id      # 요청자에게 상신(위로)
+        self.escalations.append((frame.request_id, reason))
+        self.history.append(("escalate", frame.to_id, frame.from_id, frame.request_id, reason))
+        if not self._stack:
+            self.done = True
+            self.alive = self.origin
+            self.escalated_to_origin = True
         return frame
