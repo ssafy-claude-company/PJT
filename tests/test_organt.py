@@ -5,7 +5,7 @@
 from pathlib import Path
 
 from src.config import Config
-from src.organt import ORGANT_PERSONA, Organt, build_options
+from src.organt import Organt, build_options
 
 
 def _cfg(model=None) -> Config:
@@ -41,5 +41,6 @@ def test_옵션_override_주입():
     assert opts.max_turns == 3
 
 
-def test_organt_기본옵션_인격():
-    assert Organt(_cfg()).options.system_prompt == ORGANT_PERSONA
+def test_organt_기본옵션_인격_CLAUDEmd():
+    sp = Organt(_cfg()).options.system_prompt
+    assert isinstance(sp, str) and "Organt" in sp
