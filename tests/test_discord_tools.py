@@ -44,10 +44,11 @@ def test_send_message_툴이_io로_전송():
     assert "111" in res["content"][0]["text"]
 
 
-def test_reply_message_툴이_id와_내용으로_답글():
+def test_reply_message_툴이_큰id를_정밀도손실없이_답글():
     io = FakeIO()
-    res = asyncio.run(_tools(io)["reply_message"].handler({"message_id": 10, "content": "넵"}))
-    assert io.replied == [(10, "넵")]
+    big = "1510916046683635752"  # 2^53 초과 스노우플레이크(문자열로 받아야 안 잘림)
+    res = asyncio.run(_tools(io)["reply_message"].handler({"message_id": big, "content": "넵"}))
+    assert io.replied == [(1510916046683635752, "넵")]
     assert "222" in res["content"][0]["text"]
 
 
