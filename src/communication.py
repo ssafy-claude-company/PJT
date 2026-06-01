@@ -74,3 +74,65 @@ def parse_message(*, message_id, author_id, mention_ids: List[int],
                        request_id=str(message_id))
 
     return None
+
+
+class CommError(Exception):
+    """통신 규약 위반(베턴/순서 등)."""
+
+
+@dataclass
+class Frame:
+    """열린 요청 한 건(요청 스택의 프레임)."""
+    from_id: int
+    to_id: int
+    request_id: str
+    kind: str
+
+
+class CommunicationManager:
+    """단일 활성 베턴 + 요청 스택.
+
+    - 활성(alive) Organt은 항상 1명. Request 시 sender sleep / receiver wake.
+    - Response는 스택 역순(LIFO)으로 close.
+    - 모든 요청이 닫히면 흐름이 시작점(origin)으로 복귀하고 종료된다.
+    """
+
+    def __init__(self, origin_id: int):
+        self.origin = origin_id
+        self.alive = origin_id
+        self._stack: List[Frame] = []
+        self.history: list = []
+        self.done = False
+
+    @property
+    def open_requests(self) -> List[Frame]:
+        return list(self._stack)
+
+    def is_alive(self, organt_id) -> bool:
+        return self.alive == organt_id
+
+    def request(self, from_id: int, to_id: int, request_id, kind: str = "work") -> Frame:
+        if self.done:
+            raise CommError("흐름이 이미 종료되었습니다.")
+        if from_id != self.alive:
+            raise CommError(f"활성 Organt만 요청할 수 있습니다(현재 활성={self.alive}).")
+        frame = Frame(from_id, to_id, str(request_id), kind)
+        self._stack.append(frame)
+        self.alive = to_id  # receiver wake, sender sleep
+        self.history.append(("request", from_id, to_id, str(request_id), kind))
+        return frame
+
+    def respond(self, from_id: int, result: str = "accept", text: str = "") -> Frame:
+        if self.done:
+            raise CommError("흐름이 이미 종료되었습니다.")
+        if not self._stack:
+            raise CommError("응답할 열린 요청이 없습니다.")
+        if from_id != self.alive:
+            raise CommError(f"활성 Organt만 응답할 수 있습니다(현재 활성={self.alive}).")
+        frame = self._stack.pop()       # 역순(LIFO) close
+        self.alive = frame.from_id      # 요청자 wake
+        self.history.append(("respond", from_id, frame.from_id, frame.request_id, result))
+        if not self._stack:             # 모든 요청 닫힘 → 시작점 복귀·종료
+            self.done = True
+            self.alive = self.origin
+        return frame
