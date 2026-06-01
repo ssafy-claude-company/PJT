@@ -26,6 +26,9 @@ class Gateway:
         on_route: Optional[Callable[[discord.Message], None]] = None,
     ):
         self.config = config
+        # 실제 대상 텍스트 채널 ID. App이 봇 연결 후 resolve해서 갱신한다
+        # (env CHANNEL_ID가 길드 ID인 경우 대비).
+        self.target_channel_id = config.channel_id
         intents = discord.Intents.default()
         intents.message_content = True  # 메시지 내용 읽기(privileged intent)
         self.system_bot = discord.Client(intents=intents)
@@ -44,8 +47,8 @@ class Gateway:
         return user.id if user is not None else None
 
     def router(self) -> Router:
-        """현재 Organt 사용자 ID 기준의 Router를 만든다."""
-        return Router(self.config.channel_id, self.organt_user_id())
+        """현재 대상 채널 + Organt 사용자 ID 기준의 Router를 만든다."""
+        return Router(self.target_channel_id, self.organt_user_id())
 
     def _default_collect(self, message: discord.Message) -> None:
         print(f"[수집] #{message.channel.id} {message.author}: {message.content}")
