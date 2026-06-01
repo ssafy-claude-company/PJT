@@ -41,3 +41,17 @@ def test_필수_누락시_에러(monkeypatch):
     config = _load(monkeypatch, TEST_BOT="o", CHANNEL_ID="1")  # SYSTEM_BOT 누락
     with pytest.raises(RuntimeError):
         config.load_config()
+
+
+def test_작업공간은_repo_밖_격리(monkeypatch):
+    monkeypatch.delenv("ORGANT_WORKSPACE", raising=False)
+    config = _load(monkeypatch, SYSTEM_BOT="s", TEST_BOT="o", CHANNEL_ID="1")
+    cfg = config.load_config()
+    # repo 루트가 작업공간의 상위 경로에 없어야 한다(= repo 밖).
+    assert config.ROOT not in cfg.workspace_dir.parents
+
+
+def test_작업공간_env_override(monkeypatch, tmp_path):
+    config = _load(monkeypatch, SYSTEM_BOT="s", TEST_BOT="o", CHANNEL_ID="1",
+                   ORGANT_WORKSPACE=str(tmp_path / "myws"))
+    assert config.load_config().workspace_dir == tmp_path / "myws"

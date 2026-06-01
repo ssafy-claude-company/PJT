@@ -36,7 +36,10 @@ def load_config() -> Config:
     except ImportError:
         pass  # 환경변수가 직접 주입된 경우 .env가 없어도 된다
 
-    workspace_dir = ROOT / "workspace"
+    # Organt 작업공간은 repo '밖'에 둔다(Organt가 repo의 .git을 보고 헤매거나
+    # 건드리지 못하도록 격리). ORGANT_WORKSPACE 로 위치 지정 가능.
+    ws_env = os.environ.get("ORGANT_WORKSPACE", "").strip()
+    workspace_dir = Path(ws_env) if ws_env else (ROOT.parent / "organt_workspace")
     audit_log_path = ROOT / "logs" / "audit.jsonl"
     workspace_dir.mkdir(parents=True, exist_ok=True)
     audit_log_path.parent.mkdir(parents=True, exist_ok=True)
