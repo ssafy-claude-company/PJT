@@ -9,6 +9,7 @@ import asyncio
 from claude_agent_sdk import HookMatcher
 
 from .audit import AuditLog, make_post_tool_use_hook
+from .channels import resolve_channel_id
 from .config import Config
 from .discord_tools import DISCORD_TOOL_NAMES, DiscordIO, build_discord_server
 from .gateway import Gateway
@@ -77,5 +78,24 @@ class App:
         if self._route_tasks:
             await asyncio.gather(*list(self._route_tasks))
 
+    async def resolve_channel(self):
+        """봇 연결 후 실제 대상 텍스트 채널을 해석해 게이트웨이/IO에 반영한다.
+
+        env CHANNEL_ID가 길드 ID여도 그 길드의 텍스트 채널로 자동 해석된다.
+        """
+        resolved = await resolve_channel_id(self.gateway.system_bot, self.config.channel_id)
+        self.gateway.target_channel_id = resolved
+        self.io.channel_id = resolved
+        self.audit.record("channel_resolved", configured=self.config.channel_id, resolved=resolved)
+        return resolved
+
     async def run(self):
-        await self.gateway.run()
+        runner = asyncio.gather(
+            self.gateway.system_bot.start(self.config.system_bot_token),
+            self.gateway.organt_bot.start(self.config.organt_bot_token),
+        )
+        await self.gateway.system_bot.wait_until_ready()
+        await self.gateway.organt_bot.wait_until_ready()
+        await self.resolve_channel()
+        print(f"[App] 대상 채널 해석됨: {self.gateway.target_channel_id}")
+        await runner
