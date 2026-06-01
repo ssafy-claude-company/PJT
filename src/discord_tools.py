@@ -66,7 +66,9 @@ def make_discord_tools(io):
         mid = await io.send(args["content"])
         return _ok(f"sent message_id={mid}")
 
-    @tool("reply_message", "특정 메시지에 답글을 단다", {"message_id": int, "content": str})
+    # message_id는 문자열로 받는다: Discord 스노우플레이크(>2^53)는 JSON 정수로
+    # 넘기면 정밀도가 잘려 엉뚱한 메시지를 가리킨다.
+    @tool("reply_message", "특정 메시지에 답글을 단다(message_id는 문자열)", {"message_id": str, "content": str})
     async def reply_message(args):
         mid = await io.reply(int(args["message_id"]), args["content"])
         return _ok(f"replied message_id={mid}")
