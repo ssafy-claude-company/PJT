@@ -9,6 +9,7 @@
 
 SYS가 단일흐름·베턴·권한을 강제한다. 실행은 DiscordGuide(system bot/각 봇).
 """
+import time
 from typing import Dict, List, Optional
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -32,6 +33,7 @@ class Flow:
         self.leader = leader_id
         self.teammates = teammates          # {id: Organt}
         self.bot_info = bot_info or {}
+        self.task_id = time.strftime("%H%M%S")   # 유니크(중복 [Task-1] 방지)
         self.comm = CommunicationManager(ORIGIN)
         self.project_channel: Optional[int] = None
         self.thread_id: Optional[str] = None
@@ -40,8 +42,10 @@ class Flow:
         self.done = False
         self.final: Optional[str] = None
         self.advice: List[str] = []         # 활성 중 유저 개입(조언)
+        self.root_id: Optional[str] = None  # 유저 요청 메시지 ID(답글 대상)
 
     def start_root(self, root_id):
+        self.root_id = str(root_id)
         self.comm.request(ORIGIN, self.leader, root_id, Kind.WORK)
 
     async def refresh(self):
@@ -57,27 +61,32 @@ def make_guide_tools(flow: Flow):
 
     @tool("answer_question", "단순 질문/인사이트에 그 채널에서 바로 답한다(흐름 종료)", {"body": str})
     async def answer_question(args):
-        await g.post(flow.user_channel, flow.leader, f"[Response]\nBody: {args['body']}")
+        await g.post(flow.user_channel, flow.leader, f"[Response]\nBody: {args['body']}",
+                     reply_to=flow.root_id)
         if not flow.comm.done:
             flow.comm.respond(flow.leader, "accept", args["body"])
         flow.done, flow.final = True, args["body"]
         return {"content": [{"type": "text", "text": "답변 게시·흐름 종료"}]}
 
-    @tool("create_project", "Project로 판단될 때 전용 채널을 생성한다", {"name": str})
+    @tool("create_project", "Project로 판단될 때 전용 채널을 1개 생성한다", {"name": str})
     async def create_project(args):
+        if flow.project_channel is not None:   # 흐름당 1회(채널 남발 방지)
+            return {"content": [{"type": "text", "text": f"이미 project_channel={flow.project_channel}"}]}
         cid = await g.create_project_channel(flow.guild_id, args["name"])
         flow.project_channel = cid
         return {"content": [{"type": "text", "text": f"project_channel={cid}"}]}
 
-    @tool("create_task", "Project 채널에 Task(Thread)+상태블록을 만든다", {"purpose": str, "goal": str})
+    @tool("create_task", "Project 채널에 Task(Thread)+상태블록을 1개 만든다", {"purpose": str, "goal": str})
     async def create_task(args):
+        if flow.thread_id is not None:         # 흐름당 1회([Task-XXX] 중복 방지)
+            return {"content": [{"type": "text", "text": f"이미 Task 생성됨(thread={flow.thread_id})"}]}
         ch = flow.project_channel or flow.user_channel
-        flow.status = TaskStatus(task_id="1", purpose=args["purpose"], status="진행",
+        flow.status = TaskStatus(task_id=flow.task_id, purpose=args["purpose"], status="진행",
                                  goal=args["goal"],
                                  group=[(f"<@{flow.leader}>", flow._info(flow.leader) or "leader")])
         flow.block_id, flow.thread_id = await g.open_task(ch, flow.status)
         flow.project_channel = ch
-        return {"content": [{"type": "text", "text": f"thread={flow.thread_id}"}]}
+        return {"content": [{"type": "text", "text": f"task={flow.task_id} thread={flow.thread_id}"}]}
 
     @tool("delegate", "팀원에게 Work를 위임한다(팀원이 실작업, 결과 회수)",
           {"member_id": int, "work": str})
@@ -102,7 +111,8 @@ def make_guide_tools(flow: Flow):
 
     @tool("report", "Goal 완수 후 유저 채널에 최종 보고(흐름 종료)", {"body": str})
     async def report(args):
-        await g.post(flow.user_channel, flow.leader, f"[Response]\nBody: {args['body']}")
+        await g.post(flow.user_channel, flow.leader, f"[Response]\nBody: {args['body']}",
+                     reply_to=flow.root_id)
         if not flow.comm.done:
             flow.comm.respond(flow.leader, "accept", args["body"])
         if flow.status:

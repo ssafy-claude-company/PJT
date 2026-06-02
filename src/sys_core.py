@@ -11,6 +11,7 @@ SYS는 얇다:
 from typing import Dict, Optional
 
 from .guide_tools import Flow
+from .protocol import Request
 
 
 class Sys:
@@ -53,3 +54,21 @@ class Sys:
         self._log("flow_done", project=flow.project_channel is not None, comm_done=flow.comm.done)
         self.active_flow = None
         return {"mode": "flow", "flow": flow}
+
+    # --- 진짜 입구: 채널의 유저 형식 Request를 읽어 라우팅 ---
+
+    async def read_latest_request(self, channel_id) -> Optional[Request]:
+        """채널(SMS)에서 가장 최근의 유저 형식 [Request]를 읽어온다(system 봇이 읽음)."""
+        msgs = await self.guide.read_thread(channel_id, limit=20)
+        reqs = [m for m in msgs if isinstance(m, Request)]
+        return reqs[-1] if reqs else None
+
+    async def route_channel_request(self, channel_id, request: Request,
+                                    teammates, leader_factory) -> dict:
+        """읽어온 유저 Request를 담당(To)에게 흐름으로 라우팅한다."""
+        if request.to_id is None:
+            self._log("ignored", reason="수신 대상(To) 없음")
+            return {"mode": "ignored"}
+        return await self.handle_user_input(channel_id, request.to_id, teammates,
+                                            request.body, leader_factory,
+                                            root_id=request.message_id)
