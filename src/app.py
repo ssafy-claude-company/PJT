@@ -99,12 +99,28 @@ class App:
         return resolved
 
     async def run(self):
-        runner = asyncio.gather(
+        # on_ready 이벤트로 두 봇의 준비를 기다린다(wait_until_ready는 start 직후엔
+        # 'Client not initialised'가 나므로 사용하지 않는다).
+        sys_ready, org_ready = asyncio.Event(), asyncio.Event()
+
+        @self.gateway.system_bot.event
+        async def on_ready():
+            print(f"[System 봇] 연결됨: {self.gateway.system_bot.user}", flush=True)
+            sys_ready.set()
+
+        @self.gateway.organt_bot.event
+        async def on_ready():  # noqa: F811
+            print(f"[Organt 봇] 연결됨: {self.gateway.organt_bot.user}", flush=True)
+            org_ready.set()
+
+        async def _post_ready():
+            await sys_ready.wait()
+            await org_ready.wait()
+            await self.resolve_channel()
+            print(f"[App] 대상 채널 해석됨: {self.gateway.target_channel_id}", flush=True)
+
+        await asyncio.gather(
             self.gateway.system_bot.start(self.config.system_bot_token),
             self.gateway.organt_bot.start(self.config.organt_bot_token),
+            _post_ready(),
         )
-        await self.gateway.system_bot.wait_until_ready()
-        await self.gateway.organt_bot.wait_until_ready()
-        await self.resolve_channel()
-        print(f"[App] 대상 채널 해석됨: {self.gateway.target_channel_id}")
-        await runner
