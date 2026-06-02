@@ -23,7 +23,7 @@ from claude_agent_sdk import HookMatcher
 from src.audit import AuditLog, make_post_tool_use_hook
 from src.config import load_config
 from src.discord_guide import DiscordGuide
-from src.guide_tools import LEADER_TOOLS, REQUEST_TOOL
+from src.guide_tools import FLOW_TOOLS, LEADER_TOOLS
 from src.main import load_roster
 from src.organt import Organt, build_options
 from src.permissions import make_pre_tool_use_hook
@@ -122,7 +122,7 @@ async def main():
         sp.unlink()
 
     def organt_builder(organt_id, server, role):
-        allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", REQUEST_TOOL]
+        allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
         turns = 26
         if role == "leader":
             allowed = allowed + LEADER_TOOLS

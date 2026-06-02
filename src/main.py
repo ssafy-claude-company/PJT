@@ -20,7 +20,7 @@ from claude_agent_sdk import HookMatcher
 from .audit import AuditLog, make_post_tool_use_hook
 from .config import Config, load_config
 from .discord_guide import DiscordGuide
-from .guide_tools import LEADER_TOOLS, REQUEST_TOOL
+from .guide_tools import FLOW_TOOLS, LEADER_TOOLS
 from .organt import Organt, build_options
 from .permissions import make_pre_tool_use_hook
 from .protocol import Request, Response, parse
@@ -70,8 +70,8 @@ async def _connect(token: str) -> Tuple[discord.Client, asyncio.Task]:
 def _make_builder(cfg: Config, audit: AuditLog):
     """role에 맞는 도구·권한·훅·State를 갖춘 Organt를 만드는 빌더를 돌려준다."""
     def organt_builder(organt_id, server, role):
-        # Glob/Grep/Read는 동료 산출물 탐색·검증용 읽기 전용. 쓰기는 훅이 작업공간으로 제한.
-        allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", REQUEST_TOOL]
+        # Glob/Grep/Read는 동료 산출물 탐색·검증용 읽기 전용. FLOW_TOOLS=요청/채용(전원 공통).
+        allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
         state_path = cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"

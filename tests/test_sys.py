@@ -45,16 +45,32 @@ def _tools(f, me, role):
     return {t.name: t for t in make_guide_tools(f, me, role)}
 
 
-def test_member는_request만_가짐():
+def test_member는_request와_recruit():
     f = _flow(FakeGuide())
-    assert {t.name for t in make_guide_tools(f, 12, "member")} == {"request"}
+    assert {t.name for t in make_guide_tools(f, 12, "member")} == {"request", "recruit"}
 
 
 def test_leader는_project_task_도구():
     f = _flow(FakeGuide())
     names = {t.name for t in make_guide_tools(f, 11, "leader")}
-    # 보고/답변 툴 없음(반환=Response). 다중 Task용 complete_task 포함.
-    assert names == {"request", "create_project", "create_task", "complete_task"}
+    # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit)+리더 셋업 도구.
+    assert names == {"request", "recruit", "create_project", "create_task", "complete_task"}
+
+
+def test_팀_배정_recruit_팀밖요청거부():
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "A", 13: "B"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))   # 13 제외 배정
+    assert set(f.project_team) == {11, 12}
+    asyncio.run(t["create_task"].handler({"purpose": "x", "goal": "g", "members": "12"}))
+    assert set(f.current.team) == {11, 12}
+    r = asyncio.run(t["request"].handler({"to_id": "13", "kind": "Info", "body": "x"}))
+    assert "팀이 아닙니다" in r["content"][0]["text"]          # 팀 밖 → 거부(게시 안 함)
+    assert not any(c[0] == "req" for c in g.calls)
+    asyncio.run(t["recruit"].handler({"member": "B", "reason": "부족"}))   # 역할명으로 채용
+    assert 13 in f.current.team
 
 
 def test_request_동료_깨우고_베턴복귀():

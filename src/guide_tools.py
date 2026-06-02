@@ -1,17 +1,18 @@
-"""Organt가 쓰는 Guide 도구셋 (P2P Communication + 다중 Task 모델).
+"""Organt가 쓰는 Guide 도구셋 (P2P Communication + 다중 Task + 팀 배정 모델).
 
-모든 깨어난 Organt는 `request`로 *필요한 동료 한 명*에게 요청할 수 있다(Info=질문/Work=작업).
+회사식 인력 구조: **채용 풀(전체 로스터) → 프로젝트 팀(규모 산정해 배정) → Task 팀(필요 인원)**.
+- 깨어난 Organt는 `request`로 *현재 Task 팀의 동료*에게 요청한다(Info=질문/Work=작업).
+- 인원이 부족하면 `recruit`로 풀에서 현재 Task에 합류시킨다("더 필요하면 더 가져온다").
 SYS가 대상 동료를 중첩 베턴으로 깨워(flow.wake) 응답을 돌려준다 → 항상 1명만 활성(단일흐름).
 
-리더(첫 Organt)는 추가로 Project(채널)와 **여러 개의 Task(스레드)** 를 만든다:
-- create_project: 도메인 채널 1개
-- create_task   : 채널에 [Task-XXX] 상태블록 + 대화 Thread를 만든다(원하는 만큼 반복)
-- complete_task : 현재 Task의 상태블록을 완료로 마감(result 기록)
-대화(Request/Response)는 '현재 Task' 스레드 안에서 일어난다. 보고는 별도 툴이 아니라
-반환값(=Response)이 origin까지 unwind되는 것 자체다.
+리더(첫 Organt)는 추가로:
+- create_project(name, team): 규모를 산정해 프로젝트 팀 배정 + 전용 채널 생성
+- create_task(purpose, goal, members): Task에 필요한 인원 배정 + 상태블록/Thread 생성(반복 가능)
+- complete_task(result): 현재 Task를 완료로 마감
+대화는 '현재 Task' 스레드에서. 보고는 별도 툴이 아니라 반환값(=Response)이 origin까지 unwind.
 """
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -21,21 +22,51 @@ from .protocol import Kind, TaskStatus
 
 ORIGIN = 0
 REQUEST_TOOL = "mcp__guide__request"
-# 리더 전용 셋업 도구. 보고/답변은 별도 툴이 아니라 '반환값=Response'로 처리된다.
+RECRUIT_TOOL = "mcp__guide__recruit"
+# 모든 Organt 공통 흐름 도구(요청/채용). 리더 전용 셋업 도구는 LEADER_TOOLS.
+FLOW_TOOLS = [REQUEST_TOOL, RECRUIT_TOOL]
 LEADER_TOOLS = [f"mcp__guide__{n}" for n in ("create_project", "create_task", "complete_task")]
+
+
+def _resolve_members(spec, flow, allowed) -> List[int]:
+    """'12, 백엔드A' 처럼 id 또는 역할명으로 동료를 지정 → allowed 안의 id 리스트(중복 제거)."""
+    out: List[int] = []
+    for tok in str(spec or "").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok.lstrip("-").isdigit():
+            v = int(tok)
+            if v in allowed and v not in out:
+                out.append(v)
+        else:  # 역할명(부분일치)로도 지정 가능
+            for i in allowed:
+                if i not in out and tok.lower() in (flow._info(i) or "").lower():
+                    out.append(i)
+                    break
+    return out
+
+
+def _uniq(xs) -> List[int]:
+    seen: List[int] = []
+    for x in xs:
+        if x not in seen:
+            seen.append(x)
+    return seen
 
 
 @dataclass
 class TaskRef:
-    """채널에 누적되는 Task 하나 (상태블록 + 대화 Thread)."""
+    """채널에 누적되는 Task 하나 (상태블록 + 대화 Thread + 배정 팀)."""
     task_id: str
     thread_id: str
     block_id: str
     status: TaskStatus
+    team: List[int] = field(default_factory=list)   # 이 Task에 배정된 Organt들
 
 
 class Flow:
-    """하나의 활성 흐름(단일흐름 보존). 리더가 여러 Task를 순차로 연다. wake로 동료를 중첩 호출."""
+    """하나의 활성 흐름(단일흐름 보존). 풀→프로젝트 팀→Task 팀으로 인력을 구조적으로 배정."""
 
     def __init__(self, guide, channel_id, guild_id, leader_id, bot_info=None):
         self.guide = guide
@@ -44,8 +75,12 @@ class Flow:
         self.leader = leader_id
         self.bot_info = bot_info or {}
         self.comm = CommunicationManager(ORIGIN)
+        self.pool = list((bot_info or {}).keys()) or [leader_id]   # 채용 가능 전체(로스터)
+        if leader_id not in self.pool:
+            self.pool.insert(0, leader_id)
+        self.project_team: List[int] = list(self.pool)             # 기본=풀 전체(리더가 좁힐 수 있음)
         self.project_channel: Optional[int] = None
-        self.tasks: List[TaskRef] = []      # 채널에 만든 Task들(누적)
+        self.tasks: List[TaskRef] = []
         self.current: Optional[TaskRef] = None
         self._base = time.strftime("%H%M%S")
         self._n = 0
@@ -71,16 +106,23 @@ class Flow:
     def _info(self, oid):
         return self.bot_info.get(oid, "")
 
+    def _names(self, ids):
+        return [self._info(i) or str(i) for i in ids]
+
 
 def _ok(text):
     return {"content": [{"type": "text", "text": text}]}
+
+
+def _group_of(flow, team):
+    return [(f"<@{i}>", flow._info(i)) for i in team]
 
 
 def make_guide_tools(flow: Flow, me_id: int, role: str):
     g = flow.guide
     tools = []
 
-    @tool("request", "필요한 동료 한 명에게 요청(kind: Info=질문 / Work=작업, to_id는 문자열)",
+    @tool("request", "현재 Task 팀의 동료 한 명에게 요청(kind: Info=질문 / Work=작업, to_id 문자열)",
           {"to_id": str, "kind": str, "body": str})
     async def request(args):
         to = int(args["to_id"])
@@ -88,10 +130,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         body = args["body"]
         if flow.current is None:
             return _ok("오류: 진행 중인 Task가 없습니다. (리더가 create_task 먼저)")
+        if to not in flow.current.team:
+            return _ok(f"요청 거부: {to}({flow._info(to)})는 이 Task 팀이 아닙니다. "
+                       f"먼저 recruit로 합류시키세요. 현재 팀: {flow._names(flow.current.team)}")
         if flow.wake is None:
             return _ok("오류: 시스템 준비 안 됨")
         try:
-            flow.comm.check_request(me_id, to, kind)   # 게시 전 베턴 검증(from==to·Work busy)
+            flow.comm.check_request(me_id, to, kind)   # 게시 전 베턴 검증(from==to·Work busy·재진입)
         except CommError as e:
             return _ok(f"요청 거부(규약): {e}")
         thread_id = flow.current.thread_id
@@ -105,39 +150,66 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             await g.send_response(thread_id, to, req, result)
         finally:
             flow.comm.respond(to, "accept", result)    # 프레임 close = 베턴 복귀(누수 방지)
-        status = flow.current.status
-        mention = f"<@{to}>"
-        if mention not in [m for m, _ in status.group]:
-            status.group.append((mention, flow._info(to)))
-            await flow.refresh()
         return _ok(f"[{to} 응답] {result[:600]}")
 
     tools.append(request)
 
+    @tool("recruit",
+          "인원이 부족하면 채용 풀에서 동료를 현재 Task 팀에 합류시킨다(member=id 또는 역할명, reason).",
+          {"member": str, "reason": str})
+    async def recruit(args):
+        cand = _resolve_members(args.get("member", ""), flow, flow.pool)
+        if not cand:
+            return _ok(f"'{args.get('member','')}'를 채용 풀에서 못 찾음. 풀: {flow._names(flow.pool)}")
+        if flow.current is None:
+            return _ok("오류: 진행 중인 Task가 없습니다.")
+        mid = cand[0]
+        if mid not in flow.project_team:
+            flow.project_team.append(mid)
+        if mid not in flow.current.team:
+            flow.current.team.append(mid)
+            flow.current.status.group = _group_of(flow, flow.current.team)
+            await flow.refresh()
+        return _ok(f"{flow._info(mid) or mid} 합류(사유: {args.get('reason', '')}). "
+                   f"현재 팀: {flow._names(flow.current.team)}")
+
+    tools.append(recruit)
+
     if role == "leader":
-        @tool("create_project", "Project로 판단되면 전용 채널을 1개 생성", {"name": str})
+        @tool("create_project",
+              "Project로 판단되면 전용 채널 생성 + 규모를 산정해 팀 배정"
+              "(team=쉼표구분 동료 id/역할명, 리더 제외분). 비우면 풀 전체.",
+              {"name": str, "team": str})
         async def create_project(args):
             if flow.project_channel is not None:
                 return _ok(f"이미 project_channel={flow.project_channel}")
             flow.project_channel = await g.create_project_channel(flow.guild_id, args["name"])
-            return _ok(f"project_channel={flow.project_channel}")
+            assigned = _resolve_members(args.get("team", ""), flow, flow.pool)
+            if assigned:
+                flow.project_team = _uniq([flow.leader] + assigned)
+            return _ok(f"project_channel={flow.project_channel} "
+                       f"프로젝트팀={flow._names(flow.project_team)}")
         tools.append(create_project)
 
         @tool("create_task",
-              "Task(Thread)+상태블록을 새로 1개 생성. 프로젝트를 여러 Task로 나눠 반복 호출 가능. "
-              "Goal은 측정가능하게.", {"purpose": str, "goal": str})
+              "Task 생성 + 필요한 인원 배정(members=쉼표구분 id/역할명, 프로젝트팀 내). "
+              "부족하면 나중에 recruit. Goal은 측정가능하게.",
+              {"purpose": str, "goal": str, "members": str})
         async def create_task(args):
             ch = flow.project_channel or flow.user_channel
             tid = flow.next_task_id()
+            picked = _resolve_members(args.get("members", ""), flow, flow.project_team or flow.pool)
+            team = _uniq([flow.leader] + (picked if picked
+                                          else [m for m in flow.project_team if m != flow.leader]))
             status = TaskStatus(task_id=tid, purpose=args["purpose"], status="진행",
-                                goal=args["goal"],
-                                group=[(f"<@{flow.leader}>", flow._info(flow.leader) or "leader")])
+                                goal=args["goal"], group=_group_of(flow, team))
             block_id, thread_id = await g.open_task(ch, status)
             flow.project_channel = ch
-            ref = TaskRef(task_id=tid, thread_id=thread_id, block_id=block_id, status=status)
+            ref = TaskRef(task_id=tid, thread_id=thread_id, block_id=block_id,
+                          status=status, team=team)
             flow.tasks.append(ref)
             flow.current = ref
-            return _ok(f"task={tid} thread={thread_id} (현재 Task로 설정)")
+            return _ok(f"task={tid} thread={thread_id} 팀={flow._names(team)}")
         tools.append(create_task)
 
         @tool("complete_task",
