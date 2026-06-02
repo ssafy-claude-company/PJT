@@ -11,6 +11,8 @@
 from dataclasses import dataclass
 from typing import List, Optional
 
+from .protocol import Kind
+
 REQ_PREFIX = "[REQ:"
 RESP_PREFIX = "[RESP:"
 
@@ -124,7 +126,7 @@ class CommunicationManager:
             raise CommError("흐름이 이미 종료되었습니다.")
         if from_id != self.alive:
             raise CommError(f"활성 Organt만 요청할 수 있습니다(현재 활성={self.alive}).")
-        if kind == "work" and to_id in self._participants():
+        if self._is_work(kind) and to_id in self._participants():
             raise CommError(f"{to_id} 는 미완 Work 보유/흐름 참여 중 → Work Request 거부(겹침·순환 방지).")
         frame = Frame(from_id, to_id, str(request_id), kind)
         self._stack.append(frame)
@@ -158,6 +160,13 @@ class CommunicationManager:
     def is_busy(self, organt_id) -> bool:
         """미완 Work 보유(또는 흐름 참여 중)인가 → Work Request 금지 대상."""
         return organt_id in self._participants()
+
+    @staticmethod
+    def _is_work(kind) -> bool:
+        """Kind가 Work인지 (protocol.Kind 또는 'work'/'Work' 문자열 모두 인식)."""
+        if isinstance(kind, Kind):
+            return kind == Kind.WORK
+        return str(kind).strip().lower() == "work"
 
     def redo(self, from_id: int, to_id: int, request_id) -> Frame:
         """직전 응답이 불만족 → 같은 대상에 재요청(Redo). 한계 초과 시 RedoLimitExceeded."""
