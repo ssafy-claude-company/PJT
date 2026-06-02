@@ -121,7 +121,8 @@ class CommunicationManager:
     def is_alive(self, organt_id) -> bool:
         return self.alive == organt_id
 
-    def request(self, from_id: int, to_id: int, request_id, kind: str = "work") -> Frame:
+    def check_request(self, from_id: int, to_id: int, kind: str = "work") -> None:
+        """Request 가능 여부를 검증한다(상태 변경 없음). 불가하면 CommError."""
         if self.done:
             raise CommError("흐름이 이미 종료되었습니다.")
         if from_id != self.alive:
@@ -130,6 +131,9 @@ class CommunicationManager:
             raise CommError("자기 자신에게는 Request할 수 없습니다.")
         if self._is_work(kind) and to_id in self._participants():
             raise CommError(f"{to_id} 는 미완 Work 보유/흐름 참여 중 → Work Request 거부(겹침·순환 방지).")
+
+    def request(self, from_id: int, to_id: int, request_id, kind: str = "work") -> Frame:
+        self.check_request(from_id, to_id, kind)
         frame = Frame(from_id, to_id, str(request_id), kind)
         self._stack.append(frame)
         self.alive = to_id  # receiver wake, sender sleep

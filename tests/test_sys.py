@@ -1,14 +1,14 @@
-"""재구현 ⑤ 검증(신모델): Organt 주도 Guide 도구 + 단일흐름 보존."""
+"""재구현 검증(P2P 모델): Guide 도구 + 베턴 wake + 단일흐름."""
 import asyncio
 
 from src.guide_tools import Flow, make_guide_tools
+from src.protocol import Kind
 from src.sys_core import Sys
 
 
 class FakeGuide:
     def __init__(self):
         self.calls = []
-        self._n = 0
 
     async def post(self, ch, sender, content, reply_to=None):
         self.calls.append(("post", ch, sender, content))
@@ -27,73 +27,76 @@ class FakeGuide:
         return blk
 
     async def send_request(self, thr, sender, to, kind, body):
-        self._n += 1
         self.calls.append(("req", sender, to, body))
-        return f"req{self._n}"
+        return "reqid"
 
     async def send_response(self, thr, sender, req, body):
         self.calls.append(("resp", sender, body))
-        return "r"
+        return "respid"
 
 
-class FakeOrgant:
-    async def handle(self, work):
-        return f"{work} 완료"
+def _flow(g, leader=11):
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=leader, bot_info={11: "L", 12: "M"})
+    f.start_root("root")
+    return f
 
 
-def _tools(flow):
-    return {t.name: t for t in make_guide_tools(flow)}
+def _tools(f, me, role):
+    return {t.name: t for t in make_guide_tools(f, me, role)}
 
 
-def test_answer_question_그자리답변_흐름종료():
+def test_member는_request만_가짐():
+    f = _flow(FakeGuide())
+    assert {t.name for t in make_guide_tools(f, 12, "member")} == {"request"}
+
+
+def test_leader는_project_task_report도():
+    f = _flow(FakeGuide())
+    names = {t.name for t in make_guide_tools(f, 11, "leader")}
+    assert {"request", "create_project", "create_task", "report", "answer_question"} == names
+
+
+def test_request_동료_깨우고_베턴복귀():
     g = FakeGuide()
-    flow = Flow(g, channel_id=500, guild_id=1, leader_id=11, teammates={})
-    flow.start_root("root")
-    asyncio.run(_tools(flow)["answer_question"].handler({"body": "그건 X입니다"}))
-    assert flow.done and flow.comm.done
-    assert any(c[0] == "post" for c in g.calls)
-    assert not any(c[0] == "create_channel" for c in g.calls)  # 질문은 채널 안 팜
+    f = _flow(g)
+    waked = []
 
+    async def wake(to, b, k):
+        waked.append((to, b, k))
+        return f"{b} 처리완료"
 
-def test_project_생성_위임_베턴복귀():
-    g = FakeGuide()
-    flow = Flow(g, 500, guild_id=1, leader_id=11, teammates={12: FakeOrgant()},
-                bot_info={11: "leader", 12: "dev"})
-    flow.start_root("root")
-    tools = _tools(flow)
-    asyncio.run(tools["create_project"].handler({"name": "todo-app"}))
-    asyncio.run(tools["create_task"].handler({"purpose": "ToDo앱", "goal": "CRUD 동작"}))
-    res = asyncio.run(tools["delegate"].handler({"member_id": 12, "work": "백엔드 구현"}))
-    assert ("create_channel", "todo-app") in g.calls
-    assert ("req", 11, 12, "백엔드 구현") in g.calls
-    assert any(c[0] == "resp" and c[1] == 12 for c in g.calls)
-    assert flow.comm.alive == 11          # 위임 후 베턴이 Leader로 복귀
-    assert "완료" in res["content"][0]["text"]
-
-
-def test_delegate_자기자신_차단():
-    g = FakeGuide()
-    flow = Flow(g, 500, 1, leader_id=11, teammates={12: FakeOrgant()})
-    flow.start_root("root")
-    tools = _tools(flow)
+    f.wake = wake
+    tools = _tools(f, 11, "leader")
     asyncio.run(tools["create_task"].handler({"purpose": "p", "goal": "g"}))
-    r = asyncio.run(tools["delegate"].handler({"member_id": 11, "work": "x"}))
-    assert "오류" in r["content"][0]["text"]   # from==to 위임 불가
+    res = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "백엔드"}))
+    assert waked == [(12, "백엔드", Kind.WORK)]      # 동료 깨움
+    assert f.comm.alive == 11                        # 응답 후 베턴 복귀
+    assert "처리완료" in res["content"][0]["text"]
+    assert any(c[0] == "req" for c in g.calls) and any(c[0] == "resp" for c in g.calls)
 
 
-def test_report_흐름종료():
+def test_request_자기자신_거부_게시안함():
     g = FakeGuide()
-    flow = Flow(g, 500, 1, 11, {12: FakeOrgant()}, bot_info={11: "L"})
-    flow.start_root("root")
-    tools = _tools(flow)
+    f = _flow(g)
+    f.wake = lambda *a: None
+    tools = _tools(f, 11, "leader")
     asyncio.run(tools["create_task"].handler({"purpose": "p", "goal": "g"}))
-    asyncio.run(tools["report"].handler({"body": "완수 보고"}))
-    assert flow.done and flow.comm.done and flow.status.status == "보고"
+    r = asyncio.run(tools["request"].handler({"to_id": "11", "kind": "Work", "body": "x"}))
+    assert "거부" in r["content"][0]["text"]
+    assert not any(c[0] == "req" for c in g.calls)   # 검증 실패 → 게시 안 함
 
 
-def test_단일흐름_보존_개입은_advice():
+def test_answer_question_흐름종료():
     g = FakeGuide()
-    s = Sys(g, guild_id=1)
-    s.active_flow = Flow(g, 500, 1, 11, {})       # 활성 흐름 중
-    out = asyncio.run(s.handle_user_input(500, 11, {}, "중간 개입!", leader_factory=None))
-    assert out["mode"] == "advice" and "중간 개입!" in s.active_flow.advice
+    f = _flow(g)
+    asyncio.run(_tools(f, 11, "leader")["answer_question"].handler({"body": "답"}))
+    assert f.done and f.comm.done
+    assert not any(c[0] == "create_channel" for c in g.calls)
+
+
+def test_단일흐름_보존_advice():
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"})
+    s.active_flow = Flow(g, 500, 1, 11, {11: "L"})
+    out = asyncio.run(s.handle_user_input(500, 11, "중간 개입", root_id=None))
+    assert out["mode"] == "advice" and "중간 개입" in s.active_flow.advice
