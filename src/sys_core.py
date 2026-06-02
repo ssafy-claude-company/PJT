@@ -67,15 +67,26 @@ class Sys:
         rounds = 0
         while True:
             rounds += 1
-            # 4. Todo 생성·분배·수행 (Thread 내 베턴)
+            # 4. Todo 생성·분배 (잘못된 배정은 팀으로 보정)
+            nonleader = [m for m in task.team if m != leader] or [leader]
             pending = []
             for text, assignee in todos:
+                if assignee not in task.team:
+                    assignee = nonleader[0]
                 t = task.add_todo(text, assignee)
                 task.distribute(t.todo_id, assignee)
                 pending.append((t, assignee))
             await refresh()  # 분배
 
+            # 5. 수행: 담당이 타인이면 Thread 내 베턴(Request→작업→Response),
+            #    담당이 Leader 본인이면 이미 활성이므로 직접 수행(베턴 홉 없음).
             for t, assignee in pending:
+                if assignee == leader:
+                    result = await policy.do_work(t.text)
+                    all_results.append(result)
+                    task.complete(t.todo_id)
+                    self._log("todo_done", todo=t.text, by=assignee, mode="self")
+                    continue
                 req = await self.guide.send_request(thread_id, leader, assignee, Kind.WORK, t.text)
                 comm.request(leader, assignee, req, Kind.WORK)               # 담당 wake
                 result = await policy.do_work(t.text)
