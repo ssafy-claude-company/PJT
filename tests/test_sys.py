@@ -53,9 +53,9 @@ def test_member는_request_recruit_run():
 def test_leader는_project_task_도구():
     f = _flow(FakeGuide())
     names = {t.name for t in make_guide_tools(f, 11, "leader")}
-    # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit·run)+리더 셋업 도구.
+    # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit·run)+리더 셋업·배포 도구.
     assert names == {"request", "recruit", "run",
-                     "create_project", "create_task", "complete_task"}
+                     "create_project", "create_task", "complete_task", "deploy"}
 
 
 def test_run_안전가드():
