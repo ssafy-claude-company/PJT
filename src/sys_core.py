@@ -21,6 +21,7 @@ class Sys:
         self.organt_builder = organt_builder   # (organt_id, guide_server, role) -> Organt
         self.bot_info = bot_info or {}
         self.active_flow: Optional[Flow] = None
+        self.queue = []                        # 진행 중 들어온 명령(순차 처리 대기)
         self.flow_log = []
 
     def _log(self, event, **f):
@@ -53,9 +54,13 @@ class Sys:
                 f"당신은 진행을 여는 '대표'입니다(독단으로 다 정하지 말 것). 당신의 역할: {my_role}\n"
                 f"User 요청: {body}\n동료: {peers}\n\n"
                 f"{self._PRINCIPLE}\n\n"
-                f"[판단] '단순 질문/인사이트'면 답만 간결히 반환. '실작업 Project'면 "
-                f"create_project(채널 1개) 후 일을 **서로 겹치지 않는 Task들**로 나눠 진행하세요"
-                f"(보통 2~4개, 같은 작업을 두 번 위임 금지).\n"
+                f"[판단] 요청 성격을 보고 셋 중 하나로 처리하세요.\n"
+                f"- '단순 질문/인사이트'(혼자 답 가능) → 답만 간결히 반환.\n"
+                f"- '팀 논의/정의'(예: '모두가/전원이 ~를 정의·논의해줘', '담당자 포함 ~') → "
+                f"create_project→create_task(논의용) 후 **각 동료에게 request(Info)로 의견을 구하고**, "
+                f"받은 의견들을 종합해 최종 결론을 반환(혼자 단정하지 말 것).\n"
+                f"- '실작업 Project' → create_project(채널 1개) 후 일을 **서로 겹치지 않는 Task들**로 "
+                f"나눠 진행(보통 2~4개, 같은 작업 두 번 위임 금지).\n"
                 f"각 Task: create_task(purpose, goal=측정가능) → 당신 몫은 직접 작업하되 "
                 f"**가정이 생기면 동료에게 Info로 확인**(예: 백엔드 응답 형태를 프론트에 먼저 물어 맞춤) → "
                 f"나머지는 역할에 맞는 동료에게 request(Work)로 위임(정확한 파일 경로를 줄 것) → "
@@ -94,11 +99,11 @@ class Sys:
                 break
 
     async def handle_user_input(self, channel_id, leader_id, user_text, root_id=None) -> dict:
-        # 단일흐름 보존: 활성 흐름 중이면 조언으로만 주입(새 흐름/Response 없음)
+        # 단일흐름 보존: 활성 흐름 중이면 명령을 '큐'에 넣어 끝난 뒤 순차 처리(버리지 않음).
         if self.active_flow is not None and not self.active_flow.done:
-            self.active_flow.advice.append(user_text)
-            self._log("advice", text=user_text)
-            return {"mode": "advice", "flow": self.active_flow}
+            self.queue.append((channel_id, leader_id, user_text, root_id))
+            self._log("queued", text=user_text[:80], depth=len(self.queue))
+            return {"mode": "queued", "queued": len(self.queue)}
 
         flow = Flow(self.guide, channel_id, self.guild_id, leader_id, self.bot_info)
         if root_id is not None:
@@ -123,6 +128,10 @@ class Sys:
         self._log("flow_done", project=flow.project_channel is not None,
                   tasks=len(flow.tasks), comm_done=flow.comm.done)
         self.active_flow = None
+        # 큐에 대기 중인 명령이 있으면 순차로 이어서 처리(단일흐름 유지).
+        if self.queue:
+            nxt = self.queue.pop(0)
+            return await self.handle_user_input(*nxt)
         return {"mode": "flow", "flow": flow}
 
     # --- 진짜 입구: 채널의 유저 형식 Request를 읽어 라우팅 ---

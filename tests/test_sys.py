@@ -124,9 +124,10 @@ def test_close_flow_비정상베턴_강제드레인():
     assert f.comm.done                          # 교착 없이 종료
 
 
-def test_단일흐름_보존_advice():
+def test_단일흐름_진행중_명령은_큐잉():
     g = FakeGuide()
     s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"})
-    s.active_flow = Flow(g, 500, 1, 11, {11: "L"})
-    out = asyncio.run(s.handle_user_input(500, 11, "중간 개입", root_id=None))
-    assert out["mode"] == "advice" and "중간 개입" in s.active_flow.advice
+    s.active_flow = Flow(g, 500, 1, 11, {11: "L"})    # 활성(미완) 흐름
+    out = asyncio.run(s.handle_user_input(500, 11, "두번째 명령", root_id=None))
+    assert out["mode"] == "queued"                    # 버리지 않고 큐에 적재
+    assert s.queue and s.queue[0][2] == "두번째 명령"
