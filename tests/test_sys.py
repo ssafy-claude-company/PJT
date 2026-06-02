@@ -68,6 +68,38 @@ def test_run_안전가드():
     assert "거부" in asyncio.run(rt.handler({"command": "git commit -am x"}))["content"][0]["text"]
 
 
+def test_run_백그라운드_프로세스_그룹째_정리():
+    """run이 백그라운드로 띄운 자식(서버 등)을 끝나면 그룹째 정리 → 포트/프로세스 누수 없음."""
+    import os
+    import time as _t
+    f = _flow(FakeGuide())
+    f.workspace = "/tmp"
+    rt = {t.name: t for t in make_guide_tools(f, 11, "leader")}["run"]
+    # 마커는 작업공간 내 상대경로로 기록(절대경로 '> /' 리다이렉트는 안전가드가 차단).
+    name = f"organt_runtest_{os.getpid()}.pid"
+    marker = f"/tmp/{name}"
+    # 백그라운드로 오래 자는 자식을 띄우고 그 PID를 기록 → run 반환 뒤엔 죽어 있어야 함.
+    out = asyncio.run(rt.handler({"command": f"sleep 30 & echo $! > {name}; echo started"}))
+    text = out["content"][0]["text"]
+    assert "[exit 0]" in text and "started" in text   # 거부 아닌 실제 실행 확인
+    with open(marker) as fp:
+        pid = int(fp.read().strip())
+    os.remove(marker)
+
+    def _running(p):  # 좀비(Z)는 죽은 것으로 간주 — 자원/포트를 더는 잡지 않음
+        try:
+            with open(f"/proc/{p}/stat") as fp:
+                return fp.read().split(") ", 1)[1].split(" ", 1)[0] != "Z"
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+
+    for _ in range(40):       # init의 reaping을 잠깐 기다림(최대 ~2s)
+        if not _running(pid):
+            break
+        _t.sleep(0.05)
+    assert not _running(pid), f"백그라운드 자식(pid={pid})이 정리되지 않고 누수됨"
+
+
 def test_팀_배정_recruit_팀밖요청거부():
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "A", 13: "B"})
