@@ -23,7 +23,7 @@ from .discord_guide import DiscordGuide
 from .guide_tools import LEADER_TOOLS, REQUEST_TOOL
 from .organt import Organt, build_options
 from .permissions import make_pre_tool_use_hook
-from .protocol import Request, parse
+from .protocol import Kind, Request, parse
 from .sys_core import Sys
 
 
@@ -108,7 +108,7 @@ async def run() -> None:
     sysm = Sys(guide, channel.guild.id, _make_builder(cfg, audit), bot_info=bot_info)
 
     print(f"SYS 가동 — 리더={bot_info[leader_id]}({leader_id}), 팀={list(bot_info.values())}")
-    print(f"#{channel.name} 에서 User [Request] 대기 중 (Ctrl+C 종료)")
+    print(f"#{channel.name} 에서 User 입력 대기 중 — 그냥 말 걸어도 됩니다(Ctrl+C 종료)")
 
     @system_client.event
     async def on_message(message):
@@ -117,15 +117,22 @@ async def run() -> None:
             return
         if message.author.id in organts or message.author.id == system_client.user.id:
             return
+        content = (message.content or "").strip()
+        if not content:
+            return
         req = parse(
             message_id=str(message.id),
             author_id=message.author.id,
             mention_ids=[m.id for m in message.mentions],
             reply_to_id=(message.reference.message_id if message.reference else None),
-            content=message.content,
+            content=content,
         )
-        if not isinstance(req, Request) or req.to_id is None:
-            return
+        if not isinstance(req, Request):
+            # 평문 채팅 → 담당(리더)에게 Work 요청으로 취급(사람이 편하게 말 걸 수 있게)
+            req = Request(to_id=leader_id, kind=Kind.WORK, body=content,
+                          from_id=message.author.id, message_id=str(message.id))
+        elif req.to_id is None:
+            req.to_id = leader_id        # [Request]인데 멘션 없으면 리더로
         audit.record("user_request", to=req.to_id, body=req.body[:200])
         await sysm.route_channel_request(cfg.channel_id, req)
 
