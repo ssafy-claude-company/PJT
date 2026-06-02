@@ -9,6 +9,7 @@ Organt 생성(모델·권한·State)은 organt_builder로 주입받는다.
 """
 from typing import Dict, Optional
 
+from .communication import CommError
 from .guide_tools import Flow, build_guide_server
 from .protocol import Kind, Request, format_response
 
@@ -69,6 +70,21 @@ class Sys:
         organt = self.organt_builder(organt_id, server, role)
         return await organt.handle(self._prompt(body, kind, role, organt_id))
 
+    def _close_flow(self, flow, leader_id, result):
+        """베턴을 origin까지 닫는다. 정상이면 리더가 alive→clean close, 비정상(중간 미응답)이면
+        열린 프레임을 위로 강제 정리(escalate)해 교착 없이 종료한다."""
+        comm = flow.comm
+        if not comm.done and comm.alive == leader_id and len(comm.open_requests) == 1:
+            comm.respond(leader_id, "accept", result)        # 정상 종료
+            return
+        guard = 0
+        while not comm.done and guard < 64:                   # 비정상: 강제 드레인
+            guard += 1
+            try:
+                comm.escalate("흐름 종료 강제 정리(중간 미응답)")
+            except CommError:
+                break
+
     async def handle_user_input(self, channel_id, leader_id, user_text, root_id=None) -> dict:
         # 단일흐름 보존: 활성 흐름 중이면 조언으로만 주입(새 흐름/Response 없음)
         if self.active_flow is not None and not self.active_flow.done:
@@ -81,12 +97,14 @@ class Sys:
             flow.start_root(root_id)
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")
         self.active_flow = flow
-        result = await self.run_turn(flow, leader_id, user_text, Kind.WORK, "leader")
+        try:
+            result = await self.run_turn(flow, leader_id, user_text, Kind.WORK, "leader")
+        except Exception as e:                     # 리더가 죽어도 흐름은 닫고 보고한다
+            result = f"(리더 처리 중 오류: {e})"
         # 리더의 반환값 = 사용자에게 가는 Response(=보고). origin 프레임을 닫아 시작점 복귀.
         await self.guide.post(flow.user_channel, leader_id, format_response(result),
                               reply_to=flow.root_id)
-        if not flow.comm.done:
-            flow.comm.respond(leader_id, "accept", result)
+        self._close_flow(flow, leader_id, result)
         flow.done, flow.final = True, result
         # 안전망: 리더가 닫지 않은 현재 Task가 있으면 완료로 마감.
         if flow.current is not None:

@@ -108,6 +108,22 @@ def test_여러_Task_생성과_완료마감():
     assert "진행 중인 Task가 없습니다" in rr["content"][0]["text"]
 
 
+def test_close_flow_정상_clean_close():
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"})
+    f = _flow(s.guide)                          # comm: [origin→11], alive=11
+    s._close_flow(f, 11, "결과")
+    assert f.comm.done                          # 리더가 alive → 정상 close
+
+
+def test_close_flow_비정상베턴_강제드레인():
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"})
+    f = _flow(s.guide)
+    f.comm.request(11, 12, "leak", Kind.WORK)   # 닫히지 않은 프레임 → alive=12(비정상)
+    assert not f.comm.done and f.comm.alive == 12
+    s._close_flow(f, 11, "결과")                # 강제 드레인
+    assert f.comm.done                          # 교착 없이 종료
+
+
 def test_단일흐름_보존_advice():
     g = FakeGuide()
     s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"})

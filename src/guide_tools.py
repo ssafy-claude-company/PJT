@@ -97,9 +97,14 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         thread_id = flow.current.thread_id
         req = await g.send_request(thread_id, me_id, to, kind, body)
         flow.comm.request(me_id, to, req, kind)
-        result = await flow.wake(to, body, kind)       # 동료 깨워 응답(중첩 베턴)
-        await g.send_response(thread_id, to, req, result)
-        flow.comm.respond(to, "accept", result)        # 베턴 복귀
+        try:
+            result = await flow.wake(to, body, kind)   # 동료 깨워 응답(중첩 베턴)
+        except Exception as e:                          # 동료가 실패해도 베턴은 반드시 복귀
+            result = f"(동료 처리 중 오류: {e})"
+        try:
+            await g.send_response(thread_id, to, req, result)
+        finally:
+            flow.comm.respond(to, "accept", result)    # 프레임 close = 베턴 복귀(누수 방지)
         status = flow.current.status
         mention = f"<@{to}>"
         if mention not in [m for m, _ in status.group]:
