@@ -31,8 +31,9 @@ from src.protocol import Kind, format_request
 from src.sys_core import Sys
 
 DEFAULT_TASK = (
-    "할 일 추가/완료/삭제가 되는 TODO 웹앱을 만들어줘. 담당자가 백엔드를 직접 만들고, "
-    "프론트엔드·디자인 동료에게 화면과 스타일을 맡겨 실제로 연동되게 해줘."
+    "할 일 추가/완료/삭제가 되는 TODO 웹앱을 만들어줘. 백엔드는 담당자가 직접, 화면은 프론트엔드가 "
+    "맡고, 디자인(컬러·타이포·레이아웃·컴포넌트)은 디자이너가 스펙으로 잡아 프론트가 그대로 구현해서, "
+    "실제로 연동되고 보기 좋게 만들어줘."
 )
 
 
@@ -90,10 +91,12 @@ async def main():
 
     def organt_builder(organt_id, server, role):
         allowed = ["Read", "Write", "Edit", "Glob", "ToolSearch", REQUEST_TOOL]
+        turns = 26
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
+            turns = 48          # 다중 Task 분해+위임+리뷰로 턴이 더 필요
         return Organt(cfg, build_options(
-            cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=26,
+            cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={"PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed)])],
                    "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit)])]},
         ), state_path=str(cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"))
@@ -107,9 +110,12 @@ async def main():
     out = await sysm.route_channel_request(cfg.channel_id, req)
     flow = out["flow"]
 
-    print(f"\n=== project_channel={flow.project_channel} comm_done={flow.comm.done} ===")
-    if flow.project_channel and flow.thread_id:
-        await _dump(system_client, int(flow.thread_id), "TASK 스레드 (협업 로그)")
+    print(f"\n=== project_channel={flow.project_channel} tasks={len(flow.tasks)} "
+          f"comm_done={flow.comm.done} ===")
+    for i, t in enumerate(flow.tasks, 1):
+        print(f"\n[Task {i}/{len(flow.tasks)}] {t.status.task_id} "
+              f"purpose={t.status.purpose!r} status={t.status.status}")
+        await _dump(system_client, int(t.thread_id), f"Task {i} 협업 로그")
     await _dump(system_client, cfg.channel_id, f"#{channel.name} (보고)", n=3)
     print("\n=== 산출물 ===")
     print(subprocess.run(["find", str(ws), "-type", "f", "-not", "-path", "*/node_modules/*"],

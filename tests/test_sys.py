@@ -53,7 +53,8 @@ def test_member는_request만_가짐():
 def test_leader는_project_task_도구():
     f = _flow(FakeGuide())
     names = {t.name for t in make_guide_tools(f, 11, "leader")}
-    assert names == {"request", "create_project", "create_task"}   # 보고/답변 툴 없음(반환=Response)
+    # 보고/답변 툴 없음(반환=Response). 다중 Task용 complete_task 포함.
+    assert names == {"request", "create_project", "create_task", "complete_task"}
 
 
 def test_request_동료_깨우고_베턴복귀():
@@ -84,6 +85,27 @@ def test_request_자기자신_거부_게시안함():
     r = asyncio.run(tools["request"].handler({"to_id": "11", "kind": "Work", "body": "x"}))
     assert "거부" in r["content"][0]["text"]
     assert not any(c[0] == "req" for c in g.calls)   # 검증 실패 → 게시 안 함
+
+
+def test_여러_Task_생성과_완료마감():
+    g = FakeGuide()
+    f = _flow(g)
+    tools = _tools(f, 11, "leader")
+    # Task 2개 생성 → 누적되고 두 번째가 현재 Task
+    asyncio.run(tools["create_task"].handler({"purpose": "백엔드", "goal": "API 동작"}))
+    asyncio.run(tools["create_task"].handler({"purpose": "프론트", "goal": "화면 연동"}))
+    assert len(f.tasks) == 2
+    assert f.tasks[0].task_id != f.tasks[1].task_id          # task_id 유니크
+    assert f.current is f.tasks[1]
+    # 현재 Task 완료 마감 → 상태블록 완료, 현재 Task 비움
+    r = asyncio.run(tools["complete_task"].handler({"result": "프론트 완료"}))
+    assert "완료" in r["content"][0]["text"]
+    assert f.tasks[1].status.status == "완료" and f.tasks[1].status.result == "프론트 완료"
+    assert f.current is None
+    # 현재 Task 없으면 request 거부(게시 안 함)
+    f.wake = lambda *a: None
+    rr = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "x"}))
+    assert "진행 중인 Task가 없습니다" in rr["content"][0]["text"]
 
 
 def test_단일흐름_보존_advice():

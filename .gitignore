@@ -8,8 +8,6 @@ venv/
 # 환경/시크릿 (봇 토큰 등은 절대 커밋하지 않는다)
 .env
 
-# Organt 작업공간/로그 (런타임 산출물)
-/workspace/*
-!/workspace/.gitkeep
+# 런타임 로그 (Organt 작업공간은 repo 밖 ../organt_workspace)
 /logs/*
 !/logs/.gitkeep

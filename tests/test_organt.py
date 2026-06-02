@@ -5,7 +5,7 @@
 from pathlib import Path
 
 from src.config import Config
-from src.organt import Organt, build_options
+from src.organt import Organt, _strip_decoration, build_options
 
 
 def _cfg(model=None) -> Config:
@@ -44,3 +44,10 @@ def test_옵션_override_주입():
 def test_organt_기본옵션_인격_CLAUDEmd():
     sp = Organt(_cfg()).options.system_prompt
     assert isinstance(sp, str) and "Organt" in sp
+
+
+def test_보고_장식수평선_제거():
+    # '---' 같은 장식 수평선만 제거하고 내용은 보존
+    out = _strip_decoration("백엔드 완료\n---\n프론트 연동됨")
+    assert out == "백엔드 완료\n프론트 연동됨"
+    assert _strip_decoration("결과만\n***\n___") == "결과만"

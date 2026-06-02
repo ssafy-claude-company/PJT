@@ -28,11 +28,16 @@ from .sys_core import Sys
 
 
 def load_roster() -> List[Tuple[str, str]]:
-    """ORGANT_ROSTER → [(token, 역할라벨), ...]. 첫 항목이 리더. 없으면 TEST_BOT 단독."""
+    """ORGANT_ROSTER → [(token, 역할설명), ...]. 첫 항목이 리더. 없으면 TEST_BOT 단독.
+
+    형식: '토큰_환경변수명:역할설명' 을 ';' 로 구분(역할설명에 쉼표·괄호 사용 가능). 예:
+      TEST_BOT_1:담당자(백엔드 직접 구현·리더); TEST_OBT_2:프론트엔드(스펙대로 CSS 구현)
+    """
     roster: List[Tuple[str, str]] = []
     spec = os.environ.get("ORGANT_ROSTER", "").strip()
     if spec:
-        for item in spec.split(","):
+        sep = ";" if ";" in spec else ","
+        for item in spec.split(sep):
             env_name, _, role = item.strip().partition(":")
             token = os.environ.get(env_name.strip(), "").strip()
             if token:

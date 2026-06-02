@@ -10,7 +10,7 @@ claude-agent-sdk의 ClaudeSDKClient로 Organt를 구동한다.
 import dataclasses
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -41,6 +41,13 @@ def load_persona(path=None) -> str:
     except OSError:
         return ORGANT_PERSONA
     return text or ORGANT_PERSONA
+
+
+def _strip_decoration(text: str) -> str:
+    """보고에서 장식용 수평선('---' 등)만 제거한다(내용은 보존)."""
+    lines = [ln for ln in (text or "").splitlines()
+             if ln.strip() not in ("---", "***", "___", "—", "──────")]
+    return "\n".join(lines).strip()
 
 
 def build_options(config: Config, **overrides) -> ClaudeAgentOptions:
@@ -93,11 +100,12 @@ class Organt:
         return self.options
 
     async def handle(self, prompt: str) -> str:
-        """요청 한 건을 처리하고 최종 텍스트 응답을 돌려준다.
+        """요청 한 건을 처리하고 **최종 발화**(=보고/응답)만 돌려준다.
 
-        직전 세션이 있으면 resume로 이어가고, 끝나면 세션 ID를 저장한다(State 보존).
+        턴마다의 중간 narration("이제 X 하겠습니다")은 버리고 마지막 메시지만 반환한다 →
+        Response가 장식 없이 간결해진다. 직전 세션이 있으면 resume로 이어간다(State 보존).
         """
-        texts: List[str] = []
+        final_text = ""
         captured_sid: Optional[str] = None
         async with ClaudeSDKClient(options=self._options_for_call()) as client:
             await client.query(prompt)
@@ -106,9 +114,9 @@ class Organt:
                 if sid:
                     captured_sid = sid
                 if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            texts.append(block.text)
+                    t = "".join(b.text for b in msg.content if isinstance(b, TextBlock)).strip()
+                    if t:
+                        final_text = t   # 마지막 비어있지 않은 발화만 유지
         if captured_sid:
             self._save_session_id(captured_sid)
-        return "".join(texts).strip()
+        return _strip_decoration(final_text)
