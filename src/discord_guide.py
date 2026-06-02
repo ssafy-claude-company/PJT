@@ -45,6 +45,21 @@ class DiscordGuide:
             msg = await ch.send(content)
         return str(msg.id)
 
+    # --- Project = 채널 (담당 Organt가 'create_project' 기능으로 요청, System Bot이 실행) ---
+
+    async def create_project_channel(self, guild_id: int, name: str) -> int:
+        guild = self.system.get_guild(guild_id)
+        if guild is None:
+            guild = await self.system.fetch_guild(guild_id)
+        ch = await guild.create_text_channel(name)
+        return ch.id
+
+    async def post(self, channel_id: int, sender_id: int, content: str,
+                   reply_to=None) -> str:
+        """임의 채널에 보낸봇으로 메시지 게시(답변/보고). sender 미등록 시 system."""
+        client = self.organts.get(sender_id, self.system)
+        return await self._send(client, int(channel_id), content, reply_to=reply_to)
+
     # --- Task = 채널 상태블록 + 스레드 ---
 
     async def open_task(self, channel_id: int, status: TaskStatus):

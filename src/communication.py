@@ -126,6 +126,8 @@ class CommunicationManager:
             raise CommError("흐름이 이미 종료되었습니다.")
         if from_id != self.alive:
             raise CommError(f"활성 Organt만 요청할 수 있습니다(현재 활성={self.alive}).")
+        if from_id == to_id:
+            raise CommError("자기 자신에게는 Request할 수 없습니다.")
         if self._is_work(kind) and to_id in self._participants():
             raise CommError(f"{to_id} 는 미완 Work 보유/흐름 참여 중 → Work Request 거부(겹침·순환 방지).")
         frame = Frame(from_id, to_id, str(request_id), kind)

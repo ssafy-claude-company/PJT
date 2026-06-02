@@ -1,170 +1,99 @@
-"""재구현 ⑤ 검증: SYS 통합 흐름 (공용 fake Discord + 스크립트 policy)."""
+"""재구현 ⑤ 검증(신모델): Organt 주도 Guide 도구 + 단일흐름 보존."""
 import asyncio
-import re
-from types import SimpleNamespace
 
-from src.discord_guide import DiscordGuide
-from src.protocol import Request, Response
-from src.sys_core import ORIGIN, Sys
-from src.task_rule import Phase
+from src.guide_tools import Flow, make_guide_tools
+from src.sys_core import Sys
 
 
-# --- 공용 fake Discord (여러 봇이 같은 채널/스레드를 본다) ---
-
-class Store:
+class FakeGuide:
     def __init__(self):
-        self.ch = {}
-        self._mid = 1000
-        self._cid = 700
+        self.calls = []
+        self._n = 0
 
-    def raw(self, cid):
-        return self.ch.setdefault(cid, RawCh(cid, self))
+    async def post(self, ch, sender, content, reply_to=None):
+        self.calls.append(("post", ch, sender, content))
+        return "m1"
 
-    def new_thread(self, name):
-        self._cid += 1
-        t = RawCh(self._cid, self)
-        t.name = name
-        self.ch[self._cid] = t
-        return t
+    async def create_project_channel(self, gid, name):
+        self.calls.append(("create_channel", name))
+        return 9001
 
-    def mid(self):
-        self._mid += 1
-        return self._mid
+    async def open_task(self, ch, status):
+        self.calls.append(("open_task", ch, status.purpose))
+        return "blk", "thr"
 
+    async def update_status(self, ch, blk, status):
+        self.calls.append(("update", status.status))
+        return blk
 
-class RawCh:
-    def __init__(self, cid, store):
-        self.id = cid
-        self.store = store
-        self.msgs = []
-        self.name = ""
+    async def send_request(self, thr, sender, to, kind, body):
+        self._n += 1
+        self.calls.append(("req", sender, to, body))
+        return f"req{self._n}"
 
-
-class RawMsg:
-    def __init__(self, mid, content, author_id, ch, ref=None):
-        self.id = mid
-        self.content = content
-        self.author = SimpleNamespace(id=author_id)
-        self.ch = ch
-        self.reference = SimpleNamespace(message_id=ref) if ref else None
-        self.mentions = [SimpleNamespace(id=int(x)) for x in re.findall(r"<@(\d+)>", content)]
+    async def send_response(self, thr, sender, req, body):
+        self.calls.append(("resp", sender, body))
+        return "r"
 
 
-class ChView:
-    def __init__(self, raw, uid):
-        self.raw = raw
-        self.uid = uid
-        self.id = raw.id
-        self.name = raw.name
-
-    async def send(self, content):
-        m = RawMsg(self.raw.store.mid(), content, self.uid, self.raw)
-        self.raw.msgs.append(m)
-        return MsgView(m, self.uid)
-
-    async def fetch_message(self, mid):
-        for m in self.raw.msgs:
-            if m.id == int(mid):
-                return MsgView(m, self.uid)
-        raise KeyError(mid)
-
-    async def history(self, limit=50):
-        for m in reversed(self.raw.msgs[-limit:]):
-            yield m
+class FakeOrgant:
+    async def handle(self, work):
+        return f"{work} 완료"
 
 
-class MsgView:
-    def __init__(self, raw, uid):
-        self.raw = raw
-        self.uid = uid
-        self.id = raw.id
-
-    async def create_thread(self, name):
-        return ChView(self.raw.ch.store.new_thread(name), self.uid)
-
-    async def edit(self, content):
-        self.raw.content = content
-        return self
-
-    async def reply(self, content):
-        m = RawMsg(self.raw.ch.store.mid(), content, self.uid, self.raw.ch, ref=self.raw.id)
-        self.raw.ch.msgs.append(m)
-        return MsgView(m, self.uid)
+def _tools(flow):
+    return {t.name: t for t in make_guide_tools(flow)}
 
 
-class FakeClient:
-    def __init__(self, store, uid):
-        self.store = store
-        self.uid = uid
-
-    def get_channel(self, cid):
-        return ChView(self.store.raw(cid), self.uid)
-
-    async def fetch_channel(self, cid):
-        return ChView(self.store.raw(cid), self.uid)
+def test_answer_question_그자리답변_흐름종료():
+    g = FakeGuide()
+    flow = Flow(g, channel_id=500, guild_id=1, leader_id=11, teammates={})
+    flow.start_root("root")
+    asyncio.run(_tools(flow)["answer_question"].handler({"body": "그건 X입니다"}))
+    assert flow.done and flow.comm.done
+    assert any(c[0] == "post" for c in g.calls)
+    assert not any(c[0] == "create_channel" for c in g.calls)  # 질문은 채널 안 팜
 
 
-class ScriptPolicy:
-    def __init__(self, b, c):
-        self.b, self.c = b, c
-
-    async def plan(self, purpose, team):
-        return ("CRUD 4기능 동작", [("백엔드 구현", self.b), ("프론트 구현", self.c)])
-
-    async def do_work(self, todo):
-        return f"{todo} 완료"
-
-    async def review(self, goal, results):
-        return (True, f"Goal 달성 — {len(results)}개 작업 완료")
-
-
-def test_sys_통합_task_flow():
-    store = Store()
-    SYSID, L, B, C = 10, 11, 12, 13
-    guide = DiscordGuide(FakeClient(store, SYSID),
-                         {L: FakeClient(store, L), B: FakeClient(store, B), C: FakeClient(store, C)})
-    sysc = Sys(guide, channel_id=500, bot_info={L: "leader", B: "dev", C: "dev"})
-
-    out = asyncio.run(sysc.run_task("001", "ToDo앱 제작", leader=L, team=[L, B, C], policy=ScriptPolicy(B, C)))
-    task, comm = out["task"], out["comm"]
-
-    # 베턴: 흐름이 시작점으로 복귀하고 종료
-    assert comm.done and comm.alive == ORIGIN
-    # Task: 보고 단계 + 결과
-    assert task.phase == Phase.REPORTED and task.result
-
-    # 채널 상태블록(첫 메시지)이 최종 상태로 갱신됨
-    block = store.raw(500).msgs[0]
-    assert "Status: 보고" in block.content and "result:" in block.content
-    assert "Purpose: ToDo앱 제작" in block.content
-
-    # Thread 안에 구조화 Request/Response (root + todo 2 + 응답 3)
-    parsed = asyncio.run(guide.read_thread(int(out["thread_id"])))
-    reqs = [m for m in parsed if isinstance(m, Request)]
-    resps = [m for m in parsed if isinstance(m, Response)]
-    assert len(reqs) >= 3 and len(resps) >= 3
+def test_project_생성_위임_베턴복귀():
+    g = FakeGuide()
+    flow = Flow(g, 500, guild_id=1, leader_id=11, teammates={12: FakeOrgant()},
+                bot_info={11: "leader", 12: "dev"})
+    flow.start_root("root")
+    tools = _tools(flow)
+    asyncio.run(tools["create_project"].handler({"name": "todo-app"}))
+    asyncio.run(tools["create_task"].handler({"purpose": "ToDo앱", "goal": "CRUD 동작"}))
+    res = asyncio.run(tools["delegate"].handler({"member_id": 12, "work": "백엔드 구현"}))
+    assert ("create_channel", "todo-app") in g.calls
+    assert ("req", 11, 12, "백엔드 구현") in g.calls
+    assert any(c[0] == "resp" and c[1] == 12 for c in g.calls)
+    assert flow.comm.alive == 11          # 위임 후 베턴이 Leader로 복귀
+    assert "완료" in res["content"][0]["text"]
 
 
-def test_sys_미달시_loop_후_종료():
-    store = Store()
-    L, B = 21, 22
+def test_delegate_자기자신_차단():
+    g = FakeGuide()
+    flow = Flow(g, 500, 1, leader_id=11, teammates={12: FakeOrgant()})
+    flow.start_root("root")
+    tools = _tools(flow)
+    asyncio.run(tools["create_task"].handler({"purpose": "p", "goal": "g"}))
+    r = asyncio.run(tools["delegate"].handler({"member_id": 11, "work": "x"}))
+    assert "오류" in r["content"][0]["text"]   # from==to 위임 불가
 
-    class Flaky:
-        def __init__(self):
-            self.n = 0
 
-        async def plan(self, purpose, team):
-            return ("동작", [("작업", B)])
+def test_report_흐름종료():
+    g = FakeGuide()
+    flow = Flow(g, 500, 1, 11, {12: FakeOrgant()}, bot_info={11: "L"})
+    flow.start_root("root")
+    tools = _tools(flow)
+    asyncio.run(tools["create_task"].handler({"purpose": "p", "goal": "g"}))
+    asyncio.run(tools["report"].handler({"body": "완수 보고"}))
+    assert flow.done and flow.comm.done and flow.status.status == "보고"
 
-        async def do_work(self, todo):
-            return "했음"
 
-        async def review(self, goal, results):
-            self.n += 1
-            return (self.n >= 2, f"라운드 {self.n}")   # 첫 판정 미달 → loop
-
-    guide = DiscordGuide(FakeClient(store, 99), {L: FakeClient(store, L), B: FakeClient(store, B)})
-    sysc = Sys(guide, 500)
-    out = asyncio.run(sysc.run_task("002", "p", leader=L, team=[L, B], policy=Flaky(), max_rounds=3))
-    assert out["comm"].done
-    assert out["task"].rounds >= 2   # 미달 후 재판정
+def test_단일흐름_보존_개입은_advice():
+    g = FakeGuide()
+    s = Sys(g, guild_id=1)
+    s.active_flow = Flow(g, 500, 1, 11, {})       # 활성 흐름 중
+    out = asyncio.run(s.handle_user_input(500, 11, {}, "중간 개입!", leader_factory=None))
+    assert out["mode"] == "advice" and "중간 개입!" in s.active_flow.advice
