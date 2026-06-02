@@ -5,7 +5,7 @@
 from pathlib import Path
 
 from src.config import Config
-from src.organt import Organt, _strip_decoration, build_options
+from src.organt import Organt, _is_transient_api_error, _strip_decoration, build_options
 
 
 def _cfg(model=None) -> Config:
@@ -44,6 +44,13 @@ def test_옵션_override_주입():
 def test_organt_기본옵션_인격_CLAUDEmd():
     sp = Organt(_cfg()).options.system_prompt
     assert isinstance(sp, str) and "Organt" in sp
+
+
+def test_일시적_API오류_판별():
+    assert _is_transient_api_error("API Error: 529 Overloaded. ...") is True
+    assert _is_transient_api_error("API Error: 429 rate_limit") is True
+    assert _is_transient_api_error("API Error: 400 invalid request") is False   # 영구 오류는 재시도 안 함
+    assert _is_transient_api_error("백엔드 완성했습니다") is False               # 정상 응답
 
 
 def test_보고_장식수평선_제거():

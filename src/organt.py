@@ -7,6 +7,7 @@ claude-agent-sdk의 ClaudeSDKClient로 Organt를 구동한다.
 - 인격(CLAUDE.md)·세션 보존(resume)은 Step2,
 - Discord 소통 툴은 기능5, audit 훅은 기능6에서 옵션 override로 붙인다.
 """
+import asyncio
 import dataclasses
 import json
 from pathlib import Path
@@ -41,6 +42,17 @@ def load_persona(path=None) -> str:
     except OSError:
         return ORGANT_PERSONA
     return text or ORGANT_PERSONA
+
+
+_MAX_API_RETRY = 3   # 일시적 API 오류(과부하 등) 재시도 횟수
+
+
+def _is_transient_api_error(text: str) -> bool:
+    """응답이 일시적 API 오류(429/5xx/529 과부하·rate limit)로 보이는지 — 재시도 대상."""
+    t = (text or "").strip().lower()
+    if not t.startswith("api error"):
+        return False
+    return any(s in t for s in ("429", "500", "502", "503", "529", "overload", "rate", "timeout"))
 
 
 def _strip_decoration(text: str) -> str:
@@ -99,12 +111,8 @@ class Organt:
             return dataclasses.replace(self.options, resume=self.session_id)
         return self.options
 
-    async def handle(self, prompt: str) -> str:
-        """요청 한 건을 처리하고 **최종 발화**(=보고/응답)만 돌려준다.
-
-        턴마다의 중간 narration("이제 X 하겠습니다")은 버리고 마지막 메시지만 반환한다 →
-        Response가 장식 없이 간결해진다. 직전 세션이 있으면 resume로 이어간다(State 보존).
-        """
+    async def _run_once(self, prompt: str):
+        """ClaudeSDKClient 한 번 실행 → (최종 발화, session_id)."""
         final_text = ""
         captured_sid: Optional[str] = None
         async with ClaudeSDKClient(options=self._options_for_call()) as client:
@@ -117,6 +125,24 @@ class Organt:
                     t = "".join(b.text for b in msg.content if isinstance(b, TextBlock)).strip()
                     if t:
                         final_text = t   # 마지막 비어있지 않은 발화만 유지
-        if captured_sid:
-            self._save_session_id(captured_sid)
+        return final_text, captured_sid
+
+    async def handle(self, prompt: str) -> str:
+        """요청 한 건을 처리하고 **최종 발화**(=보고/응답)만 돌려준다.
+
+        턴마다의 중간 narration은 버리고 마지막 메시지만 반환(Response가 간결). 직전 세션이
+        있으면 resume로 이어간다(State 보존). 일시적 API 오류(429/5xx/529 과부하)는 백오프 재시도.
+        """
+        final_text = ""
+        for attempt in range(_MAX_API_RETRY):
+            try:
+                final_text, captured_sid = await self._run_once(prompt)
+            except Exception as e:                       # 전송/스트림 예외도 일시오류로 간주해 재시도
+                final_text, captured_sid = f"API Error: {e}", None
+            if captured_sid:
+                self._save_session_id(captured_sid)
+            if not _is_transient_api_error(final_text):
+                break
+            if attempt < _MAX_API_RETRY - 1:
+                await asyncio.sleep(2 * (attempt + 1))   # 2s, 4s 백오프
         return _strip_decoration(final_text)
