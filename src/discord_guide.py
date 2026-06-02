@@ -19,6 +19,32 @@ from .protocol import (
     parse,
 )
 
+DISCORD_LIMIT = 2000   # Discord 한 메시지 최대 글자수
+
+
+def _split_for_discord(content: str, limit: int = 1900) -> List[str]:
+    """content를 Discord 한도 이하 조각들로 나눈다(줄 경계 우선, 긴 줄은 강제 분할)."""
+    content = content if (content and content.strip()) else "​"
+    if len(content) <= limit:
+        return [content]
+    parts: List[str] = []
+    buf = ""
+    for line in content.split("\n"):
+        while len(line) > limit:                 # 한 줄 자체가 한도 초과 → 강제 분할
+            if buf:
+                parts.append(buf)
+                buf = ""
+            parts.append(line[:limit])
+            line = line[limit:]
+        if buf and len(buf) + 1 + len(line) > limit:
+            parts.append(buf)
+            buf = line
+        else:
+            buf = line if not buf else f"{buf}\n{line}"
+    if buf:
+        parts.append(buf)
+    return parts
+
 
 class DiscordGuide:
     """Discord 전송기. system 봇 + Organt 봇들을 들고 채널/스레드/상태블록을 다룬다."""
@@ -37,13 +63,32 @@ class DiscordGuide:
         return ch
 
     async def _send(self, client, cid: int, content: str, reply_to=None) -> str:
+        """메시지 전송(견고): 2000자 초과 시 분할, 실패 시 1회 재시도 + 로그.
+
+        반환은 첫 조각의 메시지 ID(없으면 '0'). 길이/일시오류로 '조용히 사라지던' 문제 방지.
+        """
         ch = await self._resolve(client, cid)
-        if reply_to is not None:
-            ref = await ch.fetch_message(int(reply_to))
-            msg = await ref.reply(content)
-        else:
-            msg = await ch.send(content)
-        return str(msg.id)
+        first_id = None
+        for i, part in enumerate(_split_for_discord(content)):
+            sent = await self._send_one(ch, part, reply_to if i == 0 else None)
+            if sent and first_id is None:
+                first_id = sent
+        return first_id or "0"
+
+    async def _send_one(self, ch, content: str, reply_to) -> Optional[str]:
+        for attempt in (1, 2):
+            try:
+                if reply_to is not None:
+                    ref = await ch.fetch_message(int(reply_to))
+                    msg = await ref.reply(content)
+                else:
+                    msg = await ch.send(content)
+                return str(msg.id)
+            except Exception as e:   # 실패를 '보이게' 한다(조용한 유실 방지)
+                print(f"[discord_guide] 전송 실패(시도 {attempt}/2) {type(e).__name__}: {e} "
+                      f"(len={len(content)}, reply_to={reply_to})", flush=True)
+                reply_to = None      # 재시도는 일반 전송으로(reply 대상 문제 회피)
+        return None
 
     # --- Project = 채널 (담당 Organt가 'create_project' 기능으로 요청, System Bot이 실행) ---
 

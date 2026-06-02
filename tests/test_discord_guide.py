@@ -1,8 +1,17 @@
 """재구현 ② 검증: DiscordGuide (상태블록=채널, 대화=스레드, 보낸봇=Organt)."""
 import asyncio
 
-from src.discord_guide import DiscordGuide
+from src.discord_guide import DiscordGuide, _split_for_discord
 from src.protocol import Kind, TaskStatus, format_request, format_task_status
+
+
+def test_긴메시지_2000자_분할():
+    # 2000자 초과는 한도 이하 조각들로 분할되어 '조용한 유실' 방지
+    parts = _split_for_discord("줄\n" * 1500)          # 약 4500자
+    assert len(parts) >= 2 and all(len(p) <= 1900 for p in parts)
+    assert _split_for_discord("짧은 글") == ["짧은 글"]   # 짧으면 그대로 1개
+    assert _split_for_discord("x" * 4000)               # 줄바꿈 없는 긴 줄도 강제 분할
+    assert all(len(p) <= 1900 for p in _split_for_discord("x" * 4000))
 
 
 class Msg:
