@@ -23,7 +23,7 @@ from .discord_guide import DiscordGuide
 from .guide_tools import LEADER_TOOLS, REQUEST_TOOL
 from .organt import Organt, build_options
 from .permissions import make_pre_tool_use_hook
-from .protocol import Kind, Request, parse
+from .protocol import Request, Response, parse
 from .sys_core import Sys
 
 
@@ -117,24 +117,38 @@ async def run() -> None:
             return
         if message.author.id in organts or message.author.id == system_client.user.id:
             return
-        content = (message.content or "").strip()
-        if not content:
-            return
         req = parse(
             message_id=str(message.id),
             author_id=message.author.id,
             mention_ids=[m.id for m in message.mentions],
             reply_to_id=(message.reference.message_id if message.reference else None),
-            content=content,
+            content=message.content,
         )
         if not isinstance(req, Request):
-            # 평문 채팅 → 담당(리더)에게 Work 요청으로 취급(사람이 편하게 말 걸 수 있게)
-            req = Request(to_id=leader_id, kind=Kind.WORK, body=content,
-                          from_id=message.author.id, message_id=str(message.id))
-        elif req.to_id is None:
-            req.to_id = leader_id        # [Request]인데 멘션 없으면 리더로
+            return                       # 구조적 [Request]만 흐름을 시작(평문은 무시)
+        if req.to_id is None:
+            req.to_id = leader_id        # To: 멘션이 안 잡히면 담당(리더)로 라우팅
         audit.record("user_request", to=req.to_id, body=req.body[:200])
         await sysm.route_channel_request(cfg.channel_id, req)
+
+    # 연결 '직전'에 도착해 on_message로는 놓친 User [Request](아직 응답 없음)를 시작 시 한 번 처리.
+    try:
+        recent = await guide.read_thread(cfg.channel_id, limit=12)
+    except Exception:
+        recent = []
+    known = set(organts) | {system_client.user.id}
+    pending = None
+    for m in recent:
+        if isinstance(m, Request) and m.from_id not in known:
+            pending = m                  # User가 올린 미처리 Request 후보
+        elif isinstance(m, Response):
+            pending = None               # 응답이 뒤따랐으면 이미 처리됨
+    if pending is not None:
+        if pending.to_id is None:
+            pending.to_id = leader_id
+        print(f"시작 시 미응답 [Request] 처리: {(pending.body or '')[:60]}")
+        audit.record("user_request", to=pending.to_id, body=(pending.body or '')[:200])
+        asyncio.create_task(sysm.route_channel_request(cfg.channel_id, pending))
 
     await asyncio.gather(*tasks)
 
