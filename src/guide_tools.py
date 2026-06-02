@@ -88,8 +88,9 @@ def make_guide_tools(flow: Flow):
         flow.project_channel = ch
         return {"content": [{"type": "text", "text": f"task={flow.task_id} thread={flow.thread_id}"}]}
 
-    @tool("delegate", "팀원에게 Work를 위임한다(팀원이 실작업, 결과 회수)",
-          {"member_id": int, "work": str})
+    # member_id는 문자열로 받는다: Discord ID(>2^53)는 JSON 정수로 넘기면 정밀도가 잘린다.
+    @tool("delegate", "팀원에게 Work를 위임한다(member_id는 문자열, 팀원이 실작업)",
+          {"member_id": str, "work": str})
     async def delegate(args):
         member, work = int(args["member_id"]), args["work"]
         if member == flow.leader or member not in flow.teammates:
