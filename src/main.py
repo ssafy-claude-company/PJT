@@ -70,8 +70,8 @@ async def _connect(token: str) -> Tuple[discord.Client, asyncio.Task]:
 def _make_builder(cfg: Config, audit: AuditLog):
     """role에 맞는 도구·권한·훅·State를 갖춘 Organt를 만드는 빌더를 돌려준다."""
     def organt_builder(organt_id, server, role):
-        # Glob/Read는 동료 산출물 탐색(연동)을 위한 읽기 전용 도구. 쓰기는 훅이 작업공간으로 제한.
-        allowed = ["Read", "Write", "Edit", "Glob", "ToolSearch", REQUEST_TOOL]
+        # Glob/Grep/Read는 동료 산출물 탐색·검증용 읽기 전용. 쓰기는 훅이 작업공간으로 제한.
+        allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", REQUEST_TOOL]
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
         state_path = cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"

@@ -122,7 +122,7 @@ async def main():
         sp.unlink()
 
     def organt_builder(organt_id, server, role):
-        allowed = ["Read", "Write", "Edit", "Glob", "ToolSearch", REQUEST_TOOL]
+        allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", REQUEST_TOOL]
         turns = 26
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
