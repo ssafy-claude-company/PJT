@@ -10,7 +10,7 @@ from src.organt import Organt, build_options
 
 def _cfg(model=None) -> Config:
     return Config(
-        system_bot_token="s", organt_bot_token="o", channel_id=1,
+        system_bot_token="s", channel_id=1,
         model=model, workspace_dir=Path("/tmp/ws"),
         audit_log_path=Path("/tmp/audit.jsonl"),
     )

@@ -151,3 +151,41 @@ src/
 7. **end-to-end 실검증** — 실제 Thread 안 구조화 Request/Response 왕복 + 채널 [Task-XXX] 갱신, **"ToDo앱 제작" Task flow** (Iter1 KPI 시나리오)대로.
 
 > 각 단계는 docs의 해당 규칙을 기준으로 실측 검증한다. 검증 없는 진행 금지.
+
+---
+
+## 9. 최종 구현 & 검증 결과
+
+재구현을 진행하며 모델을 한 단계 더 정련했고(아래), 실제 Discord에서 두 번 end-to-end 검증했다.
+
+### 정련된 모델 (P2P Communication)
+- **분배는 서브에이전트가 아니라 동료 호출.** 깨어난 모든 Organt는 guide의 `request(to, kind, body)`
+  하나로 *필요한 동료 한 명*을 부른다(Info=질문 / Work=작업). SYS가 그 동료를 **중첩 베턴**으로
+  깨워(`flow.wake`) 응답을 돌려준다. → "리더가 분배"뿐 아니라 동료끼리 규격 협의(P2P)도 가능.
+- **보고는 별도 도구가 아니다.** Organt의 **반환값이 곧 그 요청에 대한 Response**다. 응답이 LIFO로
+  닫히며 origin(User)까지 unwind되는 것 자체가 보고다. 리더의 최종 반환값을 SYS가 `[Response]`로
+  유저 채널에 게시(reply=원 Request)하고 origin 프레임을 닫아 흐름을 종료한다.
+- **리더도 일한다.** 리더는 Leading(판단·분배·통합)이 주지만 자기 몫은 직접 파일로 작업한다.
+- **SYS는 얇다.** 깨우기(wake) 제공 + 단일흐름 lock + 라우팅. 베턴/권한 강제는 Rule·Hook이 한다.
+- **단일흐름** = 항상 1명만 활성 → 토큰 절약 + 사이드이펙트 감소.
+
+### 실제 모듈 구조 (flat — §7의 rule/guide 하위폴더 대신 단순화)
+`protocol` · `communication`(베턴 Rule) · `task_rule` · `discord_guide`(전송기) ·
+`guide_tools`(request/create_project/create_task) · `sys_core`(얇은 SYS) · `organt` ·
+`permissions` · `audit` · `config` · `channels` · `main`(엔트리: System봇 채널감시→팀가동).
+재구현으로 흡수·대체된 `gateway/router/app/orchestrator/task/task_gateway/discord_tools/
+archive/subagents/organt_policy`는 제거했다.
+
+### 실 검증 (실제 Discord, 봇 4개: system + testtest/2/3)
+1. **팀 빌드(담당자+프론트+디자인) → 동작하는 통합 TODO 웹앱.** 리더가 Project 채널·Task 스레드를
+   만들고 백엔드(Express)를 직접 작성, 디자인↔프론트가 `request(Info)`로 HTML 구조·클래스를 협의,
+   `[Response]`가 #채널까지 unwind되어 보고됨. **`comm_done=True`**(흐름 정상 종료). 산출물
+   `server.js`+`public/index.html`+`public/style.css`를 **실제 구동**해 정적 서빙 + CRUD
+   (추가/조회/완료토글/삭제) 전수 통과.
+2. **엔트리(`python -m src.main`)의 입구 검증.** 로스터 밖 봇을 User로 써서 #채널에 `[Request]`를
+   올리면 `on_message`가 파싱→라우팅, 리더가 `profile.html`을 직접 만들고 `style.css`를 프론트에
+   위임, **원 Request에 reply된 `[Response]`** 가 게시됨. HTML의 BEM 클래스 17개 전부가 CSS에서
+   스타일링됨(연동 100%).
+
+> 결론: docs의 `User↔SMS↔SYS↔Organt` / 단일흐름 베턴 / Thread=대화·채널=상태블록 / Task flow가
+> 실제 Discord에서 재현됨. KPI 시나리오("ToDo앱 제작")를 통과한다.

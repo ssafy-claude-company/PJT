@@ -1,1 +1,13 @@
-"""Organt Core 런타임 패키지 (Step 1: 런타임 + 채널 + 로그 골격)."""
+"""Organt Core 런타임 패키지.
+
+구조: User ↔ SMS(Discord) ↔ SYS ↔ Organt.
+- protocol: Discord 구조화 메시지 계약([Request]/[Response]/[Task-XXX]).
+- communication: 단일흐름 '베턴' Rule(요청 스택·LIFO 응답·busy 가드·상신).
+- task_rule: Task 진행 Rule(목표·분배·판정).
+- discord_guide: 소통 Rule의 Discord 구현체(전송기).
+- guide_tools: Organt가 쓰는 도구셋(request / create_project / create_task).
+- sys_core: 얇은 SYS(깨우기·단일흐름 lock·라우팅).
+- organt: Organt(LLM) 본체(세션 resume로 State 보존).
+- permissions / audit: 권한 훅 + 감사 로그.
+- main: 엔트리포인트(System 봇으로 채널 감시 → 팀 가동).
+"""

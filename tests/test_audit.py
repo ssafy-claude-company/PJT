@@ -1,10 +1,8 @@
-"""기능6 검증: audit JSONL 기록 + PostToolUse 훅 + App 수집 배선 (오프라인)."""
+"""audit 검증: JSONL 기록 + PostToolUse 훅 (오프라인)."""
 import asyncio
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
-from src.app import App
 from src.audit import AuditLog, make_post_tool_use_hook
 from src.config import Config
 
@@ -36,21 +34,3 @@ def test_PostToolUse_훅이_툴호출_기록():
         e = json.loads((Path(d) / "a.jsonl").read_text(encoding="utf-8").strip())
         assert e["event"] == "tool_use" and e["tool"] == "Write"
         assert e["tool_use_id"] == "tu_1"
-
-
-def _cfg(d) -> Config:
-    return Config(
-        system_bot_token="s", organt_bot_token="o", channel_id=1, model=None,
-        workspace_dir=Path(d) / "ws", audit_log_path=Path(d) / "audit.jsonl",
-    )
-
-
-def test_App_수집이_audit에_기록():
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        app = App(_cfg(d))  # 구성은 네트워크 없이 가능
-        msg = SimpleNamespace(author="사람", id=7, content="@Organt 안녕")
-        app._on_collect(msg)
-        e = json.loads((Path(d) / "audit.jsonl").read_text(encoding="utf-8").strip())
-        assert e["event"] == "collect" and e["content"] == "@Organt 안녕"
-        assert e["message_id"] == 7

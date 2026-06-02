@@ -12,7 +12,6 @@ class Config:
     """런타임 전역 설정."""
 
     system_bot_token: str   # System 봇 토큰 (관리자: 수집·라우팅)
-    organt_bot_token: str   # Organt 봇 토큰 (발화 주체)
     channel_id: int         # 수집·반응 대상 채널 ID
     model: str | None       # Organt(LLM) 모델. None이면 SDK 기본 사용
     workspace_dir: Path     # Organt 작업공간(cwd)
@@ -46,7 +45,6 @@ def load_config() -> Config:
 
     return Config(
         system_bot_token=_require("SYSTEM_BOT"),
-        organt_bot_token=_require("TEST_BOT"),
         channel_id=int(_require("CHANNEL_ID")),
         model=os.environ.get("ORGANT_MODEL", "").strip() or None,
         workspace_dir=workspace_dir,
@@ -62,4 +60,5 @@ if __name__ == "__main__":
     print(f"  모델     : {cfg.model or '(SDK 기본)'}")
     print(f"  작업공간 : {cfg.workspace_dir}")
     print(f"  로그     : {cfg.audit_log_path}")
-    print(f"  봇 토큰  : {'2개 설정됨' if cfg.system_bot_token and cfg.organt_bot_token else '누락'}")
+    print(f"  System 봇: {'설정됨' if cfg.system_bot_token else '누락'}")
+    print(f"  로스터   : {os.environ.get('ORGANT_ROSTER') or '(TEST_BOT 단독)'}")

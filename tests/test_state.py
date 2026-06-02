@@ -7,7 +7,7 @@ from src.organt import Organt
 
 def _cfg(tmp) -> Config:
     return Config(
-        system_bot_token="s", organt_bot_token="o", channel_id=1, model=None,
+        system_bot_token="s", channel_id=1, model=None,
         workspace_dir=Path(tmp) / "ws", audit_log_path=Path(tmp) / "logs" / "audit.jsonl",
     )
 
