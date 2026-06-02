@@ -15,11 +15,13 @@ from .protocol import Kind, Request, format_response
 
 
 class Sys:
-    def __init__(self, guide, guild_id, organt_builder, bot_info: Optional[Dict[int, str]] = None):
+    def __init__(self, guide, guild_id, organt_builder, bot_info: Optional[Dict[int, str]] = None,
+                 workspace=None):
         self.guide = guide
         self.guild_id = guild_id
         self.organt_builder = organt_builder   # (organt_id, guide_server, role) -> Organt
         self.bot_info = bot_info or {}
+        self.workspace = workspace             # run 툴 cwd(작업공간 경로)
         self.active_flow: Optional[Flow] = None
         self.queue = []                        # 진행 중 들어온 명령(순차 처리 대기)
         self.flow_log = []
@@ -36,6 +38,11 @@ class Sys:
         "[규약은 합의로] 필드명·데이터 형태·API 경로·디자인 토큰 같은 인터페이스는 혼자 임의로 "
         "정하지 말고, 그걸 함께 쓰는 동료와 request(Info)로 합의해 정하세요. 동료 산출물은 "
         "Read/Glob로 직접 확인해 검증하세요.\n"
+        "[요청은 하나씩] 한 턴에 request는 하나만 보내세요 — 여러 개를 한꺼번에 던지면 단일흐름에서 "
+        "직렬화되어 대기·지연됩니다. 응답을 받은 뒤 다음 요청을 보내세요.\n"
+        "[실행으로 검증] 코드가 실제로 도는지는 추측·읽기로 끝내지 말고 run 툴로 **직접 구동·테스트**하세요 "
+        "(예: 'npm install && (node server.js & sleep 1; curl -s localhost:3000/; kill %1)'). "
+        "동료 응답에 '⚠ 턴 한도 도달'이 붙어 있으면 미완이니 보완을 다시 요청하세요.\n"
         "[멈춤 규칙] 당신에게 요청해 응답을 기다리는 '상위 동료'에게는 되물을 수 없습니다(그들은 "
         "멈춰 있음). 그 경우 그 동료의 산출물을 Read 하거나 멈춰있지 않은 다른 동료에게 물으세요.\n"
         "[작업공간 레이아웃] 모든 산출물은 작업공간 '루트' 기준 하나의 일관된 구조로 만드세요. "
@@ -79,8 +86,8 @@ class Sys:
                 f"데이터↔서버 API, 필드명·반환형·에러형·함수 시그니처)은 **당신이 미리 못박지 마세요.** "
                 f"목표와 역할 분담만 정하고, 위임 시 \"세부 인터페이스는 상대 동료와 request(Info)로 직접 합의해 정하라\"고 "
                 f"지시하세요. 미리 다 정해주면 동료끼리 물을 게 없어져 협업이 사라집니다 — 의존성을 남겨 둬야 합니다.\n"
-                f"[마무리 검증] 보고 전에 실제 산출물을 Read/Glob로 점검하세요 — 백엔드·프론트가 같은 "
-                f"구조에서 연동되는지, 보고에 적을 '실행 방법'이 실제 파일과 일치하는지 확인한 뒤 "
+                f"[마무리 검증] 보고 전에 **run 툴로 실제 구동·테스트**하세요(예: npm install 후 서버 띄워 "
+                f"curl로 응답 확인) — 통합·실행이 진짜 되는지, '실행 방법'이 실제와 일치하는지 확인한 뒤 "
                 f"결과를 간결히 반환하세요."
             )
         return (
@@ -125,6 +132,7 @@ class Sys:
             return {"mode": "queued", "queued": len(self.queue)}
 
         flow = Flow(self.guide, channel_id, self.guild_id, leader_id, self.bot_info)
+        flow.workspace = self.workspace
         if root_id is not None:
             flow.start_root(root_id)
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")

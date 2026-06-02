@@ -45,16 +45,27 @@ def _tools(f, me, role):
     return {t.name: t for t in make_guide_tools(f, me, role)}
 
 
-def test_member는_request와_recruit():
+def test_member는_request_recruit_run():
     f = _flow(FakeGuide())
-    assert {t.name for t in make_guide_tools(f, 12, "member")} == {"request", "recruit"}
+    assert {t.name for t in make_guide_tools(f, 12, "member")} == {"request", "recruit", "run"}
 
 
 def test_leader는_project_task_도구():
     f = _flow(FakeGuide())
     names = {t.name for t in make_guide_tools(f, 11, "leader")}
-    # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit)+리더 셋업 도구.
-    assert names == {"request", "recruit", "create_project", "create_task", "complete_task"}
+    # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit·run)+리더 셋업 도구.
+    assert names == {"request", "recruit", "run",
+                     "create_project", "create_task", "complete_task"}
+
+
+def test_run_안전가드():
+    f = _flow(FakeGuide())
+    rt = {t.name: t for t in make_guide_tools(f, 11, "leader")}["run"]
+    f.workspace = None
+    assert "작업공간" in asyncio.run(rt.handler({"command": "echo hi"}))["content"][0]["text"]
+    f.workspace = "/tmp"
+    assert "거부" in asyncio.run(rt.handler({"command": "rm -rf /tmp/x"}))["content"][0]["text"]
+    assert "거부" in asyncio.run(rt.handler({"command": "git commit -am x"}))["content"][0]["text"]
 
 
 def test_팀_배정_recruit_팀밖요청거부():

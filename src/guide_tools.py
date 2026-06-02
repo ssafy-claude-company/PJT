@@ -35,9 +35,15 @@ def _dbg(msg):
 ORIGIN = 0
 REQUEST_TOOL = "mcp__guide__request"
 RECRUIT_TOOL = "mcp__guide__recruit"
-# 모든 Organt 공통 흐름 도구(요청/채용). 리더 전용 셋업 도구는 LEADER_TOOLS.
-FLOW_TOOLS = [REQUEST_TOOL, RECRUIT_TOOL]
+RUN_TOOL = "mcp__guide__run"
+# 모든 Organt 공통 흐름 도구(요청/채용/실행검증). 리더 전용 셋업 도구는 LEADER_TOOLS.
+FLOW_TOOLS = [REQUEST_TOOL, RECRUIT_TOOL, RUN_TOOL]
 LEADER_TOOLS = [f"mcp__guide__{n}" for n in ("create_project", "create_task", "complete_task")]
+
+# run 툴 안전 차단: 파괴/탈출/저장소·시스템 경로/네트워크 외 명령은 막는다(npm·node·curl·python은 허용).
+_RUN_DENY = ("rm -rf", "rm -r ", "sudo", "shutdown", "reboot", "mkfs", "dd if=", ":(){",
+             "git ", "/home/user/pjt", "/etc/", "/usr/", "/root", "> /", "chmod ", "chown ",
+             "pkill", "kill -9 1 ", "wget ", "ssh ", "scp ", "npm publish", "history")
 
 
 def _resolve_members(spec, flow, allowed) -> List[int]:
@@ -65,6 +71,12 @@ def _uniq(xs) -> List[int]:
         if x not in seen:
             seen.append(x)
     return seen
+
+
+def _looks_transient(text: str) -> bool:
+    """동료 응답이 일시적 API 오류로 보이는지 — 그렇다면 답으로 취급하지 말고 재시도."""
+    t = (text or "").strip().lower()
+    return t.startswith("api error") or t.startswith("(동료 처리 중 오류")
 
 
 @dataclass
@@ -100,6 +112,7 @@ class Flow:
         self.final: Optional[str] = None
         self.root_id: Optional[str] = None
         self.advice = []
+        self.workspace = None   # run 툴 cwd(작업공간 경로). SYS가 주입.
         self.wake = None   # async (to_id, body, kind) -> result text  (SYS가 주입)
 
     def start_root(self, root_id):
@@ -128,6 +141,20 @@ def _ok(text):
 
 def _group_of(flow, team):
     return [(f"<@{i}>", flow._info(i)) for i in team]
+
+
+async def _react(g, channel_id, message_id, emoji):
+    """이모지 반응(상태 표시). Guide에 react가 없으면(테스트 등) 조용히 건너뜀."""
+    fn = getattr(g, "react", None)
+    if fn:
+        await fn(channel_id, message_id, emoji)
+
+
+async def _add_members(g, thread_id, member_ids):
+    """Task 스레드에 팀원 추가(멤버십=팀). Guide에 메서드 없으면 건너뜀."""
+    fn = getattr(g, "add_thread_members", None)
+    if fn:
+        await fn(thread_id, member_ids)
 
 
 def make_guide_tools(flow: Flow, me_id: int, role: str):
@@ -169,7 +196,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if flow.wake is None:
             return _ok("오류: 시스템 준비 안 됨")
         # 병렬 요청 직렬화: 베턴이 '내 차례'가 될 때까지 대기(거부 대신 큐잉). 단일흐름 보존.
-        deadline = time.monotonic() + 120
+        # 데드라인은 교착 안전장치(베턴은 동료가 응답하면 결국 풀림 → 넉넉히 둠).
+        deadline = time.monotonic() + 600
         while flow.comm.alive != me_id and not flow.comm.done and time.monotonic() < deadline:
             await anyio.sleep(0.05)
         # 검증→점유는 await 없이 인접 실행 → 형제 요청과 경합하지 않음(원자적).
@@ -185,14 +213,20 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         frame.request_id = str(req)                              # 실제 메시지 id로 기록 갱신
         _dbg(f"{tag} ✓전송 req={req}")
         try:
-            result = await flow.wake(to, body, kind)   # 동료 깨워 응답(중첩 베턴)
-        except Exception as e:                          # 동료가 실패해도 베턴은 반드시 복귀
+            result = await flow.wake(to, body, kind)            # 동료 깨워 응답(중첩 베턴)
+            if _looks_transient(result):                        # 일시 오류면 한 번 더(답으로 취급 X)
+                result = await flow.wake(to, body, kind)
+        except Exception as e:
             result = f"(동료 처리 중 오류: {e})"
+        failed = _looks_transient(result)
         try:
-            resp = await g.send_response(thread_id, to, req, result)
-            _dbg(f"{tag} ✓응답 resp={resp} len={len(result)}")
+            await g.send_response(thread_id, to, req, result)
+            await _react(g, thread_id, req, "⚠️" if failed else "✅")  # 상태=이모지(해소/실패)
+            _dbg(f"{tag} {'⚠실패' if failed else '✓응답'} len={len(result)}")
         finally:
-            flow.comm.respond(to, "accept", result)    # 프레임 close = 베턴 복귀(누수 방지)
+            flow.comm.respond(to, "accept", result)             # 프레임 close = 베턴 복귀(누수 방지)
+        if failed:   # 실패는 답으로 넘기지 않고 재요청을 유도
+            return _ok(f"[{to}] 일시 오류로 응답 실패 — 잠시 후 다시 request 하세요. ({result[:120]})")
         return _ok(f"[{to} 응답] {result[:600]}")
 
     tools.append(request)
@@ -213,10 +247,41 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.current.team.append(mid)
             flow.current.status.group = _group_of(flow, flow.current.team)
             await flow.refresh()
+            await _add_members(g, flow.current.thread_id, [mid])   # 스레드에 합류(멤버십=팀)
         return _ok(f"{flow._info(mid) or mid} 합류(사유: {args.get('reason', '')}). "
                    f"현재 팀: {flow._names(flow.current.team)}")
 
     tools.append(recruit)
+
+    @tool("run",
+          "작업공간에서 명령을 실행해 산출물을 직접 검증(빌드/구동/테스트). cwd=작업공간, 60s 제한, "
+          "출력 반환. 예: 'npm install && (node server.js & sleep 1; curl -s localhost:3000/; kill %1)'. "
+          "파괴·git·시스템경로 명령은 차단.",
+          {"command": str})
+    async def run(args):
+        cmd = str(args.get("command", ""))
+        if not getattr(flow, "workspace", None):
+            return _ok("실행 불가: 작업공간이 설정되지 않았습니다.")
+        if any(d in cmd.lower() for d in _RUN_DENY):
+            return _ok(f"실행 거부(안전): 파괴/저장소/시스템 패턴 포함 — {cmd[:80]}")
+        import subprocess
+
+        def _exec():
+            return subprocess.run(cmd, shell=True, cwd=str(flow.workspace),
+                                  capture_output=True, text=True, timeout=60)
+        try:
+            p = await anyio.to_thread.run_sync(_exec)
+            _dbg(f"[RUN] {me_id} `{cmd[:60]}` exit={p.returncode}")
+            out = (p.stdout or "")[-1500:]
+            err = (p.stderr or "")[-600:]
+            return _ok(f"[exit {p.returncode}] (작업공간)\n[stdout]\n{out}\n[stderr]\n{err}")
+        except subprocess.TimeoutExpired:
+            return _ok("실행 시간초과(60s). 서버 등은 'node server.js & sleep 1; curl ...; kill %1'처럼 "
+                       "백그라운드+짧은 점검으로 묶어 실행하세요.")
+        except Exception as e:
+            return _ok(f"실행 오류: {e}")
+
+    tools.append(run)
 
     if role == "leader":
         @tool("create_project",
@@ -247,6 +312,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             status = TaskStatus(task_id=tid, purpose=args["purpose"], status="진행",
                                 goal=args["goal"], group=_group_of(flow, team))
             block_id, thread_id = await g.open_task(ch, status)
+            await _add_members(g, thread_id, [m for m in team if m != flow.leader])  # 멤버십=팀
             flow.project_channel = ch
             ref = TaskRef(task_id=tid, thread_id=thread_id, block_id=block_id,
                           status=status, team=team)
@@ -265,6 +331,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             done_ref.status.status = "완료"
             done_ref.status.result = (args.get("result") or "")[:500]
             await flow.refresh(done_ref)
+            await _react(g, flow.project_channel, done_ref.block_id, "✅")  # 완료=이모지
             flow.current = None
             return _ok(f"task={done_ref.task_id} 완료 마감")
         tools.append(complete_task)

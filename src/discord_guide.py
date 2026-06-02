@@ -105,6 +105,28 @@ class DiscordGuide:
         client = self.organts.get(sender_id, self.system)
         return await self._send(client, int(channel_id), content, reply_to=reply_to)
 
+    async def react(self, channel_id, message_id, emoji: str) -> None:
+        """메시지에 이모지 반응을 단다(흐름 상태를 Discord-native하게 표시). best-effort."""
+        try:
+            ch = await self._resolve(self.system, int(channel_id))
+            msg = await ch.fetch_message(int(message_id))
+            await msg.add_reaction(emoji)
+        except Exception:
+            pass
+
+    async def add_thread_members(self, thread_id, member_ids) -> None:
+        """Task 스레드에 팀원을 add — 스레드 멤버십 = Task 팀(권한적 표현). best-effort."""
+        import discord
+        try:
+            th = await self._resolve(self.system, int(thread_id))
+            for mid in member_ids:
+                try:
+                    await th.add_user(discord.Object(id=int(mid)))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     # --- Task = 채널 상태블록 + 스레드 ---
 
     async def open_task(self, channel_id: int, status: TaskStatus):

@@ -133,7 +133,8 @@ async def main():
                    "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit)])]},
         ), state_path=str(cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"))
 
-    sysm = Sys(guide, channel.guild.id, organt_builder, bot_info=bot_info)
+    sysm = Sys(guide, channel.guild.id, organt_builder, bot_info=bot_info,
+               workspace=cfg.workspace_dir)
 
     # User [Request]를 채널에 올리고(데모: System 봇이 대신) SYS 입구로 라우팅.
     await guide.post(cfg.channel_id, leader_id, format_request(leader_id, Kind.WORK, task_text))

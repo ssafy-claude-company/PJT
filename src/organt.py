@@ -17,6 +17,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    ResultMessage,
     TextBlock,
 )
 
@@ -115,6 +116,7 @@ class Organt:
         """ClaudeSDKClient 한 번 실행 → (최종 발화, session_id)."""
         final_text = ""
         captured_sid: Optional[str] = None
+        truncated = False
         async with ClaudeSDKClient(options=self._options_for_call()) as client:
             await client.query(prompt)
             async for msg in client.receive_response():
@@ -125,6 +127,12 @@ class Organt:
                     t = "".join(b.text for b in msg.content if isinstance(b, TextBlock)).strip()
                     if t:
                         final_text = t   # 마지막 비어있지 않은 발화만 유지
+                elif isinstance(msg, ResultMessage):   # 턴 한도 등으로 끊겼는지
+                    st = (getattr(msg, "subtype", "") or "") + (getattr(msg, "stop_reason", "") or "")
+                    if "max_turns" in st.lower():
+                        truncated = True
+        if truncated and not _is_transient_api_error(final_text):
+            final_text = (final_text + "\n(⚠ 턴 한도 도달 — 작업이 미완일 수 있음)").strip()
         return final_text, captured_sid
 
     async def handle(self, prompt: str) -> str:
