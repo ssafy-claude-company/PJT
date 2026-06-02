@@ -25,36 +25,43 @@ class Sys:
     def _log(self, event, **f):
         self.flow_log.append({"event": event, **f})
 
+    # 모든 Organt 공통 원칙: 추론보다 검증, 소통으로 규약을 맞춘다.
+    _PRINCIPLE = (
+        "[원칙: 추론보다 검증] 다른 파트(동료의 규격·산출물·의도)에 대해 모르거나 가정이 필요한 "
+        "순간, 추측해서 진행하지 마세요. 그 정보를 가진 동료에게 request(kind=Info)로 물어 "
+        "확인하세요. 받은 답이 모호하거나 부족하면 다시 물어도 됩니다(재질문). 단, 진행에 "
+        "꼭 필요한 것만 물으세요(불필요한 질문·정보 적재 금지).\n"
+        "[규약은 합의로] 필드명·데이터 형태·API 경로·디자인 토큰 같은 인터페이스는 혼자 임의로 "
+        "정하지 말고, 그걸 함께 쓰는 동료와 request(Info)로 합의해 정하세요. 동료 산출물은 "
+        "Read/Glob로 직접 확인해 검증하세요.\n"
+        "[멈춤 규칙] 당신에게 요청해 응답을 기다리는 '상위 동료'에게는 되물을 수 없습니다(그들은 "
+        "멈춰 있음). 그 경우 그 동료의 산출물을 Read 하거나 멈춰있지 않은 다른 동료에게 물으세요.\n"
+        "[보고] 결과는 간결한 일반 텍스트로 반환하세요 — 그 반환값이 곧 요청자에게 가는 Response. "
+        "'---' 구분선/'✅ 완성' 배너/표/긴 머리말 같은 장식은 쓰지 말고, 보고하려고 request 쓰지 마세요."
+    )
+
     def _prompt(self, body, kind, role, me):
         peers = ", ".join(f"{i}({self.bot_info.get(i, '?')})" for i in self.bot_info if i != me)
         my_role = self.bot_info.get(me, "리더" if role == "leader" else "팀원")
         if role == "leader":
             return (
-                f"당신은 팀을 이끄는 담당자(리더)입니다. 당신의 역할: {my_role}\n"
+                f"당신은 진행을 여는 '대표'입니다(독단으로 다 정하지 말 것). 당신의 역할: {my_role}\n"
                 f"User 요청: {body}\n동료: {peers}\n\n"
-                f"[판단] 먼저 '단순 질문/인사이트'인지 '실작업 Project'인지 정하세요.\n"
-                f"- 단순 질문 → 답을 간결히 작성해 반환(그게 사용자 응답).\n"
-                f"- 실작업 → create_project(채널 1개) 후 일을 **여러 Task로 나눠** 진행.\n\n"
-                f"[다중 Task — 분해는 당신 자율] 요청 성격에 맞게 Task 개수·순서를 스스로 정하세요. "
-                f"각 Task마다:\n"
-                f"  1) create_task(purpose, goal) — goal은 '측정 가능'하게.\n"
-                f"  2) 당신 몫(예: 백엔드)은 직접 파일로 작업.\n"
-                f"  3) 나머지는 **역할에 맞는 동료**에게 request(kind=Work)로 위임.\n"
-                f"  4) 동료 결과를 **직접 Read로 확인**하고, 미흡하면 보완을 다시 request(리뷰·반복).\n"
-                f"  5) goal 충족되면 complete_task(result)로 마감하고 다음 Task로.\n"
-                f"동료끼리 규격이 필요하면 request(kind=Info)로 협의하게 하세요.\n\n"
-                f"[보고] 모든 Task가 끝나면 결과를 **간결한 일반 텍스트**로 반환(그게 사용자 Response): "
-                f"무엇을·어디에 만들었는지와 핵심 결정·연동 상태만. '---' 구분선, '✅ 완성' 배너, 표, "
-                f"긴 머리말 같은 장식은 쓰지 마세요. 별도 보고 도구는 없습니다."
+                f"{self._PRINCIPLE}\n\n"
+                f"[판단] '단순 질문/인사이트'면 답만 간결히 반환. '실작업 Project'면 "
+                f"create_project(채널 1개) 후 일을 **여러 Task로 나눠** 진행하세요(개수·순서는 자율).\n"
+                f"각 Task: create_task(purpose, goal=측정가능) → 당신 몫은 직접 작업하되 "
+                f"**가정이 생기면 동료에게 Info로 확인**(예: 백엔드 응답 형태를 프론트에 먼저 물어 맞춤) → "
+                f"나머지는 역할에 맞는 동료에게 request(Work)로 위임 → 동료 결과를 **Read로 검증**하고 "
+                f"미흡/불일치면 구체적 피드백으로 다시 request(리뷰·반복) → goal 충족 시 complete_task로 마감.\n"
+                f"끝나면 결과를 간결히 반환하세요."
             )
         return (
-            f"당신은 팀원입니다. 당신의 역할: {my_role}\n"
-            f"받은 요청({getattr(kind, 'value', kind)}): {body}\n동료: {peers}\n\n"
-            f"당신의 역할에 충실하게 처리하세요(역할 밖 산출물은 만들지 말 것). 다른 파트의 규격·산출물이 "
-            f"필요하면 그것을 가진 동료에게 request(kind=Info)로 물어 합의한 뒤 진행하세요. "
-            f"파일은 작업공간에 상대경로로 만드세요.\n"
-            f"끝나면 결과(또는 답)를 **간결히** 반환하세요 — 그 반환값이 곧 요청자에게 가는 Response입니다. "
-            f"'---'/'✅ 완성' 같은 장식이나 긴 보고문은 쓰지 말고, 보고하려고 request 를 쓰지 마세요."
+            f"당신은 자율적으로 일하는 팀원입니다(당신도 필요하면 동료에게 먼저 묻습니다). "
+            f"당신의 역할: {my_role}\n받은 요청({getattr(kind, 'value', kind)}): {body}\n동료: {peers}\n\n"
+            f"{self._PRINCIPLE}\n\n"
+            f"역할에 충실하게(역할 밖 산출물 금지) 처리하되, 위 원칙대로 가정 대신 확인하세요. "
+            f"파일은 작업공간에 상대경로로 만드세요. 끝나면 결과(또는 답)를 간결히 반환하세요."
         )
 
     async def run_turn(self, flow: Flow, organt_id, body, kind, role) -> str:

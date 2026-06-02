@@ -68,6 +68,11 @@ class CommunicationManager:
             raise CommError(f"활성 Organt만 요청할 수 있습니다(현재 활성={self.alive}).")
         if from_id == to_id:
             raise CommError("자기 자신에게는 Request할 수 없습니다.")
+        if to_id in self._ancestors():
+            # 상위 동료는 '내 응답'을 기다리며 멈춰 있다 → 되물으면 재진입(세션 충돌). 금지.
+            raise CommError(
+                f"{to_id} 는 당신의 응답을 기다리며 멈춰 있습니다(재진입 불가). "
+                f"그 동료의 산출물을 Read 하거나, 멈춰있지 않은 다른 동료에게 물으세요.")
         if self._is_work(kind) and to_id in self._participants():
             raise CommError(f"{to_id} 는 미완 Work 보유/흐름 참여 중 → Work Request 거부(겹침·순환 방지).")
 
@@ -101,6 +106,10 @@ class CommunicationManager:
             s.add(f.from_id)
             s.add(f.to_id)
         return s
+
+    def _ancestors(self) -> set:
+        """응답을 기다리며 멈춰있는(=재진입 불가) 상위 Organt들(스택의 요청자들)."""
+        return {f.from_id for f in self._stack}
 
     def is_busy(self, organt_id) -> bool:
         """미완 Work 보유(또는 흐름 참여 중)인가 → Work Request 금지 대상."""

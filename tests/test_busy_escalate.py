@@ -26,6 +26,18 @@ def test_새_Organt에는_요청가능():
     assert f.to_id == D and m.is_alive(D)
 
 
+def test_상위동료_되묻기_재진입금지_Info도():
+    # 상위(응답 대기 중) 동료에겐 Info조차 되물을 수 없다(재진입 방지). 신규 동료는 가능.
+    m = CommunicationManager(A)
+    m.request(A, B, "r1")        # 스택 [A→B]
+    m.request(B, C, "r2")        # 스택 [A→B, B→C], 활성 C
+    with pytest.raises(CommError):
+        m.check_request(C, B, "info")   # B는 C 응답 대기 중 → 금지
+    with pytest.raises(CommError):
+        m.check_request(C, A, "info")   # A(조상)도 대기 중 → 금지
+    m.check_request(C, D, "info")       # 멈춰있지 않은 신규 동료엔 Info OK(예외 없음)
+
+
 # --- 상신 (증명③) ---
 
 def test_B가_멈추면_상신되어_교착없이_종료():

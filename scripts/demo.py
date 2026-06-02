@@ -52,6 +52,38 @@ async def _connect(token):
     return c, t
 
 
+def _collab_summary(flow, bot_info):
+    """flow.comm.history로 실제 협업(누가 누구에게, Info/Work, 반복=재질문)을 분석·출력."""
+    def name(i):
+        lbl = bot_info.get(i, "User" if i == 0 else str(i))
+        return lbl.split("(")[0]
+    edges = {}   # (from,to,kind) -> count
+    order = []
+    for ev in flow.comm.history:
+        if ev[0] == "request":
+            _, frm, to, _, knd = ev
+            if frm == 0:
+                continue   # origin→leader(시작)은 제외
+            k = getattr(knd, "value", str(knd))
+            edges[(frm, to, k)] = edges.get((frm, to, k), 0) + 1
+            order.append((frm, to, k))
+    info = sum(c for (_, _, k), c in edges.items() if k.lower().startswith("i"))
+    work = sum(c for (_, _, k), c in edges.items() if k.lower().startswith("w"))
+    print("\n=== 협업 분석(검증) ===")
+    print(f"P2P 요청 총 {len(order)}건  (Info 질의 {info} / Work 위임 {work})")
+    print("흐름 순서: " + " | ".join(f"{name(f)}→{name(t)}[{k}]" for f, t, k in order))
+    repeats = {e: c for e, c in edges.items() if c > 1}
+    if repeats:
+        print("재질문/반복 왕복:")
+        for (f, t, k), c in repeats.items():
+            print(f"  {name(f)}→{name(t)}[{k}] × {c}")
+    else:
+        print("재질문/반복: 없음")
+    askers = {name(f) for f, _, _ in order}
+    print(f"질문/위임을 '시작한' 주체 수: {len(askers)} ({', '.join(sorted(askers))})  "
+          f"— 1명 초과면 단방향(리더독단) 아님")
+
+
 async def _dump(client, channel_id, label, n=16):
     ch = client.get_channel(int(channel_id)) or await client.fetch_channel(int(channel_id))
     msgs = [m async for m in ch.history(limit=n)]
@@ -117,6 +149,7 @@ async def main():
               f"purpose={t.status.purpose!r} status={t.status.status}")
         await _dump(system_client, int(t.thread_id), f"Task {i} 협업 로그")
     await _dump(system_client, cfg.channel_id, f"#{channel.name} (보고)", n=3)
+    _collab_summary(flow, bot_info)
     print("\n=== 산출물 ===")
     print(subprocess.run(["find", str(ws), "-type", "f", "-not", "-path", "*/node_modules/*"],
                          capture_output=True, text=True).stdout)
