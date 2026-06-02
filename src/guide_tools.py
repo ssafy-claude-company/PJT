@@ -128,26 +128,35 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         to = int(args["to_id"])
         kind = Kind.WORK if str(args["kind"]).strip().lower().startswith("w") else Kind.INFO
         body = args["body"]
+        tag = (f"[REQ] {me_id}({flow._info(me_id)})→{to}({flow._info(to)}) "
+               f"{getattr(kind, 'value', kind)} alive={flow.comm.alive} "
+               f"stack={[ (f.from_id, f.to_id) for f in flow.comm.open_requests ]}")
         if flow.current is None:
+            print(f"{tag} ✗거부:Task없음", flush=True)
             return _ok("오류: 진행 중인 Task가 없습니다. (리더가 create_task 먼저)")
         if to not in flow.current.team:
+            print(f"{tag} ✗거부:팀밖 팀={flow._names(flow.current.team)}", flush=True)
             return _ok(f"요청 거부: {to}({flow._info(to)})는 이 Task 팀이 아닙니다. "
                        f"먼저 recruit로 합류시키세요. 현재 팀: {flow._names(flow.current.team)}")
         if flow.wake is None:
+            print(f"{tag} ✗거부:시스템미준비", flush=True)
             return _ok("오류: 시스템 준비 안 됨")
         try:
             flow.comm.check_request(me_id, to, kind)   # 게시 전 베턴 검증(from==to·Work busy·재진입)
         except CommError as e:
+            print(f"{tag} ✗거부:규약 ({e})", flush=True)
             return _ok(f"요청 거부(규약): {e}")
         thread_id = flow.current.thread_id
         req = await g.send_request(thread_id, me_id, to, kind, body)
         flow.comm.request(me_id, to, req, kind)
+        print(f"{tag} ✓전송 req={req}", flush=True)
         try:
             result = await flow.wake(to, body, kind)   # 동료 깨워 응답(중첩 베턴)
         except Exception as e:                          # 동료가 실패해도 베턴은 반드시 복귀
             result = f"(동료 처리 중 오류: {e})"
         try:
-            await g.send_response(thread_id, to, req, result)
+            resp = await g.send_response(thread_id, to, req, result)
+            print(f"{tag} ✓응답 resp={resp} len={len(result)}", flush=True)
         finally:
             flow.comm.respond(to, "accept", result)    # 프레임 close = 베턴 복귀(누수 방지)
         return _ok(f"[{to} 응답] {result[:600]}")
