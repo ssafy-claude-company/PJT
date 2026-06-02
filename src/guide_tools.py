@@ -15,6 +15,8 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+import anyio
+
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from .communication import CommError, CommunicationManager
@@ -122,15 +124,21 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
     g = flow.guide
     tools = []
 
+    async def _note(text):
+        """거부 등 흐름 사건을 스레드에 보이게 남긴다(조용한 유실 방지)."""
+        try:
+            if flow.current:
+                await g.post(int(flow.current.thread_id), me_id, f"[안내] {text}")
+        except Exception:
+            pass
+
     @tool("request", "현재 Task 팀의 동료 한 명에게 요청(kind: Info=질문 / Work=작업, to_id 문자열)",
           {"to_id": str, "kind": str, "body": str})
     async def request(args):
         to = int(args["to_id"])
         kind = Kind.WORK if str(args["kind"]).strip().lower().startswith("w") else Kind.INFO
         body = args["body"]
-        tag = (f"[REQ] {me_id}({flow._info(me_id)})→{to}({flow._info(to)}) "
-               f"{getattr(kind, 'value', kind)} alive={flow.comm.alive} "
-               f"stack={[ (f.from_id, f.to_id) for f in flow.comm.open_requests ]}")
+        tag = f"[REQ] {me_id}({flow._info(me_id)})→{to}({flow._info(to)}) {getattr(kind, 'value', kind)}"
         if flow.current is None:
             print(f"{tag} ✗거부:Task없음", flush=True)
             return _ok("오류: 진행 중인 Task가 없습니다. (리더가 create_task 먼저)")
@@ -139,16 +147,22 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             return _ok(f"요청 거부: {to}({flow._info(to)})는 이 Task 팀이 아닙니다. "
                        f"먼저 recruit로 합류시키세요. 현재 팀: {flow._names(flow.current.team)}")
         if flow.wake is None:
-            print(f"{tag} ✗거부:시스템미준비", flush=True)
             return _ok("오류: 시스템 준비 안 됨")
+        # 병렬 요청 직렬화: 베턴이 '내 차례'가 될 때까지 대기(거부 대신 큐잉). 단일흐름 보존.
+        deadline = time.monotonic() + 120
+        while flow.comm.alive != me_id and not flow.comm.done and time.monotonic() < deadline:
+            await anyio.sleep(0.05)
+        # 검증→점유는 await 없이 인접 실행 → 형제 요청과 경합하지 않음(원자적).
         try:
-            flow.comm.check_request(me_id, to, kind)   # 게시 전 베턴 검증(from==to·Work busy·재진입)
+            flow.comm.check_request(me_id, to, kind)
         except CommError as e:
             print(f"{tag} ✗거부:규약 ({e})", flush=True)
+            await _note(f"{flow._info(to) or to}에게 요청했으나 거부됨 — {e}")
             return _ok(f"요청 거부(규약): {e}")
+        frame = flow.comm.request(me_id, to, "pending", kind)   # 베턴 점유(alive→to)
         thread_id = flow.current.thread_id
         req = await g.send_request(thread_id, me_id, to, kind, body)
-        flow.comm.request(me_id, to, req, kind)
+        frame.request_id = str(req)                              # 실제 메시지 id로 기록 갱신
         print(f"{tag} ✓전송 req={req}", flush=True)
         try:
             result = await flow.wake(to, body, kind)   # 동료 깨워 응답(중첩 베턴)
