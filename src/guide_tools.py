@@ -14,8 +14,8 @@ from .protocol import Kind, TaskStatus
 
 ORIGIN = 0
 REQUEST_TOOL = "mcp__guide__request"
-LEADER_TOOLS = [f"mcp__guide__{n}"
-                for n in ("create_project", "create_task", "report", "answer_question")]
+# 리더 전용 셋업 도구. 보고/답변은 별도 툴이 아니라 '반환값=Response'로 처리된다.
+LEADER_TOOLS = [f"mcp__guide__{n}" for n in ("create_project", "create_task")]
 
 
 class Flow:
@@ -108,30 +108,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.project_channel = ch
             return _ok(f"task={flow.task_id} thread={flow.thread_id}")
         tools.append(create_task)
-
-        @tool("answer_question", "단순 질문/인사이트면 그 자리에서 답(흐름 종료)", {"body": str})
-        async def answer_question(args):
-            await g.post(flow.user_channel, flow.leader, f"[Response]\nBody: {args['body']}",
-                         reply_to=flow.root_id)
-            if not flow.comm.done:
-                flow.comm.respond(flow.leader, "accept", args["body"])
-            flow.done, flow.final = True, args["body"]
-            return _ok("답변·흐름 종료")
-        tools.append(answer_question)
-
-        @tool("report", "Project 완료 후 유저 채널에 최종 보고(흐름 종료)", {"body": str})
-        async def report(args):
-            await g.post(flow.user_channel, flow.leader, f"[Response]\nBody: {args['body']}",
-                         reply_to=flow.root_id)
-            if not flow.comm.done:
-                flow.comm.respond(flow.leader, "accept", args["body"])
-            if flow.status:
-                flow.status.status = "보고"
-                flow.status.result = args["body"]
-                await flow.refresh()
-            flow.done, flow.final = True, args["body"]
-            return _ok("보고·흐름 종료")
-        tools.append(report)
 
     return tools
 

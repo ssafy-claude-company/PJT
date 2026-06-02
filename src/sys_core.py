@@ -26,22 +26,26 @@ class Sys:
         self.flow_log.append({"event": event, **f})
 
     def _prompt(self, body, kind, role, me):
-        peers = [i for i in self.bot_info if i != me]
+        peers = ", ".join(f"{i}({self.bot_info.get(i, '?')})" for i in self.bot_info if i != me)
+        my_role = self.bot_info.get(me, "리더" if role == "leader" else "팀원")
         if role == "leader":
             return (
-                f"당신은 총괄 리더입니다. User 요청: {body}\n동료 ID: {peers}\n\n"
-                f"먼저 이게 '단순 질문/인사이트'인지 '실작업 Project'인지 판단하세요.\n"
-                f"- 단순 질문/인사이트 → answer_question 으로 그 자리에서 답하고 끝.\n"
-                f"- 실작업 Project → create_project → create_task 후, 필요한 동료에게 "
-                f"request(kind=Work)로 위임(직접 일부 수행도 가능), 끝나면 report.\n"
-                f"통합이 필요한 작업은 동료들이 request(kind=Info)로 서로 규격을 합의하도록 맡기거나 "
-                f"당신이 규격을 정해 전달하세요."
+                f"당신은 총괄 리더입니다. 당신의 역할: {my_role}\nUser 요청: {body}\n동료: {peers}\n\n"
+                f"먼저 '단순 질문/인사이트'인지 '실작업 Project'인지 판단하세요.\n"
+                f"- 단순 질문/인사이트 → 그냥 답을 작성해 반환하면 됩니다(그게 사용자 응답).\n"
+                f"- 실작업 Project → create_project → create_task 후, **당신 역할 부분은 직접 파일로 작업**, "
+                f"나머지는 **역할에 맞는 동료**에게 request(kind=Work)로 위임.\n"
+                f"통합 규격은 직접 정해 전달하거나 동료끼리 request(kind=Info)로 협의하게 하세요.\n"
+                f"모두 끝나면 결과 요약을 **반환**하세요 — 그 반환값이 곧 사용자 보고(Response)입니다. "
+                f"(별도 보고 도구는 없습니다.)"
             )
         return (
-            f"당신은 팀원입니다. 받은 요청({getattr(kind, 'value', kind)}): {body}\n동료 ID: {peers}\n\n"
-            f"진행에 필요한 정보(예: 다른 파트의 규격)가 있으면 그 정보를 가진 동료에게 "
-            f"request(kind=Info)로 물어 합의한 뒤 작업하세요. 파일은 작업공간에 상대경로로 만들고, "
-            f"결과(또는 답)를 간결히 반환하세요."
+            f"당신은 팀원입니다. 당신의 역할: {my_role}\n받은 요청({getattr(kind, 'value', kind)}): {body}\n"
+            f"동료: {peers}\n\n"
+            f"진행에 필요한 정보(다른 파트의 규격·산출물)가 있으면 그 정보를 가진 동료에게 "
+            f"request(kind=Info)로 물어 합의한 뒤 작업하세요. 파일은 작업공간에 상대경로로 만드세요.\n"
+            f"끝나면 결과(또는 답)를 간결히 **반환**하세요 — 그 반환값이 곧 요청자에게 가는 응답(Response)입니다. "
+            f"보고하려고 request 를 쓰지 마세요."
         )
 
     async def run_turn(self, flow: Flow, organt_id, body, kind, role) -> str:
@@ -61,7 +65,17 @@ class Sys:
             flow.start_root(root_id)
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")
         self.active_flow = flow
-        await self.run_turn(flow, leader_id, user_text, Kind.WORK, "leader")
+        result = await self.run_turn(flow, leader_id, user_text, Kind.WORK, "leader")
+        # 리더의 반환값 = 사용자에게 가는 Response(=보고). origin 프레임을 닫아 시작점 복귀.
+        await self.guide.post(flow.user_channel, leader_id, f"[Response]\nBody: {result}",
+                              reply_to=flow.root_id)
+        if not flow.comm.done:
+            flow.comm.respond(leader_id, "accept", result)
+        flow.done, flow.final = True, result
+        if flow.status:
+            flow.status.status = "완료"
+            flow.status.result = (result or "")[:500]
+            await flow.refresh()
         self._log("flow_done", project=flow.project_channel is not None, comm_done=flow.comm.done)
         self.active_flow = None
         return {"mode": "flow", "flow": flow}

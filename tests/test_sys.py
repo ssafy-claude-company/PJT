@@ -50,10 +50,10 @@ def test_member는_request만_가짐():
     assert {t.name for t in make_guide_tools(f, 12, "member")} == {"request"}
 
 
-def test_leader는_project_task_report도():
+def test_leader는_project_task_도구():
     f = _flow(FakeGuide())
     names = {t.name for t in make_guide_tools(f, 11, "leader")}
-    assert {"request", "create_project", "create_task", "report", "answer_question"} == names
+    assert names == {"request", "create_project", "create_task"}   # 보고/답변 툴 없음(반환=Response)
 
 
 def test_request_동료_깨우고_베턴복귀():
@@ -84,14 +84,6 @@ def test_request_자기자신_거부_게시안함():
     r = asyncio.run(tools["request"].handler({"to_id": "11", "kind": "Work", "body": "x"}))
     assert "거부" in r["content"][0]["text"]
     assert not any(c[0] == "req" for c in g.calls)   # 검증 실패 → 게시 안 함
-
-
-def test_answer_question_흐름종료():
-    g = FakeGuide()
-    f = _flow(g)
-    asyncio.run(_tools(f, 11, "leader")["answer_question"].handler({"body": "답"}))
-    assert f.done and f.comm.done
-    assert not any(c[0] == "create_channel" for c in g.calls)
 
 
 def test_단일흐름_보존_advice():
