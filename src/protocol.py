@@ -45,6 +45,7 @@ class TaskStatus:
     purpose: str = ""
     status: str = ""
     goal: str = ""
+    owner: str = ""                                             # 단일 책임자(accountable)
     group: List[Tuple[str, str]] = field(default_factory=list)  # [(@멘션, 봇 정보)]
     result: Optional[str] = None
 
@@ -66,6 +67,7 @@ def format_task_status(ts: TaskStatus) -> str:
         f"Purpose: {ts.purpose or '---'}",
         f"Status: {ts.status or '---'}",
         f"Goal: {ts.goal or '---'}",
+        f"Owner: {ts.owner or '—(공동)'}",
         "Group:",
     ]
     for mention, info in ts.group:

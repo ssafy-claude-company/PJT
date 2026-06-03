@@ -116,6 +116,22 @@ def test_팀_배정_recruit_팀밖요청거부():
     assert 13 in f.current.team
 
 
+def test_create_task_owner_분산():
+    """create_task(owner=…) → 산출물별 단일 책임자 배정(구조적 분산). owner는 팀 자동 합류."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "A백엔드", 13: "B프론트"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "goal": "동작", "owner": "A백엔드", "members": ""}))
+    assert f.current.owner == 12                                  # 비리더를 owner로
+    assert f.current.status.owner and "A백엔드" in f.current.status.owner
+    assert 12 in f.current.team                                   # owner 팀 자동 합류
+    # owner 미지정도 허용(공동) — 깨지지 않음
+    asyncio.run(t["create_task"].handler({"purpose": "x", "goal": "g", "owner": "", "members": "13"}))
+    assert f.current.owner == 0 and f.current.status.owner == ""
+
+
 def test_request_동료_깨우고_베턴복귀():
     g = FakeGuide()
     f = _flow(g)

@@ -114,12 +114,13 @@ def _reap_pgroup(pgid: int):
 
 @dataclass
 class TaskRef:
-    """채널에 누적되는 Task 하나 (상태블록 + 대화 Thread + 배정 팀)."""
+    """채널에 누적되는 Task 하나 (상태블록 + 대화 Thread + 배정 팀 + 단일 책임자)."""
     task_id: str
     thread_id: str
     block_id: str
     status: TaskStatus
     team: List[int] = field(default_factory=list)   # 이 Task에 배정된 Organt들
+    owner: int = 0                                   # 이 산출물의 단일 책임자(accountable)
 
 
 class Flow:
@@ -354,25 +355,30 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         tools.append(create_project)
 
         @tool("create_task",
-              "Task 생성 + 필요한 인원 배정(members=쉼표구분 id/역할명, 프로젝트팀 내). "
-              "부족하면 나중에 recruit. Goal은 측정가능하게.",
-              {"purpose": str, "goal": str, "members": str})
+              "Task 생성 — owner(이 산출물의 단일 책임자: id/역할명)가 직접 구현·인터페이스 합의를 "
+              "끝까지 몰고 간다. members=관련 동료. 리더가 모든 Task의 owner가 되지 말 것(분산). "
+              "Goal은 측정가능하게.",
+              {"purpose": str, "goal": str, "owner": str, "members": str})
         async def create_task(args):
             ch = flow.project_channel or flow.user_channel
             tid = flow.next_task_id()
-            picked = _resolve_members(args.get("members", ""), flow, flow.project_team or flow.pool)
-            team = _uniq([flow.leader] + (picked if picked
-                                          else [m for m in flow.project_team if m != flow.leader]))
+            pool = flow.project_team or flow.pool
+            picked = _resolve_members(args.get("members", ""), flow, pool)
+            owners = _resolve_members(args.get("owner", ""), flow, pool)
+            owner = owners[0] if owners else 0
+            base = picked if picked else [m for m in flow.project_team if m != flow.leader]
+            team = _uniq([flow.leader] + ([owner] if owner else []) + base)
+            owner_label = flow._info(owner) or (f"<@{owner}>" if owner else "")
             status = TaskStatus(task_id=tid, purpose=args["purpose"], status="진행",
-                                goal=args["goal"], group=_group_of(flow, team))
+                                goal=args["goal"], owner=owner_label, group=_group_of(flow, team))
             block_id, thread_id = await g.open_task(ch, status)
             await _add_members(g, thread_id, [m for m in team if m != flow.leader])  # 멤버십=팀
             flow.project_channel = ch
             ref = TaskRef(task_id=tid, thread_id=thread_id, block_id=block_id,
-                          status=status, team=team)
+                          status=status, team=team, owner=owner)
             flow.tasks.append(ref)
             flow.current = ref
-            return _ok(f"task={tid} thread={thread_id} 팀={flow._names(team)}")
+            return _ok(f"task={tid} owner={owner_label or '미지정'} thread={thread_id} 팀={flow._names(team)}")
         tools.append(create_task)
 
         @tool("complete_task",
