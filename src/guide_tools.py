@@ -445,7 +445,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               "Node 앱이어야 하고 서버는 process.env.PORT를 사용해야 함. run 검증을 끝낸 뒤 마지막에 호출.",
               {"name": str})
         async def deploy(args):
-            name = re.sub(r"[^a-z0-9-]", "-", str(args.get("name", "")).lower()).strip("-") or "organt-app"
+            # 프로젝트에 정식 서비스명(DEPLOY_NAME)이 설정돼 있으면 그걸로 '고정' — 에이전트가 임의 이름으로
+            # 엉뚱한 새 서비스에 배포하는 사고를 구조적으로 차단(라이브가 안 바뀌는 원인이었음).
+            name = (os.environ.get("DEPLOY_NAME", "").strip()
+                    or re.sub(r"[^a-z0-9-]", "-", str(args.get("name", "")).lower()).strip("-")
+                    or "organt-app")
             gh, ghu = os.environ.get("GH_PAT"), os.environ.get("GH_USER")
             rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")
             if not (gh and ghu and rk and owner):
