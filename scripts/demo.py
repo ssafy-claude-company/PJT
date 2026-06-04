@@ -122,13 +122,12 @@ async def main():
         sp.unlink()
 
     def organt_builder(organt_id, server, role):
+        # 담당자(리더)도 같은 직군 기여자(Write/run 보유) + 구조적 조율 도구(LEADER_TOOLS).
+        allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
         turns = 34
         if role == "leader":
-            # 리더는 구현·실행 도구 없음 → 반드시 위임(조율·검토·결정·배포만).
-            allowed = ["Read", "Glob", "Grep", "ToolSearch", *COORD_TOOLS, *LEADER_TOOLS]
+            allowed = allowed + LEADER_TOOLS
             turns = 64          # 분해+위임+품질게이트(비평·되밀기 반복)로 턴이 더 필요
-        else:
-            allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
         return Organt(cfg, build_options(
             cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={"PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed)])],

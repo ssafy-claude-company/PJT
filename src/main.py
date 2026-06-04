@@ -81,11 +81,11 @@ async def _connect(token: str) -> Tuple[discord.Client, asyncio.Task]:
 def _make_builder(cfg: Config, audit: AuditLog):
     """role에 맞는 도구·권한·훅·State를 갖춘 Organt를 만드는 빌더를 돌려준다."""
     def organt_builder(organt_id, server, role):
+        # 담당자(리더)도 팀과 같은 직군의 기여자(Write/Edit/run 보유) — 자기 도메인은 직접, 다른 도메인은
+        # 위임·합의(create_task 합의강제 + QA게이트로 중앙집권 완화).
+        allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
         if role == "leader":
-            # 리더는 구현·실행 도구(Write/Edit/run) 없음 → 반드시 위임. 검토(Read)·조율·결정·배포만.
-            allowed = ["Read", "Glob", "Grep", "ToolSearch", *COORD_TOOLS, *LEADER_TOOLS]
-        else:
-            allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
+            allowed = allowed + LEADER_TOOLS
         state_path = cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"
         return Organt(cfg, build_options(
             cfg, allowed_tools=allowed, mcp_servers={"guide": server},
