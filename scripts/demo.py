@@ -23,7 +23,7 @@ from claude_agent_sdk import HookMatcher
 from src.audit import AuditLog, make_post_tool_use_hook
 from src.config import load_config
 from src.discord_guide import DiscordGuide
-from src.guide_tools import FLOW_TOOLS, LEADER_TOOLS
+from src.guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
 from src.main import load_roster
 from src.organt import Organt, build_options
 from src.permissions import make_pre_tool_use_hook
@@ -122,11 +122,13 @@ async def main():
         sp.unlink()
 
     def organt_builder(organt_id, server, role):
-        allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
         turns = 34
         if role == "leader":
-            allowed = allowed + LEADER_TOOLS
+            # 리더는 구현·실행 도구 없음 → 반드시 위임(조율·검토·결정·배포만).
+            allowed = ["Read", "Glob", "Grep", "ToolSearch", *COORD_TOOLS, *LEADER_TOOLS]
             turns = 64          # 분해+위임+품질게이트(비평·되밀기 반복)로 턴이 더 필요
+        else:
+            allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
         return Organt(cfg, build_options(
             cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={"PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed)])],
