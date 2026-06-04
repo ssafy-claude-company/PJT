@@ -78,8 +78,9 @@ async def _connect(token: str) -> Tuple[discord.Client, asyncio.Task]:
     raise last
 
 
-def _make_builder(cfg: Config, audit: AuditLog):
+def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
     """role에 맞는 도구·권한·훅·State를 갖춘 Organt를 만드는 빌더를 돌려준다."""
+    bot_info = bot_info or {}
     def organt_builder(organt_id, server, role):
         # 담당자(리더)도 팀과 같은 직군의 기여자(Write/Edit/run 보유) — 자기 도메인은 직접, 다른 도메인은
         # 위임·합의(create_task 합의강제 + QA게이트로 중앙집권 완화).
@@ -87,11 +88,12 @@ def _make_builder(cfg: Config, audit: AuditLog):
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
         state_path = cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"
+        label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
         return Organt(cfg, build_options(
             cfg, allowed_tools=allowed, mcp_servers={"guide": server},
             hooks={
-                "PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed)])],
-                "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit)])],
+                "PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label)])],
+                "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit, actor=organt_id, role=label)])],
             },
         ), state_path=str(state_path))
     return organt_builder
@@ -117,7 +119,7 @@ async def run() -> None:
     guide = DiscordGuide(system_client, organts)
     channel = (system_client.get_channel(cfg.channel_id)
                or await system_client.fetch_channel(cfg.channel_id))
-    sysm = Sys(guide, channel.guild.id, _make_builder(cfg, audit), bot_info=bot_info,
+    sysm = Sys(guide, channel.guild.id, _make_builder(cfg, audit, bot_info), bot_info=bot_info,
                workspace=cfg.workspace_dir,
                projects_path=str(cfg.audit_log_path.parent / "projects.json"),
                session_dir=str(cfg.audit_log_path.parent))

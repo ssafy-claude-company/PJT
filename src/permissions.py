@@ -34,8 +34,10 @@ def _deny(reason: str) -> dict:
     }}
 
 
-def make_pre_tool_use_hook(audit, allowed):
-    """허용 도구만 통과시키고, 파일 쓰기는 작업공간 안으로 제한하는 PreToolUse 훅."""
+def make_pre_tool_use_hook(audit, allowed, actor=None, role=None):
+    """허용 도구만 통과시키고, 파일 쓰기는 작업공간 안으로 제한하는 PreToolUse 훅.
+
+    actor/role를 주면 거부 이벤트에도 '누가' 시도했는지 남는다 — 협업 관찰성."""
     allowed_set = set(allowed)
 
     async def hook(input_data, tool_use_id, context) -> dict:
@@ -45,8 +47,8 @@ def make_pre_tool_use_hook(audit, allowed):
 
         # 1) 허용 도구만 통과
         if tool not in allowed_set:
-            audit.record("tool_denied", tool=tool, reason="권한 밖 도구",
-                         tool_use_id=tool_use_id)
+            audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                         reason="권한 밖 도구", tool_use_id=tool_use_id)
             return _deny(f"'{tool}' 은(는) Organt 허용 도구가 아닙니다.")
 
         # 2) 파일 쓰기는 작업공간(cwd) 안으로 제한
@@ -54,8 +56,8 @@ def make_pre_tool_use_hook(audit, allowed):
             path = tool_input.get("file_path") or tool_input.get("path")
             cwd = data.get("cwd") or os.getcwd()
             if path and not _within(cwd, path):
-                audit.record("tool_denied", tool=tool, reason="작업공간 밖 경로",
-                             path=path, tool_use_id=tool_use_id)
+                audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                             reason="작업공간 밖 경로", path=path, tool_use_id=tool_use_id)
                 return _deny(f"작업공간 밖 경로에는 쓸 수 없습니다: {path}")
 
         return {}

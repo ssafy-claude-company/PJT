@@ -128,10 +128,11 @@ async def main():
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
             turns = 64          # 분해+위임+품질게이트(비평·되밀기 반복)로 턴이 더 필요
+        label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
         return Organt(cfg, build_options(
             cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
-            hooks={"PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed)])],
-                   "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit)])]},
+            hooks={"PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label)])],
+                   "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit, actor=organt_id, role=label)])]},
         ), state_path=str(cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"))
 
     sysm = Sys(guide, channel.guild.id, organt_builder, bot_info=bot_info,
