@@ -60,8 +60,14 @@ class Sys:
         ch = int(channel_id)
         if ch in self.projects:
             return self.projects[ch]["id"]
-        for c, p in self.projects.items():            # 같은 이름이면 기존 채널 재사용
+        # 같은 이름이 이미 있으면 식별번호를 '그대로 유지'하고 채널만 현재 것으로 이동(증가/중복 금지)
+        for c, p in list(self.projects.items()):
             if p.get("name") == name:
+                p["channel"], p["workspace"] = ch, workspace
+                self.projects[ch] = p
+                if c != ch:
+                    del self.projects[c]
+                self._save_projects()
                 return p["id"]
         self._proj_n += 1
         pid = f"P-{self._proj_n:03d}"
@@ -251,9 +257,10 @@ class Sys:
                               reply_to=flow.root_id)
         self._close_flow(flow, lead, result)
         flow.done, flow.final = True, result
-        # 안전망: 리더가 닫지 않은 현재 Task가 있으면 완료로 마감.
+        # 안전망: 리더가 complete_task로 명시적으로 닫지 않은 현재 Task는 '중단'으로 표시한다
+        # (허위 완료 금지 — owner가 실제로 안 끝냈을 수 있으므로 '완료'로 둔갑시키지 않음).
         if flow.current is not None:
-            flow.current.status.status = "완료"
+            flow.current.status.status = "중단"
             flow.current.status.result = (result or "")[:500]
             await flow.refresh(flow.current)
             flow.current = None

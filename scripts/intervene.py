@@ -89,10 +89,10 @@ async def main():
                workspace=cfg.workspace_dir,
                projects_path=str(cfg.audit_log_path.parent / "projects.json"))
 
-    # 기존 산출물 워크스페이스를 프로젝트로 — 같은 이름 채널 재사용(중복 방지) + 레지스트리 정렬
+    # 기존 산출물 워크스페이스를 프로젝트로 — 같은 이름 채널 재사용(중복 방지). 레지스트리는
+    # 지우지 않는다(같은 이름이면 _register_project가 식별번호 유지 + 채널만 갱신 → ID 안 바뀜).
     PNAME = "slither-multiplayer"
     pch = await guide.create_project_channel(channel.guild.id, PNAME)
-    sysm.projects = {k: v for k, v in sysm.projects.items() if v.get("name") != PNAME}  # 스테일 제거
     pid = sysm._register_project(pch, PNAME, str(cfg.workspace_dir), leader_id)
     await guide.post(int(pch), leader_id,
                      f"[Project-{pid}]\nName: {PNAME}\nStatus: 진행\n"

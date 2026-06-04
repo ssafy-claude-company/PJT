@@ -235,9 +235,10 @@ def test_프로젝트_레지스트리_영속과_중복방지(tmp_path):
     p = str(tmp_path / "projects.json")
     s1 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"}, projects_path=p)
     pid = s1._register_project(9001, "스네이크", "/ws", 11)
-    # 같은 이름은 새 채널이어도 기존 프로젝트 재사용(중복 채널/프로젝트 방지)
-    assert s1._register_project(9999, "스네이크", "/ws", 11) == pid
-    assert 9999 not in s1.projects
+    # 같은 이름은 새 채널이어도 식별번호 '그대로 유지' + 채널만 갱신(번호 증가/중복 금지)
+    assert s1._register_project(9999, "스네이크", "/ws2", 11) == pid
+    assert 9999 in s1.projects and 9001 not in s1.projects     # 채널만 현재 것으로 이동
+    assert s1.projects[9999]["id"] == pid and s1.projects[9999]["workspace"] == "/ws2"
     # 새 프로세스(새 Sys)가 같은 파일 로드 → 원래 프로젝트 복원
     s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"}, projects_path=p)
     assert 9001 in s2.projects and s2.projects[9001]["id"] == pid
