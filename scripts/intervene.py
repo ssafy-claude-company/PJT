@@ -62,10 +62,10 @@ async def main():
 
     def organt_builder(organt_id, server, role):
         allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
-        turns = 30
+        turns = 34
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
-            turns = 50
+            turns = 70          # 7인 팀 + 품질게이트(비평·되밀기)로 턴 더 필요
         return Organt(cfg, build_options(
             cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={"PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed)])],
@@ -73,13 +73,16 @@ async def main():
             state_path=str(cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"))
 
     sysm = Sys(guide, channel.guild.id, organt_builder, bot_info=bot_info,
-               workspace=cfg.workspace_dir)
+               workspace=cfg.workspace_dir,
+               projects_path=str(cfg.audit_log_path.parent / "projects.json"))
 
-    # 기존(버그 있는) 산출물 워크스페이스를 프로젝트로 등록 + 채널 + [Project-XXXX] 앵커
-    pch = await guide.create_project_channel(channel.guild.id, "slither-multiplayer-organt")
-    pid = sysm._register_project(pch, "slither-multiplayer-organt", str(cfg.workspace_dir), leader_id)
+    # 기존 산출물 워크스페이스를 프로젝트로 — 같은 이름 채널 재사용(중복 방지) + 레지스트리 정렬
+    PNAME = "slither-multiplayer"
+    pch = await guide.create_project_channel(channel.guild.id, PNAME)
+    sysm.projects = {k: v for k, v in sysm.projects.items() if v.get("name") != PNAME}  # 스테일 제거
+    pid = sysm._register_project(pch, PNAME, str(cfg.workspace_dir), leader_id)
     await guide.post(int(pch), leader_id,
-                     f"[Project-{pid}]\nName: slither-multiplayer-organt\nStatus: 진행\n"
+                     f"[Project-{pid}]\nName: {PNAME}\nStatus: 진행\n"
                      f"개입: 이 채널에 명령하면 이 프로젝트에 이어서 작업합니다.")
     print(f"프로젝트 등록: {pid} channel={pch} workspace={cfg.workspace_dir}\n개입 명령: {CMD}\n", flush=True)
 
