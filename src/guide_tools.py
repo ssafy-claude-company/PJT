@@ -153,6 +153,7 @@ class Flow:
         self.register_project = None   # (channel_id, name) -> project_id (SYS 주입)
         self.project_id = None         # [Project-XXXX] 식별번호
         self.intervention = None       # 기존 프로젝트 개입이면 그 정보(dict)
+        self.deployed = None           # deploy 툴이 불리면 결과 문자열(배포 강제용 추적)
 
     def start_root(self, root_id):
         self.root_id = str(root_id)
@@ -427,6 +428,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 return _ok("배포 불가: 작업공간이 없습니다.")
             from .deploy import deploy_sync
             result = await anyio.to_thread.run_sync(deploy_sync, flow.workspace, name, gh, ghu, rk, owner)
+            flow.deployed = result                 # 배포 호출됨 기록(SYS의 배포 강제가 중복 안 하게)
             await _note(f"[배포] {result}")
             return _ok(result)
         tools.append(deploy)
