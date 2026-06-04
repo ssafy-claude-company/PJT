@@ -123,6 +123,7 @@ class TaskRef:
     status: TaskStatus
     team: List[int] = field(default_factory=list)   # 이 Task에 배정된 Organt들
     owner: int = 0                                   # 이 산출물의 단일 책임자(accountable)
+    verified: bool = False                           # run으로 한 번이라도 검증됐나(허위완료 차단)
 
 
 class Flow:
@@ -340,6 +341,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                        "백그라운드로 띄우세요(포그라운드로 서버를 실행하면 멈춥니다).\n"
                        f"[부분 stdout]\n{out[-800:]}\n[부분 stderr]\n{err[-400:]}")
         _dbg(f"[RUN] {me_id} `{cmd[:60]}` exit={rc}")
+        if flow.current is not None:
+            flow.current.verified = True      # 이 Task가 run으로 한 번이라도 검증됨(허위완료 차단용)
         return _ok(f"[exit {rc}] (작업공간)\n[stdout]\n{out[-1500:]}\n[stderr]\n{err[-600:]}")
 
     tools.append(run)
@@ -412,6 +415,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         async def complete_task(args):
             if flow.current is None:
                 return _ok("오류: 진행 중인 Task가 없습니다.")
+            if not flow.current.verified:
+                return _ok(f"완료 거부: 이 Task({flow.current.task_id})를 run으로 한 번도 검증하지 않았습니다 "
+                           f"— 산출물을 run으로 실제 검증(또는 QA에게 검증시켜)한 뒤 complete_task 하세요(허위 완료 금지).")
             done_ref = flow.current
             done_ref.status.status = "완료"
             done_ref.status.result = (args.get("result") or "")[:500]

@@ -199,23 +199,25 @@ class Sys:
         return last
 
     async def _ensure_deploy(self, flow, lead, result):
-        """배포 가능한 산출물(package.json)인데 deploy가 안 불렸고 배포 자격증명이 있으면,
-        리더에게 '배포만' 한 번 더 시켜 마무리 — 검증 후 배포를 빼먹는 구조적 누락을 메운다."""
+        """배포 가능한 산출물(package.json)인데 deploy가 안 불렸고 자격증명·DEPLOY_NAME이 있으면,
+        리더에게 의존하지 않고 **SYS가 직접 deploy_sync로 배포**한다(리더가 빼먹는 누락 구멍 차단).
+        deploy_sync가 라이브 URL 실제 응답까지 확인하므로, 거짓 성공이 아니라 진짜 배포가 보장된다."""
         ws = str(flow.workspace) if flow.workspace else ""
         deployable = bool(ws) and os.path.exists(os.path.join(ws, "package.json"))
-        creds = bool(os.environ.get("GH_PAT") and os.environ.get("RENDER_KEY"))
-        if flow.deployed or not (deployable and creds):
+        gh, ghu = os.environ.get("GH_PAT"), os.environ.get("GH_USER")
+        rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")
+        name = os.environ.get("DEPLOY_NAME")
+        if flow.deployed or not (deployable and name and gh and ghu and rk and owner):
             return result
         try:
-            prompt = ("검증은 끝났는데 아직 배포(deploy)를 안 했습니다. 다른 작업 말고 **지금 deploy 툴로만** "
-                      "배포하고 라이브 URL을 보고하세요(배포는 필수 마무리입니다).")
-            dep = await self.run_turn(flow, lead, prompt, Kind.WORK, "leader")
-            self._log("ensure_deploy", deployed=bool(flow.deployed))
+            import anyio
+            from .deploy import deploy_sync
+            dep = await anyio.to_thread.run_sync(deploy_sync, ws, name, gh, ghu, rk, owner)
+            flow.deployed = dep
+            self._log("ensure_deploy", forced=True)
+            return f"{result}\n\n[배포(SYS 강제)] {dep}"
         except Exception as e:
-            return f"{result}\n\n(배포 강제 중 오류: {e})"
-        if flow.deployed:
-            return f"{result}\n\n[배포] {flow.deployed}"
-        return f"{result}\n\n[배포 미완] {(dep or '')[:200]}"
+            return f"{result}\n\n(SYS 배포 강제 중 오류: {e})"
 
     def _close_flow(self, flow, leader_id, result):
         """베턴을 origin까지 닫는다. 정상이면 리더가 alive→clean close, 비정상(중간 미응답)이면

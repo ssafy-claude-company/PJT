@@ -5,6 +5,7 @@
 실행: python -m scripts.intervene ["개입 명령"]
 """
 import asyncio
+import os
 import subprocess
 import sys
 
@@ -57,6 +58,9 @@ async def _connect(token):
 
 async def main():
     cfg = load_config()
+    # SYS의 배포누락 차단(=_ensure_deploy)이 쓸 서비스 이름. 리더가 deploy를 빼먹어도
+    # SYS가 이 이름으로 강제 배포한다(자격증명이 환경에 있을 때). env로 덮어쓸 수 있음.
+    os.environ.setdefault("DEPLOY_NAME", "slither-multiplayer-organt")
     audit = AuditLog(cfg.audit_log_path)
     system_client, st = await _connect(cfg.system_bot_token)
     organts, bot_info, tasks, leader_id = {}, {}, [st], None

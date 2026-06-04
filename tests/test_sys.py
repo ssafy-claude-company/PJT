@@ -131,6 +131,7 @@ def test_create_task_owner_분산():
     assert f.current.owner == 12                                  # 협의 후 비리더를 owner로
     assert f.current.status.owner and "A백엔드" in f.current.status.owner
     assert 12 in f.current.team                                   # owner 팀 자동 합류
+    f.current.verified = True                                     # run 검증됨으로 간주(허위완료 가드 통과)
     asyncio.run(t["complete_task"].handler({"result": "서버 완료"}))   # 마감해야 다음 Task
     # owner 미지정도 허용(공동) — 깨지지 않음
     asyncio.run(t["create_task"].handler({"purpose": "x", "goal": "g", "owner": "", "members": "13"}))
@@ -175,11 +176,13 @@ def test_단일Task_순차_생성과_완료마감():
     # 현재 Task 미완이면 새 Task 거부(단일흐름 — 한 번에 하나, 고아 '진행' 방지)
     blocked = asyncio.run(tools["create_task"].handler({"purpose": "프론트", "goal": "화면 연동"}))
     assert "단일흐름" in blocked["content"][0]["text"] and len(f.tasks) == 1
-    # 현재 Task 완료 마감 → 다음 Task 허용
+    # 현재 Task 완료 마감 → 다음 Task 허용 (run 검증돼야 마감 가능 — 허위완료 가드)
+    f.current.verified = True
     r = asyncio.run(tools["complete_task"].handler({"result": "백엔드 완료"}))
     assert "완료" in r["content"][0]["text"] and f.current is None
     asyncio.run(tools["create_task"].handler({"purpose": "프론트", "goal": "화면 연동"}))
     assert len(f.tasks) == 2 and f.tasks[0].task_id != f.tasks[1].task_id   # task_id 유니크
+    f.current.verified = True
     r2 = asyncio.run(tools["complete_task"].handler({"result": "프론트 완료"}))
     assert f.tasks[1].status.status == "완료" and f.tasks[1].status.result == "프론트 완료"
     assert f.current is None
@@ -187,6 +190,24 @@ def test_단일Task_순차_생성과_완료마감():
     f.wake = lambda *a: None
     rr = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "x"}))
     assert "진행 중인 Task가 없습니다" in rr["content"][0]["text"]
+
+
+def test_허위완료_차단_run검증_후에만_마감():
+    """run으로 한 번도 검증 안 한 Task는 complete_task 거부(허위완료 차단). run 후엔 허용."""
+    f = _flow(FakeGuide())
+    f.workspace = "/tmp"
+    tools = _tools(f, 11, "leader")
+    asyncio.run(tools["create_task"].handler({"purpose": "백엔드", "goal": "API 동작"}))
+    # 검증 전 마감 시도 → 거부(허위완료 금지), Task는 여전히 진행 중
+    r = asyncio.run(tools["complete_task"].handler({"result": "다 했어요"}))
+    assert "거부" in r["content"][0]["text"] and "검증" in r["content"][0]["text"]
+    assert f.current is not None and f.current.status.status != "완료"
+    # run으로 실제 실행 검증 → verified=True
+    asyncio.run(tools["run"].handler({"command": "echo ok"}))
+    assert f.current.verified is True
+    # 이제 마감 허용
+    r2 = asyncio.run(tools["complete_task"].handler({"result": "검증 후 완료"}))
+    assert "완료" in r2["content"][0]["text"] and f.current is None
 
 
 def test_close_flow_정상_clean_close():
