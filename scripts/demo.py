@@ -123,10 +123,10 @@ async def main():
 
     def organt_builder(organt_id, server, role):
         allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
-        turns = 26
+        turns = 34
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
-            turns = 48          # 다중 Task 분해+위임+리뷰로 턴이 더 필요
+            turns = 64          # 분해+위임+품질게이트(비평·되밀기 반복)로 턴이 더 필요
         return Organt(cfg, build_options(
             cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={"PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed)])],
