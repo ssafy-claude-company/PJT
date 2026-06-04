@@ -260,8 +260,20 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             _dbg(f"{tag} ✗거부:규약 ({e})")
             await _note(f"{flow._info(to) or to}에게 요청했으나 거부됨 — {e}")
             return _ok(f"요청 거부(규약): {e}")
+        # Work 위임은 Goal 확정 뒤에만 — '목표 합의(set_goal) → 분배' 순서를 구조적으로 강제(선분배 금지).
+        # Info(합의용)는 언제든 허용 → Goal을 정하는 논의 자체는 막지 않는다.
+        if kind == Kind.WORK and not (flow.current.status.goal or "").strip():
+            _dbg(f"{tag} ✗거부:Goal미확정")
+            return _ok("Work 위임 거부: 이 Task의 Goal이 아직 확정되지 않았습니다. 먼저 동료와 request(Info)로 "
+                       "목표를 합의하고 set_goal로 확정한 뒤 Work로 맡기세요(목표는 팀 합의의 산물 — 선분배 금지).")
         frame = flow.comm.request(me_id, to, "pending", kind)   # 베턴 점유(alive→to)
         thread_id = flow.current.thread_id
+        # Owner = 그 일을 Work로 받은 동료(수신=소유). 선배정이 아니라 요청으로 owner가 떠오른다 —
+        # 이 Task에 아직 owner가 없을 때 첫 Work-request 수신자가 책임자가 된다(중앙집권 방지).
+        if kind == Kind.WORK and not flow.current.owner:
+            flow.current.owner = to
+            flow.current.status.owner = flow._info(to) or f"<@{to}>"
+            await flow.refresh(flow.current)
         req = await g.send_request(thread_id, me_id, to, kind, body)
         frame.request_id = str(req)                              # 실제 메시지 id로 기록 갱신
         _dbg(f"{tag} ✓전송 req={req}")
@@ -392,10 +404,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         tools.append(create_project)
 
         @tool("create_task",
-              "Task 생성 — owner(이 산출물의 단일 책임자: id/역할명)가 직접 구현·인터페이스 합의를 "
-              "끝까지 몰고 간다. **owner 배정 전 반드시 그 owner와 request(Info)로 협의**해야 함(합의 없이 "
-              "배정하면 거부됨 — 리더 독단 금지). members=관련 동료. 리더가 모든 owner가 되지 말 것. Goal은 측정가능.",
-              {"purpose": str, "goal": str, "owner": str, "members": str})
+              "Task 공간을 연다 — **Purpose(풀어야 할 문제)만** 부여한다. Goal·Owner는 미리 못 정한다(중앙집권 방지): "
+              "**Goal은 Task 안에서 팀과 request(Info)로 합의한 뒤 set_goal로 확정**하고, **Owner는 그 일을 Work로 "
+              "받은 동료가 된다**(선배정 금지). members=함께 논의·작업할 동료(비우면 프로젝트팀 전체).",
+              {"purpose": str, "members": str})
         async def create_task(args):
             if flow.current is not None and flow.current.status.status != "완료":
                 return _ok(f"현재 Task({flow.current.task_id}: {flow.current.status.purpose[:24]})가 아직 "
@@ -405,33 +417,38 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             tid = flow.next_task_id()
             pool = flow.project_team or flow.pool
             picked = _resolve_members(args.get("members", ""), flow, pool)
-            owners = _resolve_members(args.get("owner", ""), flow, pool)
-            owner = owners[0] if owners else 0
-            # 합의 강제: owner(비-리더)에게 일을 맡기려면 먼저 request(Info)로 협의했어야 한다
-            # (리더가 멋대로 남의 일을 정하지 못하게 — '누가·무엇을'은 토론/합의의 산물).
-            if owner and owner != flow.leader:
-                discussed = any(
-                    ev[0] == "request" and ev[1] == flow.leader and ev[2] == owner
-                    and str(getattr(ev[4], "value", ev[4])).lower().startswith("i")
-                    for ev in flow.comm.history)
-                if not discussed:
-                    return _ok(f"배정 거부(합의 필요): {flow._info(owner) or owner}에게 일을 맡기기 전에 먼저 "
-                               f"request(Info)로 '이 일을 어떻게 나눌지·당신이 맡을지'를 협의하세요(리더 독단 금지). "
-                               f"합의한 뒤 create_task로 배정하세요.")
             base = picked if picked else [m for m in flow.project_team if m != flow.leader]
-            team = _uniq([flow.leader] + ([owner] if owner else []) + base)
-            owner_label = flow._info(owner) or (f"<@{owner}>" if owner else "")
+            team = _uniq([flow.leader] + base)
+            # Goal·Owner는 비워둔다 — Goal은 팀 합의(set_goal)로, Owner는 Work-request 수신으로 떠오른다
+            # (판 걸 때 업무를 분배하던 중앙집권 구조 제거: 분배의 출처 = 실제 요청).
             status = TaskStatus(task_id=tid, purpose=args["purpose"], status="진행",
-                                goal=args["goal"], owner=owner_label, group=_group_of(flow, team))
+                                goal="", owner="", group=_group_of(flow, team))
             block_id, thread_id = await g.open_task(ch, status)
             await _add_members(g, thread_id, [m for m in team if m != flow.leader])  # 멤버십=팀
             flow.project_channel = ch
             ref = TaskRef(task_id=tid, thread_id=thread_id, block_id=block_id,
-                          status=status, team=team, owner=owner)
+                          status=status, team=team, owner=0)
             flow.tasks.append(ref)
             flow.current = ref
-            return _ok(f"task={tid} owner={owner_label or '미지정'} thread={thread_id} 팀={flow._names(team)}")
+            return _ok(f"task={tid} thread={thread_id} 팀={flow._names(team)} — 이제 팀과 request(Info)로 "
+                       f"Goal을 합의해 set_goal로 확정하고, 일을 맡길 동료에게 Work로 요청하세요(받은 동료가 owner).")
         tools.append(create_task)
+
+        @tool("set_goal",
+              "팀과 합의된 이번 Task의 **측정가능한 Goal**을 확정·기록한다(상태블록 갱신). 혼자 정하지 말고 동료와 "
+              "request(Info)로 합의한 결과를 적으세요 — '목표는 팀 합의의 산물'을 보장하는 자리이며, Work 위임은 "
+              "Goal 확정 뒤에만 가능합니다.",
+              {"goal": str})
+        async def set_goal(args):
+            if flow.current is None:
+                return _ok("오류: 진행 중인 Task가 없습니다. create_task로 먼저 여세요.")
+            goal = (args.get("goal") or "").strip()
+            if not goal:
+                return _ok("오류: goal이 비었습니다.")
+            flow.current.status.goal = goal
+            await flow.refresh(flow.current)
+            return _ok(f"task={flow.current.task_id} Goal 확정: {goal[:100]}")
+        tools.append(set_goal)
 
         @tool("complete_task",
               "현재 Task의 목표가 충족되면 상태블록을 완료로 마감(result 기록). 다음 Task는 create_task로.",

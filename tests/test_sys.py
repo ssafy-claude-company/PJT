@@ -55,7 +55,7 @@ def test_leader는_project_task_도구():
     names = {t.name for t in make_guide_tools(f, 11, "leader")}
     # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit·run)+리더 셋업·배포 도구.
     assert names == {"request", "recruit", "run",
-                     "create_project", "create_task", "complete_task", "deploy"}
+                     "create_project", "create_task", "set_goal", "complete_task", "deploy"}
 
 
 def test_run_안전가드():
@@ -116,26 +116,35 @@ def test_팀_배정_recruit_팀밖요청거부():
     assert 13 in f.current.team
 
 
-def test_create_task_owner_분산():
-    """create_task(owner=…) → 산출물별 단일 책임자 배정(구조적 분산). owner는 팀 자동 합류."""
+def test_owner는_work수신자_goal합의후():
+    """새 모델(중앙집권 방지): create_task는 Purpose만 — Goal·owner 선배정 없음. Goal은 set_goal로 확정해야
+    Work 위임 가능(선분배 금지), 그 Work를 받은 동료가 곧 그 Task의 owner가 된다(수신=소유)."""
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "A백엔드", 13: "B프론트"})
     f.start_root("root")
+    waked = []
+
+    async def wake(to, b, k):
+        waked.append(to)
+        return "완료"
+
+    f.wake = wake
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
-    # 합의 없이 owner 배정은 거부(리더 독단 차단)
-    blocked = asyncio.run(t["create_task"].handler({"purpose": "서버", "goal": "동작", "owner": "A백엔드"}))
-    assert "합의" in blocked["content"][0]["text"] and not f.tasks
-    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))    # 리더가 owner와 먼저 협의했다고 기록
-    asyncio.run(t["create_task"].handler({"purpose": "서버", "goal": "동작", "owner": "A백엔드", "members": ""}))
-    assert f.current.owner == 12                                  # 협의 후 비리더를 owner로
-    assert f.current.status.owner and "A백엔드" in f.current.status.owner
-    assert 12 in f.current.team                                   # owner 팀 자동 합류
-    f.current.verified = True                                     # run 검증됨으로 간주(허위완료 가드 통과)
-    asyncio.run(t["complete_task"].handler({"result": "서버 완료"}))   # 마감해야 다음 Task
-    # owner 미지정도 허용(공동) — 깨지지 않음
-    asyncio.run(t["create_task"].handler({"purpose": "x", "goal": "g", "owner": "", "members": "13"}))
-    assert f.current.owner == 0 and f.current.status.owner == ""
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
+    # 선배정 없음: owner·goal 비어 있음 (판 걸 때 분배 안 함)
+    assert f.current.owner == 0 and f.current.status.owner == "" and not f.current.status.goal
+    # Goal 미확정 상태에서 Work 위임은 거부(선분배 금지)
+    blocked = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "서버 만들어"}))
+    assert "Goal" in blocked["content"][0]["text"] and f.current.owner == 0
+    assert not any(c[0] == "req" for c in g.calls)               # 거부 → 게시 안 함
+    # 팀 합의 결과를 리더가 set_goal로 확정
+    asyncio.run(t["set_goal"].handler({"goal": "GET/POST /todos 동작"}))
+    assert f.current.status.goal == "GET/POST /todos 동작"
+    # 이제 Work 위임 → 받은 동료(12)가 owner가 됨 (수신=소유)
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "서버 만들어"}))
+    assert f.current.owner == 12 and "A백엔드" in f.current.status.owner
+    assert 12 in waked
 
 
 def test_request_동료_깨우고_베턴복귀():
@@ -149,7 +158,8 @@ def test_request_동료_깨우고_베턴복귀():
 
     f.wake = wake
     tools = _tools(f, 11, "leader")
-    asyncio.run(tools["create_task"].handler({"purpose": "p", "goal": "g"}))
+    asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
+    asyncio.run(tools["set_goal"].handler({"goal": "g"}))     # Work 위임은 Goal 확정 후 가능
     res = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "백엔드"}))
     assert waked == [(12, "백엔드", Kind.WORK)]      # 동료 깨움
     assert f.comm.alive == 11                        # 응답 후 베턴 복귀
@@ -339,7 +349,8 @@ def test_위임자측_확인요청_질문으로_표면화():
     g = FakeGuide()
     f = _flow(g)
     tools11 = _tools(f, 11, "leader")
-    asyncio.run(tools11["create_task"].handler({"purpose": "p", "goal": "g", "members": "12"}))
+    asyncio.run(tools11["create_task"].handler({"purpose": "p", "members": "12"}))
+    asyncio.run(tools11["set_goal"].handler({"goal": "g"}))   # Work 위임 전 Goal 확정
 
     async def wake(to, body, kind):                    # 12가 위임자(11)에게 확인요청 남기고 반환했다고 모의
         f.pending_clarify = {"from": 12, "to": 11, "q": "필드명 X 맞나요?"}
