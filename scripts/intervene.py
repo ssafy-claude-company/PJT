@@ -93,10 +93,7 @@ async def main():
     # 지우지 않는다(같은 이름이면 _register_project가 식별번호 유지 + 채널만 갱신 → ID 안 바뀜).
     PNAME = "slither-multiplayer"
     pch = await guide.create_project_channel(channel.guild.id, PNAME)
-    pid = sysm._register_project(pch, PNAME, str(cfg.workspace_dir), leader_id)
-    await guide.post(int(pch), leader_id,
-                     f"[Project-{pid}]\nName: {PNAME}\nStatus: 진행\n"
-                     f"개입: 이 채널에 명령하면 이 프로젝트에 이어서 작업합니다.")
+    pid = sysm._register_project(pch, PNAME, str(cfg.workspace_dir), leader_id)  # 내부 등록만(채널 앵커 X)
     print(f"프로젝트 등록: {pid} channel={pch} workspace={cfg.workspace_dir}\n개입 명령: {CMD}\n", flush=True)
 
     # 프로젝트 채널에 개입 명령 → 라우팅(개입 자동 감지)

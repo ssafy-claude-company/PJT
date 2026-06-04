@@ -212,8 +212,7 @@ def test_프로젝트_등록과_채널개입_라우팅():
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "스네이크", "team": "12"}))   # 채널 9001 생성
     pid = s.projects[9001]["id"]
-    assert pid.startswith("P-") and s.projects[9001]["workspace"] == "/ws"
-    assert any(c[0] == "post" and f"[Project-{pid}]" in c[3] for c in g.calls)   # 채널 앵커 게시
+    assert pid.startswith("P-") and s.projects[9001]["workspace"] == "/ws"   # 내부 등록(채널 앵커는 안 박음)
 
     captured = {}
     async def fake_run_turn(flow, oid, body, kind, role):

@@ -357,12 +357,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             assigned = _resolve_members(args.get("team", ""), flow, flow.pool)
             if assigned:
                 flow.project_team = _uniq([flow.leader] + assigned)
-            # 프로젝트를 1급 엔티티로 등록 + 채널에 [Project-XXXX] 식별번호 앵커(개입 진입점)
+            # 프로젝트는 내부 레지스트리에만 등록(채널 자체가 프로젝트 식별자 — 채널에 앵커 안 박음).
             if flow.register_project:
                 flow.project_id = flow.register_project(flow.project_channel, args["name"])
-                await g.post(int(flow.project_channel), flow.leader,
-                             f"[Project-{flow.project_id}]\nName: {args['name']}\nStatus: 진행\n"
-                             f"개입: 이 채널에 명령하면 이 프로젝트에 이어서 작업합니다(워크스페이스·팀 유지).")
             return _ok(f"project_channel={flow.project_channel} project_id={flow.project_id} "
                        f"프로젝트팀={flow._names(flow.project_team)}")
         tools.append(create_project)
