@@ -317,3 +317,36 @@ def test_새요청마다_세션초기화_앵커링차단(tmp_path):
     asyncio.run(s.handle_user_input(500, 11, "새 요청", root_id=None))
     assert not list(sd.glob("organt_state_*.json"))   # 세션 파일 초기화됨
     assert any(e["event"] == "reset_sessions" for e in s.flow_log)
+
+
+def test_위임자에게_되묻기는_확인요청반환_에러아님():
+    """직속 위임자에게 Info로 되물으면 '재진입 불가' 에러 대신 확인요청을 위임자에게 반환(협업 가능)."""
+    g = FakeGuide()
+    f = _flow(g)                                       # leader 11, member 12; start_root → alive=11
+    tools11 = _tools(f, 11, "leader")
+    asyncio.run(tools11["create_task"].handler({"purpose": "p", "goal": "g", "members": "12"}))
+    f.comm.request(11, 12, "r1", Kind.WORK)            # 11→12 위임 → alive=12, 12의 직속위임자=11
+    tools12 = _tools(f, 12, "member")
+    r = asyncio.run(tools12["request"].handler(
+        {"to_id": "11", "kind": "Info", "body": "필드명 X 맞나요?"}))
+    txt = r["content"][0]["text"]
+    assert "확인요청" in txt and "위임자" in txt and "거부" not in txt   # 더는 거부 에러가 아님
+    assert f.pending_clarify == {"from": 12, "to": 11, "q": "필드명 X 맞나요?"}
+
+
+def test_위임자측_확인요청_질문으로_표면화():
+    """깨운 동료가 확인요청을 남기고 반환하면, 위임자에게 그 질문이 응답으로 떠올라 답·재위임하게 된다."""
+    g = FakeGuide()
+    f = _flow(g)
+    tools11 = _tools(f, 11, "leader")
+    asyncio.run(tools11["create_task"].handler({"purpose": "p", "goal": "g", "members": "12"}))
+
+    async def wake(to, body, kind):                    # 12가 위임자(11)에게 확인요청 남기고 반환했다고 모의
+        f.pending_clarify = {"from": 12, "to": 11, "q": "필드명 X 맞나요?"}
+        return "(짧게 반환)"
+
+    f.wake = wake
+    r = asyncio.run(tools11["request"].handler({"to_id": "12", "kind": "Work", "body": "X 구현"}))
+    txt = r["content"][0]["text"]
+    assert "확인요청 from" in txt and "필드명 X 맞나요?" in txt   # 질문이 위임자 응답으로 표면화
+    assert f.pending_clarify is None                            # 표면화하며 소거

@@ -111,6 +111,13 @@ class CommunicationManager:
         """응답을 기다리며 멈춰있는(=재진입 불가) 상위 Organt들(스택의 요청자들)."""
         return {f.from_id for f in self._stack}
 
+    def direct_delegator(self, organt_id):
+        """organt_id가 지금 응답을 빚지고 있는 '직속 위임자'(top 프레임의 요청자). 없으면 None.
+        이 동료에게는 재진입 대신 '확인요청 반환'(베턴을 질문과 함께 돌려줌)이 허용된다."""
+        if self._stack and self._stack[-1].to_id == organt_id:
+            return self._stack[-1].from_id
+        return None
+
     def is_busy(self, organt_id) -> bool:
         """미완 Work 보유(또는 흐름 참여 중)인가 → Work Request 금지 대상."""
         return organt_id in self._participants()

@@ -157,6 +157,7 @@ class Flow:
         self.project_id = None         # [Project-XXXX] 식별번호
         self.intervention = None       # 기존 프로젝트 개입이면 그 정보(dict)
         self.deployed = None           # deploy 툴이 불리면 결과 문자열(배포 강제용 추적)
+        self.pending_clarify = None    # 위임자에게 되묻기(확인요청 반환) 임시 보관
 
     def start_root(self, root_id):
         self.root_id = str(root_id)
@@ -222,6 +223,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if flow.current is None:
             _dbg(f"{tag} ✗거부:Task없음")
             return _ok("오류: 진행 중인 Task가 없습니다. (리더가 create_task 먼저 여세요.)")
+        # 위임자에게 되묻기(확인요청 반환): 직속 위임자에게 Info로 물으면 '재진입 불가' 에러 대신
+        # 베턴을 위임자에게 질문과 함께 돌려준다 — 위임자가 답하고 그 일을 다시 맡긴다(협업 가능).
+        if kind == Kind.INFO and to == flow.comm.direct_delegator(me_id) and to != me_id:
+            flow.pending_clarify = {"from": me_id, "to": to, "q": body}
+            flow.comm.history.append(("clarify", me_id, to, "pending", Kind.INFO))
+            _dbg(f"{tag} ↩확인요청→위임자")
+            return _ok(f"확인요청을 직속 위임자({flow._info(to)})에게 전달했습니다. 지금 이 턴을 즉시 "
+                       f"마치고(추가 도구 호출·추측 진행 금지) 짧게 반환하세요 — 위임자가 답한 뒤 이 작업을 "
+                       f"당신에게 다시 맡깁니다.")
         if to not in flow.current.team:
             if to in flow.project_team:
                 # 프로젝트 팀원이면 이 Task에 자동 합류 — Task 내 관련 인원을 최소화할 이유는 없다.
@@ -261,6 +271,14 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 result = await flow.wake(to, body, kind)
         except Exception as e:
             result = f"(동료 처리 중 오류: {e})"
+        # 깨운 동료가 '나(위임자)에게 확인요청'을 남기고 턴을 마쳤으면, 그 질문을 응답으로 표면화 →
+        # 내가 답을 정해 다시 맡긴다(되묻기가 에러가 아니라 협업으로 흐름).
+        if (flow.pending_clarify and flow.pending_clarify.get("to") == me_id
+                and flow.pending_clarify.get("from") == to):
+            q = flow.pending_clarify["q"]
+            flow.pending_clarify = None
+            result = (f"[확인요청 from {flow._info(to)}] {q}\n"
+                      f"(→ 답을 정한 뒤, 이 작업을 {flow._info(to)}에게 request(Work)로 다시 맡기세요)")
         failed = _looks_transient(result)
         try:
             await g.send_response(thread_id, to, req, result)
