@@ -18,23 +18,34 @@ RENDER_API = "https://api.render.com/v1"
 _TERMINAL_FAIL = ("build_failed", "update_failed", "canceled", "deactivated", "pre_deploy_failed")
 
 
-def _http(method, url, token, data=None):
+def _http(method, url, token, data=None, retries=5):
+    """응답을 못 받은 경우(네트워크/DNS 실패, 502/503/504 게이트웨이)에만 안전 재시도.
+    egress 프록시의 api.render.com DNS 해석이 간헐 실패하므로(요청이 서버에 도달조차 못 함),
+    비멱등 POST(배포 트리거)라도 재시도가 안전하다. 서버가 실제 응답한 4xx/유효 5xx는 즉시 반환."""
     body = json.dumps(data).encode() if data is not None else None
-    req = urllib.request.Request(url, data=body, method=method)
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Accept", "application/json")
-    if body:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, json.loads(r.read() or "{}")
-    except urllib.error.HTTPError as e:
+    last = ""
+    for attempt in range(retries):
+        req = urllib.request.Request(url, data=body, method=method)
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Accept", "application/json")
+        if body:
+            req.add_header("Content-Type", "application/json")
         try:
-            return e.code, json.loads(e.read() or "{}")
-        except Exception:
-            return e.code, {}
-    except Exception as e:
-        return 0, {"error": str(e)}
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, json.loads(r.read() or "{}")
+        except urllib.error.HTTPError as e:
+            if e.code in (502, 503, 504) and attempt < retries - 1:   # 일시적 게이트웨이/프록시(DNS) — 재시도
+                last = f"HTTP {e.code}"
+                time.sleep(2 * (attempt + 1))
+                continue
+            try:
+                return e.code, json.loads(e.read() or "{}")
+            except Exception:
+                return e.code, {}
+        except Exception as e:                       # 네트워크/DNS 실패(응답 못 받음) — 재시도
+            last = str(e)
+            time.sleep(2 * (attempt + 1))
+    return 0, {"error": last}
 
 
 def _git(args, cwd):
