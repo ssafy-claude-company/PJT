@@ -7,6 +7,7 @@ User 입력 → SYS가 담당(리더)을 깨움 → Organt가 판단·행동(파
 SYS는 얇다: 깨우기(wake) 제공 + 단일흐름 lock + 라우팅. 베턴/권한 강제는 Rule·Hook.
 Organt 생성(모델·권한·State)은 organt_builder로 주입받는다.
 """
+import asyncio
 import json
 import os
 from typing import Dict, Optional
@@ -182,9 +183,19 @@ class Sys:
         )
 
     async def run_turn(self, flow: Flow, organt_id, body, kind, role) -> str:
-        server = build_guide_server(flow, organt_id, role)
-        organt = self.organt_builder(organt_id, server, role)
-        return await organt.handle(self._prompt(body, kind, role, organt_id))
+        # 에이전트가 죽으면(SDK 메시지리더 크래시·서브프로세스 SIGTERM 등) 같은 세션으로 되살려 재시도.
+        # State는 organt_id별 파일에 영속되므로 새 인스턴스가 세션을 이어간다(전체 워크플로우 보호).
+        last = ""
+        for attempt in range(3):
+            server = build_guide_server(flow, organt_id, role)
+            organt = self.organt_builder(organt_id, server, role)
+            try:
+                return await organt.handle(self._prompt(body, kind, role, organt_id))
+            except Exception as e:
+                last = f"(에이전트 {organt_id} 처리 실패: {e})"
+                self._log("agent_revive", organt=organt_id, attempt=attempt + 1, err=str(e)[:100])
+                await asyncio.sleep(2 * (attempt + 1))
+        return last
 
     async def _ensure_deploy(self, flow, lead, result):
         """배포 가능한 산출물(package.json)인데 deploy가 안 불렸고 배포 자격증명이 있으면,

@@ -366,8 +366,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
 
         @tool("create_task",
               "Task 생성 — owner(이 산출물의 단일 책임자: id/역할명)가 직접 구현·인터페이스 합의를 "
-              "끝까지 몰고 간다. members=관련 동료. 리더가 모든 Task의 owner가 되지 말 것(분산). "
-              "Goal은 측정가능하게.",
+              "끝까지 몰고 간다. **owner 배정 전 반드시 그 owner와 request(Info)로 협의**해야 함(합의 없이 "
+              "배정하면 거부됨 — 리더 독단 금지). members=관련 동료. 리더가 모든 owner가 되지 말 것. Goal은 측정가능.",
               {"purpose": str, "goal": str, "owner": str, "members": str})
         async def create_task(args):
             if flow.current is not None and flow.current.status.status != "완료":
@@ -380,6 +380,17 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             picked = _resolve_members(args.get("members", ""), flow, pool)
             owners = _resolve_members(args.get("owner", ""), flow, pool)
             owner = owners[0] if owners else 0
+            # 합의 강제: owner(비-리더)에게 일을 맡기려면 먼저 request(Info)로 협의했어야 한다
+            # (리더가 멋대로 남의 일을 정하지 못하게 — '누가·무엇을'은 토론/합의의 산물).
+            if owner and owner != flow.leader:
+                discussed = any(
+                    ev[0] == "request" and ev[1] == flow.leader and ev[2] == owner
+                    and str(getattr(ev[4], "value", ev[4])).lower().startswith("i")
+                    for ev in flow.comm.history)
+                if not discussed:
+                    return _ok(f"배정 거부(합의 필요): {flow._info(owner) or owner}에게 일을 맡기기 전에 먼저 "
+                               f"request(Info)로 '이 일을 어떻게 나눌지·당신이 맡을지'를 협의하세요(리더 독단 금지). "
+                               f"합의한 뒤 create_task로 배정하세요.")
             base = picked if picked else [m for m in flow.project_team if m != flow.leader]
             team = _uniq([flow.leader] + ([owner] if owner else []) + base)
             owner_label = flow._info(owner) or (f"<@{owner}>" if owner else "")
