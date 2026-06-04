@@ -52,19 +52,30 @@ def load_roster() -> List[Tuple[str, str]]:
 
 
 async def _connect(token: str) -> Tuple[discord.Client, asyncio.Task]:
-    """봇 하나를 연결하고 on_ready까지 기다린다."""
+    """봇 하나를 연결하고 on_ready까지 기다린다. 일시적 TLS/클럭 스큐 블립엔 재시도."""
     intents = discord.Intents.default()
     intents.message_content = True
-    client = discord.Client(intents=intents)
-    ready = asyncio.Event()
+    last = None
+    for attempt in range(4):
+        client = discord.Client(intents=intents)
+        ready = asyncio.Event()
 
-    @client.event
-    async def on_ready():
-        ready.set()
+        @client.event
+        async def on_ready():
+            ready.set()
 
-    task = asyncio.create_task(client.start(token))
-    await asyncio.wait_for(ready.wait(), 30)
-    return client, task
+        try:
+            task = asyncio.create_task(client.start(token))
+            await asyncio.wait_for(ready.wait(), 30)
+            return client, task
+        except Exception as e:
+            last = e
+            try:
+                await client.close()
+            except Exception:
+                pass
+            await asyncio.sleep(3 * (attempt + 1))
+    raise last
 
 
 def _make_builder(cfg: Config, audit: AuditLog):
