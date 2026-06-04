@@ -23,7 +23,7 @@ from .discord_guide import DiscordGuide
 from .guide_tools import FLOW_TOOLS, LEADER_TOOLS
 from .organt import Organt, build_options
 from .permissions import make_pre_tool_use_hook
-from .protocol import Request, Response, parse
+from .protocol import Kind, Request, Response, parse
 from .sys_core import Sys
 
 
@@ -113,10 +113,12 @@ async def run() -> None:
 
     @system_client.event
     async def on_message(message):
-        # 흐름은 User에서만 시작한다 — Organt/System 발화는 무시.
-        if message.channel.id != cfg.channel_id:
-            return
+        # 흐름은 User에서만 시작 — Organt/System 발화는 무시.
         if message.author.id in organts or message.author.id == system_client.user.id:
+            return
+        ch = message.channel.id
+        is_project = ch in sysm.projects        # 등록된 프로젝트 채널이면 '개입'
+        if ch != cfg.channel_id and not is_project:
             return
         req = parse(
             message_id=str(message.id),
@@ -126,11 +128,16 @@ async def run() -> None:
             content=message.content,
         )
         if not isinstance(req, Request):
-            return                       # 구조적 [Request]만 흐름을 시작(평문은 무시)
+            if is_project and (message.content or "").strip():
+                # 프로젝트 채널의 평문 = 그 프로젝트 개입 명령(그냥 말 걸어도 됨)
+                req = Request(to_id=None, kind=Kind.WORK, body=message.content.strip(),
+                              from_id=message.author.id, message_id=str(message.id))
+            else:
+                return                   # 메인 채널은 구조적 [Request]만 시작
         if req.to_id is None:
-            req.to_id = leader_id        # To: 멘션이 안 잡히면 담당(리더)로 라우팅
+            req.to_id = sysm.projects[ch]["leader"] if is_project else leader_id
         audit.record("user_request", to=req.to_id, body=req.body[:200])
-        await sysm.route_channel_request(cfg.channel_id, req)
+        await sysm.route_channel_request(ch, req)   # 실제 채널 id로 라우팅 → 개입 자동 감지
 
     # 연결 '직전'에 도착해 on_message로는 놓친 User [Request](아직 응답 없음)를 시작 시 한 번 처리.
     try:

@@ -25,6 +25,20 @@ class Sys:
         self.active_flow: Optional[Flow] = None
         self.queue = []                        # 진행 중 들어온 명령(순차 처리 대기)
         self.flow_log = []
+        self.projects: Dict[int, dict] = {}    # channel_id → 프로젝트 컨텍스트(개입 진입점)
+        self._proj_n = 0
+
+    def _register_project(self, channel_id, name, workspace, leader) -> str:
+        """프로젝트를 1급 엔티티로 등록 → 식별번호 P-XXX 부여(이미 있으면 재사용).
+        등록된 채널에 다시 명령이 오면 '개입'으로 라우팅돼 같은 맥락(워크스페이스·팀)에서 이어간다."""
+        ch = int(channel_id)
+        if ch in self.projects:
+            return self.projects[ch]["id"]
+        self._proj_n += 1
+        pid = f"P-{self._proj_n:03d}"
+        self.projects[ch] = {"id": pid, "name": name, "channel": ch,
+                             "workspace": workspace, "leader": leader, "summary": ""}
+        return pid
 
     def _log(self, event, **f):
         self.flow_log.append({"event": event, **f})
@@ -40,9 +54,11 @@ class Sys:
         "Read/Glob로 직접 확인해 검증하세요.\n"
         "[요청은 하나씩] 한 턴에 request는 하나만 보내세요 — 여러 개를 한꺼번에 던지면 단일흐름에서 "
         "직렬화되어 대기·지연됩니다. 응답을 받은 뒤 다음 요청을 보내세요.\n"
-        "[실행으로 검증] 코드가 실제로 도는지는 추측·읽기로 끝내지 말고 run 툴로 **직접 구동·테스트**하세요 "
-        "(예: 'npm install && (node server.js & sleep 1; curl -s localhost:3000/; kill %1)'). "
-        "동료 응답에 '⚠ 턴 한도 도달'이 붙어 있으면 미완이니 보완을 다시 요청하세요.\n"
+        "[실행으로 검증] '구동·연결되는가'가 아니라 **의도한 동작(사용자가 실제로 받는 결과)이 일어나는가**를 "
+        "run 툴로 재현해 확인하세요 — 실제 사용 시나리오를 한 번 끝까지 돌려, 핵심 동작이 깨지지 않는지(즉시 "
+        "실패·빈 결과·오작동·곧장 종료 등)를 봅니다. '서버가 떴다/메시지가 오간다'에서 멈추지 말 것 — goal에 적힌 "
+        "성공 조건이 진짜 충족되는지가 기준입니다. 동료 응답에 '⚠ 턴 한도 도달'이 붙어 있으면 미완이니 다시 "
+        "보완을 요청하세요.\n"
         "[멈춤 규칙] 당신에게 요청해 응답을 기다리는 '상위 동료'에게는 되물을 수 없습니다(그들은 "
         "멈춰 있음). 그 경우 그 동료의 산출물을 Read 하거나 멈춰있지 않은 다른 동료에게 물으세요.\n"
         "[작업공간 레이아웃] 모든 산출물은 작업공간 '루트' 기준 하나의 일관된 구조로 만드세요. "
@@ -76,10 +92,11 @@ class Sys:
                 f"3명+면 교차) 실제 반박이 오가게 하고 ③ 전제가 모호하면 명확히 해 다시 묻고 ④ **당사자끼리 합의되면 "
                 f"그 합의를 채택**하고, 합의가 안 되거나 왕복이 길어지면 그때 **당신이 공정하게 단일 결론을 확정**"
                 f"(자기 편 금지, 무승부·애매 종료 금지). 당신의 결정은 '수렴이 안 될 때의 최후 수단'입니다.\n"
-                f"- '실작업 Project' → create_project(채널 1개) 후 일을 **서로 겹치지 않는 '소유된 산출물' Task들**로 "
-                f"나누세요. **각 산출물에 owner를 분산 배정**(create_task(owner=…)) — 같은 직군이어도 당신이 모든 걸 "
-                f"직접 구현하면 협업이 사라집니다(중앙집권 금지). 전문 동료가 있으면 그를 owner로 세워 **Work로 위임**하고, "
-                f"당신은 한두 산출물이나 통합만 맡으세요.\n"
+                f"- '실작업 Project' → create_project(채널 1개) 후 일을 **서로 겹치지 않는 '소유된 산출물' 단위**로 "
+                f"나누되, **단일흐름이므로 Task는 한 번에 하나만** 엽니다(현재 Task를 complete_task로 마감해야 다음을 "
+                f"열 수 있음 — 산출물별로 순차 진행, 미리 여러 개 만들지 말 것). **각 산출물에 owner를 분산 배정**"
+                f"(create_task(owner=…)) — 같은 직군이어도 당신이 모든 걸 직접 구현하면 협업이 사라집니다(중앙집권 "
+                f"금지). 전문 동료가 있으면 그를 owner로 세워 **Work로 위임**하고, 당신은 한두 산출물이나 통합만 맡으세요.\n"
                 f"  각 Task: **owner가 직접 구현**하고, 맞물리는 인터페이스는 **상대 owner와 request(Info)로 직접 합의**"
                 f"(당신이 미리 못박지 말 것). 당신은 ① 산출물을 Read로 검증 ② 맞물림이 어긋나면 양쪽 owner를 교차로 "
                 f"물어 조율을 유도 ③ **당사자 합의가 안 되거나 리뷰 왕복이 2회를 넘기면** 그때 공정하게 결정해 수렴 "
@@ -87,8 +104,9 @@ class Sys:
                 f"[협업 유도 — 중요] 여러 owner가 **맞물리는 공유 인터페이스/계약**(필드명·반환형·메시지 포맷·함수 "
                 f"시그니처)은 **당신이 미리 못박지 마세요.** 목표·역할·owner만 정하고 \"세부 인터페이스는 상대 owner와 "
                 f"request(Info)로 직접 합의하라\"고 지시하세요. 미리 다 정하면 동료끼리 물을 게 없어져 협업이 사라집니다.\n"
-                f"[마무리 검증] 보고 전에 **run 툴로 실제 구동·테스트**하세요 — 통합·실행이 진짜 되는지 확인한 뒤 "
-                f"결과를 간결히 반환하세요."
+                f"[마무리 검증] 보고 전에 run 툴로 **실제 사용 시나리오를 재현**해 goal의 성공 조건이 진짜 충족되는지 "
+                f"확인하세요(구동 여부가 아니라 의도한 결과 — 핵심 동작이 깨지면 미완으로 보고 owner에게 보완 요청). "
+                f"확인 뒤 결과를 간결히 반환하세요."
             )
         return (
             f"당신은 자율적으로 일하는 팀원입니다(당신도 필요하면 동료에게 먼저 묻습니다). "
@@ -132,20 +150,33 @@ class Sys:
             self._log("queued", text=user_text[:80], depth=len(self.queue))
             return {"mode": "queued", "queued": len(self.queue)}
 
-        flow = Flow(self.guide, channel_id, self.guild_id, leader_id, self.bot_info)
-        flow.workspace = self.workspace
+        proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'
+        lead = proj["leader"] if proj else leader_id
+        flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
+        flow.register_project = lambda ch, name: self._register_project(ch, name, flow.workspace, flow.leader)
+        body = user_text
+        if proj:                                     # 기존 프로젝트 개입 — 맥락 유지(재생성 X)
+            flow.project_channel = int(channel_id)   # 기존 채널 재사용 → create_project는 no-op
+            flow.workspace = proj["workspace"]
+            flow.project_id, flow.intervention = proj["id"], proj
+            body = (f"[프로젝트 {proj['id']} 개입] 이 프로젝트엔 이미 작업공간·산출물이 있습니다. "
+                    f"create_project를 다시 만들지 말고, 먼저 Read/run으로 현황을 파악한 뒤 아래 요청을 "
+                    f"수행하고 검증하세요.\n요청: {user_text}")
+            self._log("intervention", project=proj["id"], text=user_text[:60])
+        else:
+            flow.workspace = self.workspace
         if root_id is not None:
             flow.start_root(root_id)
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")
         self.active_flow = flow
         try:
-            result = await self.run_turn(flow, leader_id, user_text, Kind.WORK, "leader")
+            result = await self.run_turn(flow, lead, body, Kind.WORK, "leader")
         except Exception as e:                     # 리더가 죽어도 흐름은 닫고 보고한다
             result = f"(리더 처리 중 오류: {e})"
         # 리더의 반환값 = 사용자에게 가는 Response(=보고). origin 프레임을 닫아 시작점 복귀.
-        await self.guide.post(flow.user_channel, leader_id, format_response(result),
+        await self.guide.post(flow.user_channel, lead, format_response(result),
                               reply_to=flow.root_id)
-        self._close_flow(flow, leader_id, result)
+        self._close_flow(flow, lead, result)
         flow.done, flow.final = True, result
         # 안전망: 리더가 닫지 않은 현재 Task가 있으면 완료로 마감.
         if flow.current is not None:
@@ -153,6 +184,11 @@ class Sys:
             flow.current.status.result = (result or "")[:500]
             await flow.refresh(flow.current)
             flow.current = None
+        # 프로젝트 요약 갱신(다음 개입 때 맥락으로 제공)
+        if flow.project_channel:
+            p = self.projects.get(int(flow.project_channel))
+            if p:
+                p["summary"] = (result or "")[:300]
         self._log("flow_done", project=flow.project_channel is not None,
                   tasks=len(flow.tasks), comm_done=flow.comm.done)
         self.active_flow = None

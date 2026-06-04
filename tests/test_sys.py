@@ -127,6 +127,7 @@ def test_create_task_owner_분산():
     assert f.current.owner == 12                                  # 비리더를 owner로
     assert f.current.status.owner and "A백엔드" in f.current.status.owner
     assert 12 in f.current.team                                   # owner 팀 자동 합류
+    asyncio.run(t["complete_task"].handler({"result": "서버 완료"}))   # 마감해야 다음 Task
     # owner 미지정도 허용(공동) — 깨지지 않음
     asyncio.run(t["create_task"].handler({"purpose": "x", "goal": "g", "owner": "", "members": "13"}))
     assert f.current.owner == 0 and f.current.status.owner == ""
@@ -162,19 +163,20 @@ def test_request_자기자신_거부_게시안함():
     assert not any(c[0] == "req" for c in g.calls)   # 검증 실패 → 게시 안 함
 
 
-def test_여러_Task_생성과_완료마감():
+def test_단일Task_순차_생성과_완료마감():
     g = FakeGuide()
     f = _flow(g)
     tools = _tools(f, 11, "leader")
-    # Task 2개 생성 → 누적되고 두 번째가 현재 Task
     asyncio.run(tools["create_task"].handler({"purpose": "백엔드", "goal": "API 동작"}))
+    # 현재 Task 미완이면 새 Task 거부(단일흐름 — 한 번에 하나, 고아 '진행' 방지)
+    blocked = asyncio.run(tools["create_task"].handler({"purpose": "프론트", "goal": "화면 연동"}))
+    assert "단일흐름" in blocked["content"][0]["text"] and len(f.tasks) == 1
+    # 현재 Task 완료 마감 → 다음 Task 허용
+    r = asyncio.run(tools["complete_task"].handler({"result": "백엔드 완료"}))
+    assert "완료" in r["content"][0]["text"] and f.current is None
     asyncio.run(tools["create_task"].handler({"purpose": "프론트", "goal": "화면 연동"}))
-    assert len(f.tasks) == 2
-    assert f.tasks[0].task_id != f.tasks[1].task_id          # task_id 유니크
-    assert f.current is f.tasks[1]
-    # 현재 Task 완료 마감 → 상태블록 완료, 현재 Task 비움
-    r = asyncio.run(tools["complete_task"].handler({"result": "프론트 완료"}))
-    assert "완료" in r["content"][0]["text"]
+    assert len(f.tasks) == 2 and f.tasks[0].task_id != f.tasks[1].task_id   # task_id 유니크
+    r2 = asyncio.run(tools["complete_task"].handler({"result": "프론트 완료"}))
     assert f.tasks[1].status.status == "완료" and f.tasks[1].status.result == "프론트 완료"
     assert f.current is None
     # 현재 Task 없으면 request 거부(게시 안 함)
@@ -197,6 +199,35 @@ def test_close_flow_비정상베턴_강제드레인():
     assert not f.comm.done and f.comm.alive == 12
     s._close_flow(f, 11, "결과")                # 강제 드레인
     assert f.comm.done                          # 교착 없이 종료
+
+
+def test_프로젝트_등록과_채널개입_라우팅():
+    """create_project → 식별번호 등록+채널 앵커. 등록된 채널에 다시 명령 → '개입'으로 라우팅(맥락 유지)."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"}, workspace="/ws")
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "M"})
+    f.workspace = "/ws"
+    f.register_project = lambda ch, name: s._register_project(ch, name, f.workspace, f.leader)
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "스네이크", "team": "12"}))   # 채널 9001 생성
+    pid = s.projects[9001]["id"]
+    assert pid.startswith("P-") and s.projects[9001]["workspace"] == "/ws"
+    assert any(c[0] == "post" and f"[Project-{pid}]" in c[3] for c in g.calls)   # 채널 앵커 게시
+
+    captured = {}
+    async def fake_run_turn(flow, oid, body, kind, role):
+        captured["flow"], captured["body"] = flow, body
+        return "done"
+    s.run_turn = fake_run_turn
+    asyncio.run(s.handle_user_input(9001, 11, "즉사 버그 고쳐", root_id=None))   # 등록 채널 명령
+    fl = captured["flow"]
+    assert fl.intervention and fl.project_id == pid                              # 개입으로 인식
+    assert fl.project_channel == 9001 and fl.workspace == "/ws"                  # 기존 맥락 유지
+    assert "개입" in captured["body"] and "즉사 버그 고쳐" in captured["body"]
+    # 미등록 채널은 일반 신규 흐름(개입 아님)
+    asyncio.run(s.handle_user_input(777, 11, "새 일", root_id=None))
+    assert captured["flow"].intervention is None and captured["flow"].workspace == "/ws"
 
 
 def test_단일흐름_진행중_명령은_큐잉():

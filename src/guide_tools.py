@@ -148,6 +148,9 @@ class Flow:
         self.advice = []
         self.workspace = None   # run 툴 cwd(작업공간 경로). SYS가 주입.
         self.wake = None   # async (to_id, body, kind) -> result text  (SYS가 주입)
+        self.register_project = None   # (channel_id, name) -> project_id (SYS 주입)
+        self.project_id = None         # [Project-XXXX] 식별번호
+        self.intervention = None       # 기존 프로젝트 개입이면 그 정보(dict)
 
     def start_root(self, root_id):
         self.root_id = str(root_id)
@@ -345,12 +348,19 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               {"name": str, "team": str})
         async def create_project(args):
             if flow.project_channel is not None:
-                return _ok(f"이미 project_channel={flow.project_channel}")
+                return _ok(f"이미 project_channel={flow.project_channel} (project_id={flow.project_id}) — "
+                           f"개입 중이면 create_project 말고 바로 작업하세요.")
             flow.project_channel = await g.create_project_channel(flow.guild_id, args["name"])
             assigned = _resolve_members(args.get("team", ""), flow, flow.pool)
             if assigned:
                 flow.project_team = _uniq([flow.leader] + assigned)
-            return _ok(f"project_channel={flow.project_channel} "
+            # 프로젝트를 1급 엔티티로 등록 + 채널에 [Project-XXXX] 식별번호 앵커(개입 진입점)
+            if flow.register_project:
+                flow.project_id = flow.register_project(flow.project_channel, args["name"])
+                await g.post(int(flow.project_channel), flow.leader,
+                             f"[Project-{flow.project_id}]\nName: {args['name']}\nStatus: 진행\n"
+                             f"개입: 이 채널에 명령하면 이 프로젝트에 이어서 작업합니다(워크스페이스·팀 유지).")
+            return _ok(f"project_channel={flow.project_channel} project_id={flow.project_id} "
                        f"프로젝트팀={flow._names(flow.project_team)}")
         tools.append(create_project)
 
@@ -360,6 +370,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               "Goal은 측정가능하게.",
               {"purpose": str, "goal": str, "owner": str, "members": str})
         async def create_task(args):
+            if flow.current is not None and flow.current.status.status != "완료":
+                return _ok(f"현재 Task({flow.current.task_id}: {flow.current.status.purpose[:24]})가 아직 "
+                           f"'진행'입니다 — 단일흐름은 한 번에 Task 하나만. complete_task로 먼저 마감한 뒤 "
+                           f"다음 Task를 여세요(여러 산출물도 하나씩 순차로).")
             ch = flow.project_channel or flow.user_channel
             tid = flow.next_task_id()
             pool = flow.project_team or flow.pool
