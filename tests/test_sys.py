@@ -184,7 +184,7 @@ def test_단일Task_순차_생성과_완료마감():
     assert len(f.tasks) == 2 and f.tasks[0].task_id != f.tasks[1].task_id   # task_id 유니크
     f.current.verified = True
     r2 = asyncio.run(tools["complete_task"].handler({"result": "프론트 완료"}))
-    assert f.tasks[1].status.status == "완료" and f.tasks[1].status.result == "프론트 완료"
+    assert f.tasks[1].status.status == "완료" and "프론트 완료" in f.tasks[1].status.result
     assert f.current is None
     # 현재 Task 없으면 request 거부(게시 안 함)
     f.wake = lambda *a: None
@@ -198,16 +198,18 @@ def test_허위완료_차단_run검증_후에만_마감():
     f.workspace = "/tmp"
     tools = _tools(f, 11, "leader")
     asyncio.run(tools["create_task"].handler({"purpose": "백엔드", "goal": "API 동작"}))
-    # 검증 전 마감 시도 → 거부(허위완료 금지), Task는 여전히 진행 중
+    # 실행 전 마감 시도 → 거부(허위완료 금지), Task는 여전히 진행 중
     r = asyncio.run(tools["complete_task"].handler({"result": "다 했어요"}))
-    assert "거부" in r["content"][0]["text"] and "검증" in r["content"][0]["text"]
+    assert "거부" in r["content"][0]["text"] and "실행" in r["content"][0]["text"]
     assert f.current is not None and f.current.status.status != "완료"
-    # run으로 실제 실행 검증 → verified=True
+    # run으로 실제 실행 → verified=True, 시스템이 영수증(실제 출력) 캡처
     asyncio.run(tools["run"].handler({"command": "echo ok"}))
-    assert f.current.verified is True
-    # 이제 마감 허용
+    assert f.current.verified is True and f.current.run_count == 1 and f.current.evidence
+    # 마감 허용 — 결과엔 에이전트 '보고' 옆에 시스템 실행기록(실제 출력)이 떼어낼 수 없게 묶인다
     r2 = asyncio.run(tools["complete_task"].handler({"result": "검증 후 완료"}))
     assert "완료" in r2["content"][0]["text"] and f.current is None
+    res = f.tasks[-1].status.result
+    assert "검증 후 완료" in res and "시스템 실행기록" in res and "exit=0" in res
 
 
 def test_close_flow_정상_clean_close():

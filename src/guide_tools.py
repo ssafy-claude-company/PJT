@@ -123,7 +123,9 @@ class TaskRef:
     status: TaskStatus
     team: List[int] = field(default_factory=list)   # 이 Task에 배정된 Organt들
     owner: int = 0                                   # 이 산출물의 단일 책임자(accountable)
-    verified: bool = False                           # run으로 한 번이라도 검증됐나(허위완료 차단)
+    verified: bool = False                           # run으로 한 번이라도 실행됐나(실행 0회 완료 차단)
+    run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
+    evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
 
 
 class Flow:
@@ -342,7 +344,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                        f"[부분 stdout]\n{out[-800:]}\n[부분 stderr]\n{err[-400:]}")
         _dbg(f"[RUN] {me_id} `{cmd[:60]}` exit={rc}")
         if flow.current is not None:
-            flow.current.verified = True      # 이 Task가 run으로 한 번이라도 검증됨(허위완료 차단용)
+            flow.current.verified = True          # 실행 0회 완료 차단(layer1)
+            flow.current.run_count += 1
+            # 시스템이 직접 캡처한 영수증(에이전트 말이 아니라 실제 출력). 완료 보고에 떼어낼 수 없게 묶인다.
+            errtail = ("\n[stderr] " + err[-200:]) if (err or "").strip() else ""
+            flow.current.evidence = f"exit={rc} `{cmd[:50]}`\n{(out or '')[-400:]}{errtail}"
         return _ok(f"[exit {rc}] (작업공간)\n[stdout]\n{out[-1500:]}\n[stderr]\n{err[-600:]}")
 
     tools.append(run)
@@ -416,15 +422,21 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             if flow.current is None:
                 return _ok("오류: 진행 중인 Task가 없습니다.")
             if not flow.current.verified:
-                return _ok(f"완료 거부: 이 Task({flow.current.task_id})를 run으로 한 번도 검증하지 않았습니다 "
-                           f"— 산출물을 run으로 실제 검증(또는 QA에게 검증시켜)한 뒤 complete_task 하세요(허위 완료 금지).")
+                return _ok(f"완료 거부: 이 Task({flow.current.task_id})를 run으로 한 번도 실행하지 않았습니다 "
+                           f"— 산출물을 run으로 실제 실행한 뒤 complete_task 하세요(허위 완료 금지).")
             done_ref = flow.current
+            # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
+            # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.
+            report = (args.get("result") or "")[:300]
             done_ref.status.status = "완료"
-            done_ref.status.result = (args.get("result") or "")[:500]
+            done_ref.status.result = (
+                f"[보고] {report}\n"
+                f"[시스템 실행기록 {done_ref.run_count}회·마지막] {done_ref.evidence or '(없음)'}"
+            )[:1400]
             await flow.refresh(done_ref)
             await _react(g, flow.project_channel, done_ref.block_id, "✅")  # 완료=이모지
             flow.current = None
-            return _ok(f"task={done_ref.task_id} 완료 마감")
+            return _ok(f"task={done_ref.task_id} 완료 마감 (시스템 실행기록 {done_ref.run_count}회 첨부)")
         tools.append(complete_task)
 
         @tool("deploy",
