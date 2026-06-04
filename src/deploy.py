@@ -44,6 +44,19 @@ def _git(args, cwd):
     return p.returncode, (p.stdout + p.stderr)
 
 
+def _check_live(url, tries=6):
+    """배포된 URL이 실제로 응답하는지 확인(콜드스타트 감안 재시도) → HTTP 코드 또는 None."""
+    for _ in range(tries):
+        try:
+            with urllib.request.urlopen(url, timeout=20) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code           # 4xx/5xx도 서버가 응답한 것(라우팅은 됨)
+        except Exception:
+            time.sleep(8)           # 콜드스타트/미기동 — 재시도
+    return None
+
+
 def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="singapore"):
     """workspace를 name repo로 push하고 Render 웹서비스로 배포 → 결과 문자열(라이브 URL 포함)."""
     ws = Path(workspace)
@@ -95,8 +108,10 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
                 sid = s.get("id")
                 url = s.get("serviceDetails", {}).get("url", "")
                 break
+    dep_id = None
     if sid:
-        _http("POST", f"{RENDER_API}/services/{sid}/deploys", render_key, {})
+        st, dep = _http("POST", f"{RENDER_API}/services/{sid}/deploys", render_key, {})
+        dep_id = dep.get("id") if isinstance(dep, dict) else None   # 방금 트리거한 '그' 배포
     else:
         payload = {"type": "web_service", "name": name, "ownerId": owner_id,
                    "repo": repo_url, "branch": "main", "autoDeploy": "yes",
@@ -108,18 +123,25 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
             return f"배포 실패(Render 서비스 생성): HTTP {st} {json.dumps(resp)[:200]}"
         svc = resp.get("service", {})
         sid = svc.get("id")
+        dep_id = resp.get("deployId")
         url = svc.get("serviceDetails", {}).get("url", "")
 
-    # 6) 배포가 라이브 될 때까지 폴링
-    deadline = time.time() + 220
+    # 6) '방금 트리거한 배포'가 live 될 때까지 폴링(옛 배포의 live를 거짓 성공으로 읽지 않도록)
+    deadline = time.time() + 240
     status = "?"
     while time.time() < deadline:
-        st, deps = _http("GET", f"{RENDER_API}/services/{sid}/deploys?limit=1", render_key)
-        if isinstance(deps, list) and deps:
-            status = deps[0]["deploy"]["status"]
-            if status == "live":
-                return f"배포 성공 ✅ 라이브: {url}  (repo: {repo_url})"
-            if status in _TERMINAL_FAIL:
-                return f"배포 실패(Render {status}) — 빌드 로그 확인 필요. 예정 URL: {url}"
+        if dep_id:
+            st, d = _http("GET", f"{RENDER_API}/services/{sid}/deploys/{dep_id}", render_key)
+            status = d.get("status", "?") if isinstance(d, dict) else "?"
+        else:
+            st, deps = _http("GET", f"{RENDER_API}/services/{sid}/deploys?limit=1", render_key)
+            status = deps[0]["deploy"]["status"] if isinstance(deps, list) and deps else "?"
+        if status == "live":
+            served = _check_live(url)          # 라이브 URL이 '실제로 응답'하는지까지 확인
+            if served:
+                return f"배포 성공 ✅ 라이브(HTTP {served} 확인): {url}  (repo: {repo_url})"
+            return f"배포 실패: Render는 live인데 {url} 가 응답하지 않음(서버 기동 실패 가능) — 로그 확인 필요."
+        if status in _TERMINAL_FAIL:
+            return f"배포 실패(Render {status}) — 빌드 로그 확인 필요. 예정 URL: {url}"
         time.sleep(6)
     return f"배포 트리거됨(빌드 진행 중, status={status}): {url} — 1~2분 후 라이브 예상"
