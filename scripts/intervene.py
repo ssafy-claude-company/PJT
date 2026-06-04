@@ -32,16 +32,27 @@ CMD = sys.argv[1] if len(sys.argv) > 1 else (
 async def _connect(token):
     intents = discord.Intents.default()
     intents.message_content = True
-    c = discord.Client(intents=intents)
-    ready = asyncio.Event()
+    last = None
+    for attempt in range(4):           # 일시적 TLS/클럭 스큐 블립에 재시도(전체 기동이 한 봇에 안 죽게)
+        c = discord.Client(intents=intents)
+        ready = asyncio.Event()
 
-    @c.event
-    async def on_ready():
-        ready.set()
+        @c.event
+        async def on_ready():
+            ready.set()
 
-    t = asyncio.create_task(c.start(token))
-    await asyncio.wait_for(ready.wait(), 30)
-    return c, t
+        try:
+            t = asyncio.create_task(c.start(token))
+            await asyncio.wait_for(ready.wait(), 30)
+            return c, t
+        except Exception as e:
+            last = e
+            try:
+                await c.close()
+            except Exception:
+                pass
+            await asyncio.sleep(3 * (attempt + 1))
+    raise last
 
 
 async def main():
