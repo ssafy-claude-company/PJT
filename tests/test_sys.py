@@ -58,6 +58,17 @@ def test_leader는_project_task_도구():
                      "create_project", "create_task", "set_goal", "complete_task", "deploy"}
 
 
+def test_리더_등록툴이_전부_허용목록에_있음():
+    """make_guide_tools(leader)가 등록한 모든 guide 툴은 허용목록(FLOW_TOOLS+LEADER_TOOLS)에도 있어야 한다.
+    등록만 되고 allowed_tools에서 빠지면 런타임에 권한거부된다(set_goal 누락 사고 재발 방지)."""
+    from src.guide_tools import FLOW_TOOLS, LEADER_TOOLS
+    f = _flow(FakeGuide())
+    names = {t.name for t in make_guide_tools(f, 11, "leader")}
+    allowed = set(FLOW_TOOLS) | set(LEADER_TOOLS)
+    missing = {n for n in names if f"mcp__guide__{n}" not in allowed}
+    assert not missing, f"허용목록(FLOW_TOOLS+LEADER_TOOLS)에서 빠진 리더 툴: {missing}"
+
+
 def test_run_안전가드():
     f = _flow(FakeGuide())
     rt = {t.name: t for t in make_guide_tools(f, 11, "leader")}["run"]
