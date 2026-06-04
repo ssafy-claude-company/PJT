@@ -96,6 +96,11 @@ class DiscordGuide:
         guild = self.system.get_guild(guild_id)
         if guild is None:
             guild = await self.system.fetch_guild(guild_id)
+        # 같은 이름 채널이 이미 있으면 재사용 — 중복 채널(고아 구조) 방지(find-or-create).
+        norm = name.strip().lower().replace(" ", "-")
+        for ch in getattr(guild, "text_channels", []):
+            if (ch.name or "").lower() == norm:
+                return ch.id
         ch = await guild.create_text_channel(name)
         return ch.id
 

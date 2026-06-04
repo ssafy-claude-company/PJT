@@ -7,6 +7,8 @@ User 입력 → SYS가 담당(리더)을 깨움 → Organt가 판단·행동(파
 SYS는 얇다: 깨우기(wake) 제공 + 단일흐름 lock + 라우팅. 베턴/권한 강제는 Rule·Hook.
 Organt 생성(모델·권한·State)은 organt_builder로 주입받는다.
 """
+import json
+import os
 from typing import Dict, Optional
 
 from .communication import CommError
@@ -16,7 +18,7 @@ from .protocol import Kind, Request, format_response
 
 class Sys:
     def __init__(self, guide, guild_id, organt_builder, bot_info: Optional[Dict[int, str]] = None,
-                 workspace=None):
+                 workspace=None, projects_path=None):
         self.guide = guide
         self.guild_id = guild_id
         self.organt_builder = organt_builder   # (organt_id, guide_server, role) -> Organt
@@ -25,19 +27,47 @@ class Sys:
         self.active_flow: Optional[Flow] = None
         self.queue = []                        # 진행 중 들어온 명령(순차 처리 대기)
         self.flow_log = []
+        self.projects_path = projects_path     # 레지스트리 영속 경로(없으면 인메모리)
         self.projects: Dict[int, dict] = {}    # channel_id → 프로젝트 컨텍스트(개입 진입점)
         self._proj_n = 0
+        self._load_projects()
+
+    def _load_projects(self):
+        """디스크에서 프로젝트 레지스트리 복원 — 프로세스가 끝나도 '원래 작업'에 개입 가능."""
+        if not self.projects_path or not os.path.exists(self.projects_path):
+            return
+        try:
+            data = json.load(open(self.projects_path, encoding="utf-8"))
+            self.projects = {int(k): v for k, v in data.get("projects", {}).items()}
+            self._proj_n = data.get("n", len(self.projects))
+        except Exception:
+            pass
+
+    def _save_projects(self):
+        if not self.projects_path:
+            return
+        try:
+            with open(self.projects_path, "w", encoding="utf-8") as f:
+                json.dump({"n": self._proj_n,
+                           "projects": {str(k): v for k, v in self.projects.items()}},
+                          f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def _register_project(self, channel_id, name, workspace, leader) -> str:
-        """프로젝트를 1급 엔티티로 등록 → 식별번호 P-XXX 부여(이미 있으면 재사용).
-        등록된 채널에 다시 명령이 오면 '개입'으로 라우팅돼 같은 맥락(워크스페이스·팀)에서 이어간다."""
+        """프로젝트를 1급 엔티티로 등록 → 식별번호 P-XXX 부여. 같은 채널이나 같은 이름이 이미
+        있으면 재사용(중복 방지). 등록 채널에 다시 명령이 오면 '개입'으로 라우팅된다."""
         ch = int(channel_id)
         if ch in self.projects:
             return self.projects[ch]["id"]
+        for c, p in self.projects.items():            # 같은 이름이면 기존 채널 재사용
+            if p.get("name") == name:
+                return p["id"]
         self._proj_n += 1
         pid = f"P-{self._proj_n:03d}"
         self.projects[ch] = {"id": pid, "name": name, "channel": ch,
                              "workspace": workspace, "leader": leader, "summary": ""}
+        self._save_projects()
         return pid
 
     def _log(self, event, **f):
@@ -189,6 +219,7 @@ class Sys:
             p = self.projects.get(int(flow.project_channel))
             if p:
                 p["summary"] = (result or "")[:300]
+                self._save_projects()
         self._log("flow_done", project=flow.project_channel is not None,
                   tasks=len(flow.tasks), comm_done=flow.comm.done)
         self.active_flow = None

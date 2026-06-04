@@ -230,6 +230,20 @@ def test_프로젝트_등록과_채널개입_라우팅():
     assert captured["flow"].intervention is None and captured["flow"].workspace == "/ws"
 
 
+def test_프로젝트_레지스트리_영속과_중복방지(tmp_path):
+    """레지스트리를 디스크에 영속 → 프로세스가 끝나도 '원래 프로젝트'에 개입 가능. 같은 이름은 재사용."""
+    p = str(tmp_path / "projects.json")
+    s1 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"}, projects_path=p)
+    pid = s1._register_project(9001, "스네이크", "/ws", 11)
+    # 같은 이름은 새 채널이어도 기존 프로젝트 재사용(중복 채널/프로젝트 방지)
+    assert s1._register_project(9999, "스네이크", "/ws", 11) == pid
+    assert 9999 not in s1.projects
+    # 새 프로세스(새 Sys)가 같은 파일 로드 → 원래 프로젝트 복원
+    s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"}, projects_path=p)
+    assert 9001 in s2.projects and s2.projects[9001]["id"] == pid
+    assert s2.projects[9001]["workspace"] == "/ws"
+
+
 def test_단일흐름_진행중_명령은_큐잉():
     g = FakeGuide()
     s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"})
