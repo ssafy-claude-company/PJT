@@ -55,6 +55,25 @@ def test_info_kind_파싱():
     assert isinstance(msg, Request) and msg.kind == Kind.INFO
 
 
+def test_멀티라인_본문_전체전달():
+    """여러 줄 + '['로 시작하는 줄을 포함한 본문이 첫 줄에서 잘리지 않고 통째로 전달돼야 한다."""
+    body = ("버그 2개 고쳐줘.\n\n[버그1 — 무적 회전] 제자리 회전 시 무적이 됨.\n"
+            "[버그2 — 먹이 섭취] 커지면 입이 안 커짐.\n끝.")
+    content = format_request(B, Kind.WORK, body)
+    msg = parse(message_id=9, author_id=A, mention_ids=[B], reply_to_id=None, content=content)
+    assert isinstance(msg, Request)
+    assert "[버그1 — 무적 회전]" in msg.body and "[버그2 — 먹이 섭취]" in msg.body   # '[' 줄도 보존
+    assert "제자리 회전 시 무적" in msg.body and "입이 안 커짐" in msg.body and "끝." in msg.body
+    assert msg.to_id == B and msg.kind == Kind.WORK
+
+
+def test_멀티라인_응답_본문_전체전달():
+    body = "분석 결과:\n- 항목1\n- 항목2\n[주의] 후속 필요"
+    content = format_response(body)
+    msg = parse(message_id=2, author_id=B, mention_ids=[], reply_to_id=555, content=content)
+    assert isinstance(msg, Response) and "[주의] 후속 필요" in msg.body and "- 항목2" in msg.body
+
+
 def test_response_왕복():
     content = format_response("결과 보고합니다")
     msg = parse(message_id=777, author_id=B, mention_ids=[], reply_to_id=555, content=content)

@@ -80,15 +80,32 @@ def format_task_status(ts: TaskStatus) -> str:
 # --- 파싱 (Discord → SYS) ---
 
 def _fields(content: str) -> dict:
-    """'Key: value' 라인들을 dict로 (키는 소문자). 헤더('[..]')는 제외."""
+    """'Key: value' 라인들을 dict로 (키는 소문자). 헤더('[..]')는 제외.
+    주의: 본문(Body)은 여러 줄·'['로 시작하는 줄을 포함할 수 있으므로 여기서 뽑지 말고
+    _multiline_body로 따로 뽑는다(아래). 여긴 To/Kind 같은 단일 헤더 추출용."""
     out = {}
     for line in content.splitlines():
         s = line.strip()
         if s.startswith("[") or ":" not in s:
             continue
         key, _, val = s.partition(":")
-        out[key.strip().lower()] = val.strip()
+        k = key.strip().lower()
+        if k == "body":          # 본문은 첫 줄만 담기지 않도록 _fields에서 제외(멀티라인 보존)
+            break
+        out[k] = val.strip()
     return out
+
+
+def _multiline_body(content: str) -> str:
+    """'Body:' 이후의 '모든 줄'을 본문으로 돌려준다(여러 줄·'['로 시작하는 줄 포함).
+    멀티라인 요청/응답 본문이 첫 줄에서 잘리던 버그를 막는다."""
+    lines = content.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().lower().startswith("body:"):
+            first = line.split(":", 1)[1].strip() if ":" in line else ""
+            rest = lines[i + 1:]
+            return "\n".join(([first] if first else []) + rest).strip()
+    return ""
 
 
 def parse(*, message_id, author_id, mention_ids: List[int], reply_to_id,
@@ -100,15 +117,14 @@ def parse(*, message_id, author_id, mention_ids: List[int], reply_to_id,
     head = c.splitlines()[0].strip()
 
     if head.startswith("[Response]") and reply_to_id is not None:
-        f = _fields(c)
-        return Response(body=f.get("body", ""), from_id=author_id,
+        return Response(body=_multiline_body(c), from_id=author_id,
                         replies_to=str(reply_to_id), message_id=str(message_id))
 
     if head.startswith("[Request]"):
         f = _fields(c)
         kind = Kind.WORK if f.get("kind", "").strip().lower().startswith("work") else Kind.INFO
         to_id = mention_ids[0] if mention_ids else None
-        return Request(to_id=to_id, kind=kind, body=f.get("body", ""),
+        return Request(to_id=to_id, kind=kind, body=_multiline_body(c),
                        from_id=author_id, message_id=str(message_id))
 
     return None
