@@ -239,10 +239,10 @@ def test_프로젝트_레지스트리_영속과_중복방지(tmp_path):
     assert s1._register_project(9999, "스네이크", "/ws2", 11) == pid
     assert 9999 in s1.projects and 9001 not in s1.projects     # 채널만 현재 것으로 이동
     assert s1.projects[9999]["id"] == pid and s1.projects[9999]["workspace"] == "/ws2"
-    # 새 프로세스(새 Sys)가 같은 파일 로드 → 원래 프로젝트 복원
+    # 새 프로세스(새 Sys)가 같은 파일 로드 → 갱신된 채널·식별번호 그대로 복원
     s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"}, projects_path=p)
-    assert 9001 in s2.projects and s2.projects[9001]["id"] == pid
-    assert s2.projects[9001]["workspace"] == "/ws"
+    assert 9999 in s2.projects and s2.projects[9999]["id"] == pid
+    assert s2.projects[9999]["workspace"] == "/ws2"
 
 
 def test_단일흐름_진행중_명령은_큐잉():
