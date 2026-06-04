@@ -90,7 +90,8 @@ async def main():
 
     sysm = Sys(guide, channel.guild.id, organt_builder, bot_info=bot_info,
                workspace=cfg.workspace_dir,
-               projects_path=str(cfg.audit_log_path.parent / "projects.json"))
+               projects_path=str(cfg.audit_log_path.parent / "projects.json"),
+               session_dir=str(cfg.audit_log_path.parent))
 
     # 기존 산출물 워크스페이스를 프로젝트로 — 같은 이름 채널 재사용(중복 방지). 레지스트리는
     # 지우지 않는다(같은 이름이면 _register_project가 식별번호 유지 + 채널만 갱신 → ID 안 바뀜).

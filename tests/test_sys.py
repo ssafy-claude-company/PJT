@@ -278,3 +278,42 @@ def test_단일흐름_진행중_명령은_큐잉():
     out = asyncio.run(s.handle_user_input(500, 11, "두번째 명령", root_id=None))
     assert out["mode"] == "queued"                    # 버리지 않고 큐에 적재
     assert s.queue and s.queue[0][2] == "두번째 명령"
+
+
+def test_턴한도_미완이면_같은세션으로_이어서_완료():
+    """리더가 턴 한도로 Task를 못 닫고 끝나면 SYS가 이어서 재호출해 완료까지 끌고 간다(中断 아님)."""
+    import types
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"}, workspace="/ws", max_continue=4)
+    calls = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        calls.append(body)
+        if len(calls) == 1:                            # 1차: Task 열어둔 채 턴 한도로 끊김
+            flow.current = types.SimpleNamespace(
+                task_id="t1", status=types.SimpleNamespace(status="진행", result=None))
+            return "작업 중... (⚠ 턴 한도 도달 — 작업이 미완일 수 있음)"
+        flow.current = None                            # 2차(이어서): 마감
+        return "완료"
+
+    s.run_turn = fake_run_turn
+    asyncio.run(s.handle_user_input(500, 11, "큰 작업", root_id=None))
+    assert len(calls) == 2 and "이어서 계속" in calls[1]          # 연속 실행 프롬프트로 재호출됨
+    assert any(e["event"] == "continue_incomplete" for e in s.flow_log)
+
+
+def test_새요청마다_세션초기화_앵커링차단(tmp_path):
+    """새 최상위 요청 시작 시 organt_state_*.json를 지워 '이미 했다' 앵커링을 구조적으로 막는다."""
+    sd = tmp_path
+    (sd / "organt_state_11.json").write_text("{}")
+    (sd / "organt_state_12.json").write_text("{}")
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
+            workspace="/ws", session_dir=str(sd))
+
+    async def fake_rt(flow, oid, body, kind, role):
+        return "done"
+
+    s.run_turn = fake_rt
+    asyncio.run(s.handle_user_input(500, 11, "새 요청", root_id=None))
+    assert not list(sd.glob("organt_state_*.json"))   # 세션 파일 초기화됨
+    assert any(e["event"] == "reset_sessions" for e in s.flow_log)

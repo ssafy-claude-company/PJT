@@ -119,7 +119,8 @@ async def run() -> None:
                or await system_client.fetch_channel(cfg.channel_id))
     sysm = Sys(guide, channel.guild.id, _make_builder(cfg, audit), bot_info=bot_info,
                workspace=cfg.workspace_dir,
-               projects_path=str(cfg.audit_log_path.parent / "projects.json"))
+               projects_path=str(cfg.audit_log_path.parent / "projects.json"),
+               session_dir=str(cfg.audit_log_path.parent))
 
     print(f"SYS 가동 — 리더={bot_info[leader_id]}({leader_id}), 팀={list(bot_info.values())}")
     print(f"#{channel.name} 에서 User 입력 대기 중 — 그냥 말 걸어도 됩니다(Ctrl+C 종료)")
