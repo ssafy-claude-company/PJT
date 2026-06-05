@@ -122,12 +122,14 @@ async def main():
         sp.unlink()
 
     def organt_builder(organt_id, server, role, flow=None):
-        # 담당자(리더)도 같은 직군 기여자(Write/run 보유) + 구조적 조율 도구(LEADER_TOOLS).
+        # 리더도 한 명의 직원 — 구현 도구(Write/Edit)를 그대로 갖는다. 차이는 권한이 아니라
+        # 역할: 목표는 팀 합의로 정하고(set_goal), Work 위임 본문은 '구현 스펙'이 아니라
+        # '측정가능한 목표'이며, 받은 owner가 구현·검증·증거보고까지 끝까지 책임진다.
         allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
         turns = 34
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
-            turns = 64          # 분해+위임+품질게이트(비평·되밀기 반복)로 턴이 더 필요
+            turns = 64          # 합의+분배+조율이 얹혀 턴이 더 필요
         label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
         # 리더 추론 기록(관측): '왜 재호출하나'를 추측 말고 직접 보려고 매 발화를 audit에 남긴다.
         narrate = ((lambda t: audit.record("narration", actor=organt_id, role=label, text=t[:800]))

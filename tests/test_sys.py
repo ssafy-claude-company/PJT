@@ -150,6 +150,7 @@ def test_owner는_work수신자_goal합의후():
     assert "Goal" in blocked["content"][0]["text"] and f.current.owner == 0
     assert not any(c[0] == "req" for c in g.calls)               # 거부 → 게시 안 함
     # 팀 합의 결과를 리더가 set_goal로 확정
+    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))   # 목표는 팀 합의 산물 — 먼저 Info 협의
     asyncio.run(t["set_goal"].handler({"goal": "GET/POST /todos 동작"}))
     assert f.current.status.goal == "GET/POST /todos 동작"
     # 이제 Work 위임 → 받은 동료(12)가 owner가 됨 (수신=소유)
@@ -170,9 +171,11 @@ def test_request_동료_깨우고_베턴복귀():
     f.wake = wake
     tools = _tools(f, 11, "leader")
     asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
+    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))   # 목표 합의 전 팀 Info 협의
     asyncio.run(tools["set_goal"].handler({"goal": "g"}))     # Work 위임은 Goal 확정 후 가능
     res = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "백엔드"}))
-    assert waked == [(12, "백엔드", Kind.WORK)]      # 동료 깨움
+    assert len(waked) == 1 and waked[0][0] == 12 and waked[0][2] == Kind.WORK   # 동료 깨움
+    assert "백엔드" in waked[0][1] and "Goal: g" in waked[0][1]   # 원 요청 + Goal 계약을 안고 전달
     assert f.comm.alive == 11                        # 응답 후 베턴 복귀
     assert "처리완료" in res["content"][0]["text"]
     assert any(c[0] == "req" for c in g.calls) and any(c[0] == "resp" for c in g.calls)
@@ -361,6 +364,7 @@ def test_위임자측_확인요청_질문으로_표면화():
     f = _flow(g)
     tools11 = _tools(f, 11, "leader")
     asyncio.run(tools11["create_task"].handler({"purpose": "p", "members": "12"}))
+    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))   # 목표 합의 전 팀 Info 협의
     asyncio.run(tools11["set_goal"].handler({"goal": "g"}))   # Work 위임 전 Goal 확정
 
     async def wake(to, body, kind):                    # 12가 위임자(11)에게 확인요청 남기고 반환했다고 모의
@@ -372,3 +376,64 @@ def test_위임자측_확인요청_질문으로_표면화():
     txt = r["content"][0]["text"]
     assert "확인요청 from" in txt and "필드명 X 맞나요?" in txt   # 질문이 위임자 응답으로 표면화
     assert f.pending_clarify is None                            # 표면화하며 소거
+
+
+def test_재위임은_Redo로_바운드_정당한첫위임은_허용():
+    """docs Communication.md §5: 이미 '완료 응답'까지 받은 산출물을 같은 owner에게 또 Work로 보내면
+    '새 위임'이 아니라 Redo(직전 결함 보완)로 처리되고, 한계를 넘으면 거부된다(반사적 중복요청 차단·보완은 허용)."""
+    g = FakeGuide()
+    f = _flow(g)
+    waked = []
+
+    async def wake(to, b, k):
+        waked.append((to, b))
+        return "완료"
+
+    f.wake = wake
+    tools = _tools(f, 11, "leader")
+    asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
+    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))   # 목표는 팀 합의 산물
+    asyncio.run(tools["set_goal"].handler({"goal": "GET/POST /todos 동작"}))
+    # 1) 첫 Work 위임(정상) → owner=12, '완료 응답'까지 닫혀 delivered로 기록됨
+    asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
+    assert f.comm.delivered_work(11, 12) and f.current.owner == 12
+    # 위임 본문은 Goal을 계약으로 안고 owner에게 전달된다(리더 스펙 리파인이 아니라 목표가 계약)
+    assert any("Goal" in b for _, b in waked)
+    # 2) 같은 owner에 또 Work × 2 → Redo로 처리(여전히 깨워 '보완' 가능), history에 redo 2건
+    asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "결함A 고쳐"}))
+    asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "결함B 고쳐"}))
+    assert sum(1 for ev in f.comm.history if ev[0] == "redo") == 2
+    # 3) 한계(2) 초과 → 거부(반복 위임 차단), 동료를 더 깨우지 않음
+    n_before = len(waked)
+    r = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "또 고쳐"}))
+    assert "한도" in r["content"][0]["text"] and len(waked) == n_before
+    # 4) 새 Task를 열면 추적이 초기화 → 같은 동료라도 다시 '첫 위임'(다른 산출물)
+    f.current.verified = True
+    asyncio.run(tools["complete_task"].handler({"result": "ok"}))
+    asyncio.run(tools["create_task"].handler({"purpose": "p2", "members": "12"}))
+    assert not f.comm.delivered_work(11, 12)
+
+
+def test_되묻기후_재위임은_Redo아님():
+    """owner가 '되묻기(clarify)'만 하고 반환하면 미완이므로, 위임자가 다시 맡기는 건 '첫 구현'이지 Redo가 아니다."""
+    g = FakeGuide()
+    f = _flow(g)
+    calls = {"n": 0}
+
+    async def wake(to, b, k):
+        calls["n"] += 1
+        if calls["n"] == 1:                      # 1차: 되묻기만 남기고 반환(미완)
+            f.pending_clarify = {"from": 12, "to": 11, "q": "필드명?"}
+            return "(짧게 반환)"
+        return "완료"                            # 2차: 실제 완료
+
+    f.wake = wake
+    tools = _tools(f, 11, "leader")
+    asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
+    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))
+    asyncio.run(tools["set_goal"].handler({"goal": "g"}))
+    asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))   # 되묻기 → 미완
+    assert not f.comm.delivered_work(11, 12)                       # 완료 아님 → delivered 기록 안 됨
+    r = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "구현(답 반영)"}))
+    assert not any(ev[0] == "redo" for ev in f.comm.history)       # 재위임이지만 Redo 아님
+    assert "응답" in r["content"][0]["text"]

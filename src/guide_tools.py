@@ -24,7 +24,7 @@ import anyio
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from .communication import CommError, CommunicationManager
+from .communication import CommError, CommunicationManager, RedoLimitExceeded
 from .protocol import Kind, TaskStatus
 
 _DEBUG = bool(os.environ.get("ORGANT_DEBUG"))
@@ -267,11 +267,36 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             return _ok(f"요청 거부(규약): {e}")
         # Work 위임은 Goal 확정 뒤에만 — '목표 합의(set_goal) → 분배' 순서를 구조적으로 강제(선분배 금지).
         # Info(합의용)는 언제든 허용 → Goal을 정하는 논의 자체는 막지 않는다.
-        if kind == Kind.WORK and not (flow.current.status.goal or "").strip():
+        goal = (flow.current.status.goal or "").strip()
+        if kind == Kind.WORK and not goal:
             _dbg(f"{tag} ✗거부:Goal미확정")
             return _ok("Work 위임 거부: 이 Task의 Goal이 아직 확정되지 않았습니다. 먼저 동료와 request(Info)로 "
                        "목표를 합의하고 set_goal로 확정한 뒤 Work로 맡기세요(목표는 팀 합의의 산물 — 선분배 금지).")
-        frame = flow.comm.request(me_id, to, "pending", kind)   # 베턴 점유(alive→to)
+        # Work Response → Accept/Redo (docs Communication.md §5). 이미 이 owner가 '완료 응답'까지 낸
+        # 산출물을 같은 위임자가 또 Work로 보내면, 그건 '새 위임'이 아니라 직전 산출물의 Redo다.
+        # → 새 프레임이 아니라 redo()로 처리한다(한계까지만, 초과 시 반복 위임 거부). 이로써 '되풀이
+        #   위임'이 구조적으로 '직전 결함을 고치는 보완'으로만 성립한다(반사적 중복요청 차단·정당한 보완 허용).
+        is_redo = kind == Kind.WORK and flow.comm.delivered_work(me_id, to)
+        owner_body = body
+        if is_redo:
+            try:
+                frame = flow.comm.redo(me_id, to, "pending")    # 베턴 점유 + Redo 카운트(한계 시 RedoLimitExceeded)
+            except RedoLimitExceeded:
+                _dbg(f"{tag} ✗재위임 한도초과")
+                await _note(f"{flow._info(to) or to}에게 같은 산출물 재위임 한도 초과 — 직접 보완하거나 수락하세요")
+                return _ok(f"재위임 거부(Redo 한도 초과): {to}({flow._info(to)})는 이미 이 산출물을 여러 번 "
+                           f"보완했습니다. 같은 일을 또 떠넘기지 말고 — 직접 Read/run으로 확인 후 Write/Edit로 "
+                           f"마무리하거나, goal이 충족됐으면 complete_task로 마감하세요.")
+            owner_body = (f"[보완 요청(Redo) — 직전 산출물이 목표에 못 미쳐 되돌아왔습니다] 고칠 구체적 결함: {body}\n"
+                          f"[이 Task의 Goal] {goal}\n결함만 정확히 고치고 run으로 재검증해 그 증거와 함께 보고하세요.")
+        else:
+            frame = flow.comm.request(me_id, to, "pending", kind)   # 베턴 점유(alive→to)
+            if kind == Kind.WORK:
+                # 위임의 '계약'은 리더가 매번 새로 쓰는 스펙이 아니라 팀 합의로 확정된 Goal이다(스펙 리파인
+                # 루프=재요청의 뿌리를 끊는다). owner가 그 목표를 끝까지(구현+검증) 책임진다.
+                owner_body = (f"[위임 — 이 목표를 끝까지 책임지는 owner는 당신입니다] 이 Task의 Goal: {goal}\n"
+                              f"직접 구현하고 run으로 '목표가 충족됨'을 검증한 뒤(리더에게 되넘기지 말 것), "
+                              f"그 실행 증거와 함께 간결히 보고하세요.\n[요청 맥락] {body}")
         thread_id = flow.current.thread_id
         # Owner = 그 일을 Work로 받은 동료(수신=소유). 선배정이 아니라 요청으로 owner가 떠오른다 —
         # 이 Task에 아직 owner가 없을 때 첫 Work-request 수신자가 책임자가 된다(중앙집권 방지).
@@ -281,22 +306,26 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             await flow.refresh(flow.current)
         req = await g.send_request(thread_id, me_id, to, kind, body)
         frame.request_id = str(req)                              # 실제 메시지 id로 기록 갱신
-        _dbg(f"{tag} ✓전송 req={req}")
+        _dbg(f"{tag} ✓전송 req={req}{' (Redo)' if is_redo else ''}")
         if flow.log:   # 관측: 모든 요청을 '보낸 순서'대로 영속 기록(중첩 PostToolUse 타이밍에 안 묻힘)
             flow.log("req_sent", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),
-                     seg=flow.leader_segment, body=body[:60])
+                     seg=flow.leader_segment, redo=is_redo, body=body[:60])
+        runs_before = flow.current.run_count if flow.current else 0
         try:
-            result = await flow.wake(to, body, kind)            # 동료 깨워 응답(중첩 베턴)
+            result = await flow.wake(to, owner_body, kind)      # 동료 깨워 응답(중첩 베턴)
             if _looks_transient(result):                        # 일시 오류면 한 번 더(답으로 취급 X)
-                result = await flow.wake(to, body, kind)
+                result = await flow.wake(to, owner_body, kind)
         except Exception as e:
             result = f"(동료 처리 중 오류: {e})"
         # 깨운 동료가 '나(위임자)에게 확인요청'을 남기고 턴을 마쳤으면, 그 질문을 응답으로 표면화 →
-        # 내가 답을 정해 다시 맡긴다(되묻기가 에러가 아니라 협업으로 흐름).
+        # 내가 답을 정해 다시 맡긴다(되묻기가 에러가 아니라 협업으로 흐름). 이는 '완료'가 아니므로
+        # delivered로 기록하지 않는다(되묻기 후 재위임은 Redo가 아니라 '첫 구현').
+        was_clarify = False
         if (flow.pending_clarify and flow.pending_clarify.get("to") == me_id
                 and flow.pending_clarify.get("from") == to):
             q = flow.pending_clarify["q"]
             flow.pending_clarify = None
+            was_clarify = True
             result = (f"[확인요청 from {flow._info(to)}] {q}\n"
                       f"(→ 답을 정한 뒤, 이 작업을 {flow._info(to)}에게 request(Work)로 다시 맡기세요)")
         failed = _looks_transient(result)
@@ -307,7 +336,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         finally:
             # 프레임 close = 베턴 복귀(누수 방지). 정상이면 alive==to 라 그대로 닫힌다.
             try:
-                flow.comm.respond(to, "accept", result)
+                flow.comm.respond(to, "clarify" if was_clarify else "accept", result)
             except CommError:
                 # to의 중첩 하위요청이 응답 없이 끝나(크래시/이탈) 베턴이 to에 '굳은' 비정상 상황 →
                 # me_id(요청자)가 다시 alive 될 때까지 위 프레임을 강제 close. 흐름 교착(굳음) 방지.
@@ -320,7 +349,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     guard += 1
         if failed:   # 실패는 답으로 넘기지 않고 재요청을 유도
             return _ok(f"[{to}] 일시 오류로 응답 실패 — 잠시 후 다시 request 하세요. ({result[:120]})")
-        return _ok(f"[{to} 응답] {result[:600]}")
+        # 위임 응답엔 owner가 '직접 돌린 실행 증거(시스템 캡처)'를 붙여 돌려준다 — 위임자가 말이 아니라
+        # 증거로 '검증 후 수락'할 수 있게(반사적 재요청 대신). owner가 이번에 run을 돌렸을 때만.
+        receipt = ""
+        if (kind == Kind.WORK and not was_clarify and flow.current
+                and flow.current.run_count > runs_before and flow.current.evidence):
+            receipt = f"\n[owner 실행 증거(시스템 캡처)] {flow.current.evidence[:300]}"
+        return _ok(f"[{to} 응답] {result[:600]}{receipt}")
 
     tools.append(request)
 
@@ -450,6 +485,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                           status=status, team=team, owner=0)
             flow.tasks.append(ref)
             flow.current = ref
+            flow.comm.reset_task_tracking()   # 새 산출물 단위 → '완료/Redo' 추적 초기화(Redo는 같은 Task 안에서만)
             return _ok(f"task={tid} thread={thread_id} 팀={flow._names(team)} — 이제 팀과 request(Info)로 "
                        f"Goal을 합의해 set_goal로 확정하고, 일을 맡길 동료에게 Work로 요청하세요(받은 동료가 owner).")
         tools.append(create_task)
@@ -465,6 +501,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             goal = (args.get("goal") or "").strip()
             if not goal:
                 return _ok("오류: goal이 비었습니다.")
+            # 목표는 팀 합의의 산물(docs: Team이 Goal을 정한다). 팀과 Info 협의 없이 리더 독단 지정 차단.
+            discussed = any(
+                ev[0] == "request" and ev[1] == me_id and ev[2] != me_id
+                and str(getattr(ev[4], "value", ev[4])).lower().startswith("i")
+                for ev in flow.comm.history)
+            if not discussed:
+                return _ok("목표 지정 거부: 목표는 팀 합의의 산물입니다(리더 독단 금지). 먼저 관련 동료에게 "
+                           "request(Info)로 '이 요청에서 네 도메인의 목표·범위'를 물어 합의한 뒤, 그 합의를 "
+                           "set_goal로 기록하세요.")
             flow.current.status.goal = goal
             await flow.refresh(flow.current)
             return _ok(f"task={flow.current.task_id} Goal 확정: {goal[:100]}")

@@ -50,6 +50,7 @@ class CommunicationManager:
         self.done = False
         self.redo_limit = redo_limit
         self._redo_counts: dict = {}
+        self._delivered: set = set()   # '완료 응답'까지 닫힌 (위임자→owner) Work 쌍 → 재위임=Redo 판별
         self.escalations: list = []
         self.escalated_to_origin = False
 
@@ -94,6 +95,10 @@ class CommunicationManager:
         frame = self._stack.pop()       # 역순(LIFO) close
         self.alive = frame.from_id      # 요청자 wake
         self.history.append(("respond", from_id, frame.from_id, frame.request_id, result))
+        if result == "accept" and self._is_work(frame.kind):
+            # 이 (위임자→owner) Work가 '완료 응답'까지 닫혔다 → 다음 같은 위임은 새 위임이 아니라
+            # 직전 산출물의 Redo다(docs §5). 되묻기(clarify)는 미완이라 'accept'가 아니므로 안 잡힌다.
+            self._delivered.add((frame.from_id, frame.to_id))
         if not self._stack:             # 모든 요청 닫힘 → 시작점 복귀·종료
             self.done = True
             self.alive = self.origin
@@ -121,6 +126,17 @@ class CommunicationManager:
     def is_busy(self, organt_id) -> bool:
         """미완 Work 보유(또는 흐름 참여 중)인가 → Work Request 금지 대상."""
         return organt_id in self._participants()
+
+    def delivered_work(self, delegator: int, owner: int) -> bool:
+        """delegator가 owner에게 Work를 위임해 '완료 응답'까지 받은 적이 있는가. True면 같은
+        owner에게 또 보내는 Work는 '새 위임'이 아니라 Redo(직전 산출물 보완)다 — docs §5."""
+        return (delegator, owner) in self._delivered
+
+    def reset_task_tracking(self) -> None:
+        """새 Task(=새 산출물 단위)가 열리면 '완료/Redo' 추적을 비운다 — Redo는 '같은 Task의 같은
+        산출물'을 다시 맡길 때만 성립한다(다른 Task의 같은 동료는 새 위임이지 Redo가 아님)."""
+        self._delivered.clear()
+        self._redo_counts.clear()
 
     @staticmethod
     def _is_work(kind) -> bool:

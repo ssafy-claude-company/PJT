@@ -82,8 +82,9 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
     """role에 맞는 도구·권한·훅·State를 갖춘 Organt를 만드는 빌더를 돌려준다."""
     bot_info = bot_info or {}
     def organt_builder(organt_id, server, role, flow=None):
-        # 담당자(리더)도 팀과 같은 직군의 기여자(Write/Edit/run 보유) — 자기 도메인은 직접, 다른 도메인은
-        # 위임·합의(create_task 합의강제 + QA게이트로 중앙집권 완화).
+        # 리더도 한 명의 직원 — 구현 도구(Write/Edit)를 그대로 갖는다. 차이는 권한이 아니라
+        # 역할: 목표는 팀 합의로 정하고(set_goal), Work 위임 본문은 '스펙'이 아니라
+        # '측정가능한 목표'이며, 받은 owner가 구현·검증까지 끝까지 책임진다.
         allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
