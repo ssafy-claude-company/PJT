@@ -28,10 +28,11 @@ from .sys_core import Sys
 
 
 def load_roster() -> List[Tuple[str, str]]:
-    """ORGANT_ROSTER → [(token, 역할설명), ...]. 첫 항목이 리더. 없으면 TEST_BOT 단독.
+    """ORGANT_ROSTER → [(token, 역할), ...]. 첫 항목이 리더. 없으면 TEST_BOT 단독.
 
-    형식: '토큰_환경변수명:역할설명' 을 ';' 로 구분(역할설명에 쉼표·괄호 사용 가능). 예:
-      TEST_BOT_1:담당자(백엔드 직접 구현·리더); TEST_OBT_2:프론트엔드(스펙대로 CSS 구현)
+    형식: '토큰_환경변수명:역할' 을 ';' 로 구분. 역할은 '맨 도메인 정체성'만 적는다(누가 무엇을
+    어떻게 할지·인터페이스·분배는 라벨에 박지 말 것 — 런타임 협의로 정해짐). 예:
+      TEST_BOT_1:담당자; TEST_OBT_2:백엔드; TEST_OBT_3:프론트엔드; TEST_OBT_4:디자이너; TEST_OBT_5:QA
     """
     roster: List[Tuple[str, str]] = []
     spec = os.environ.get("ORGANT_ROSTER", "").strip()
