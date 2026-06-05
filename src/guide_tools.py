@@ -278,7 +278,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if kind == Kind.WORK and to in flow.current.delivered_owners:
             if flow.log:
                 flow.log("redeliver_nudge", frm=me_id, to=to, seg=flow.leader_segment,
-                         task=flow.current.task_id)
+                         task=flow.current.task_id, body=body[:70])
             _dbg(f"{tag} ↩재발사차단(미검증)")
             return _ok(f"{flow._info(to) or to}는 이미 이 Task 산출물을 제출했습니다 — 같은 owner를 같은 일로 "
                        f"다시 깨우지 마세요. **run으로 직접 검증**하세요: goal 충족이면 complete_task로 마감, 결함이 "

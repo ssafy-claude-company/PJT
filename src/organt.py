@@ -84,9 +84,10 @@ class Organt:
     """파일시스템에 접근하고, 세션 resume로 State를 보존하는 Organt(LLM) 본체."""
 
     def __init__(self, config: Config, options: Optional[ClaudeAgentOptions] = None,
-                 state_path=None):
+                 state_path=None, narrate=None):
         self.config = config
         self.options = options or build_options(config)
+        self.narrate = narrate   # (text)->None: 매 발화(추론) 기록 콜백(관측). 없으면 미기록.
         # State(작업 맥락)는 세션 ID로 보존한다. 재시작(새 인스턴스) 시 파일에서 복원.
         self.state_path = (Path(state_path) if state_path is not None
                            else config.audit_log_path.parent / "organt_state.json")
@@ -127,6 +128,11 @@ class Organt:
                     t = "".join(b.text for b in msg.content if isinstance(b, TextBlock)).strip()
                     if t:
                         final_text = t   # 마지막 비어있지 않은 발화만 유지
+                        if self.narrate:   # 관측: 매 발화(추론)를 기록 — '왜 그 행동을 했나'를 본다
+                            try:
+                                self.narrate(t)
+                            except Exception:
+                                pass
                 elif isinstance(msg, ResultMessage):   # 턴 한도 등으로 끊겼는지
                     st = (getattr(msg, "subtype", "") or "") + (getattr(msg, "stop_reason", "") or "")
                     if "max_turns" in st.lower():
