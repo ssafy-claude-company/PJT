@@ -37,18 +37,31 @@ DEFAULT_TASK = (
 
 
 async def _connect(token):
+    # 일시적 Discord WS/DNS 블립엔 재시도(main.py._connect와 동일) — 한 봇의 연결 실패로 데모가
+    # 통째로 죽지 않도록.
     intents = discord.Intents.default()
     intents.message_content = True
-    c = discord.Client(intents=intents)
-    ready = asyncio.Event()
+    last = None
+    for attempt in range(4):
+        c = discord.Client(intents=intents)
+        ready = asyncio.Event()
 
-    @c.event
-    async def on_ready():
-        ready.set()
+        @c.event
+        async def on_ready():
+            ready.set()
 
-    t = asyncio.create_task(c.start(token))
-    await asyncio.wait_for(ready.wait(), 30)
-    return c, t
+        try:
+            t = asyncio.create_task(c.start(token))
+            await asyncio.wait_for(ready.wait(), 30)
+            return c, t
+        except Exception as e:
+            last = e
+            try:
+                await c.close()
+            except Exception:
+                pass
+            await asyncio.sleep(3 * (attempt + 1))
+    raise last
 
 
 def _collab_summary(flow, bot_info):
