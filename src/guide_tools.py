@@ -51,6 +51,10 @@ LEADER_TOOLS = [f"mcp__guide__{n}" for n in
 _RUN_DENY = ("rm -rf", "rm -r ", "sudo", "shutdown", "reboot", "mkfs", "dd if=", ":(){",
              "git ", "/home/user/pjt", "/etc/", "/usr/", "/root", "> /", "chmod ", "chown ",
              "pkill", "kill -9 1 ", "wget ", "ssh ", "scp ", "npm publish", "history")
+# run으로 '파일 작성'(heredoc·cat>·tee)을 막는다 — 산출물 작성/수정은 Write/Edit로 해야 권한·협의
+# 게이트(협의 중 선구현 금지)가 적용되고 '누가 무엇을 만들었나'가 기록된다. run은 실행·빌드·검증 전용.
+# (이 백도어로 리더가 위임 없이 전부 혼자 작성해 독점하거나, 협의 단계 동료가 선구현하는 걸 차단.)
+_RUN_AUTHOR = ("<<", "cat >", "cat>", "tee ", "tee\t")
 
 
 def _resolve_members(spec, flow, allowed) -> List[int]:
@@ -159,6 +163,7 @@ class Flow:
         self.deployed = None           # deploy 툴이 불리면 결과 문자열(배포 강제용 추적)
         self.pending_clarify = None    # 위임자에게 되묻기(확인요청 반환) 임시 보관
         self.leader_segment = 0        # 리더 턴 세그먼트 번호(시작=1, continue마다 +1) — 관측용
+        self.req_results = {}          # (seg,from,to,kind,body)->응답: 같은 턴 병렬 중복요청 합치기용 캐시
         self.log = None                # (event, **fields) 콜백 — SYS가 주입(flow.jsonl 영속)
 
     def start_root(self, root_id):
@@ -250,18 +255,22 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 return _ok(f"요청 거부: {to}는 채용 풀에 없습니다. 풀: {flow._names(flow.pool)}")
         if flow.wake is None:
             return _ok("오류: 시스템 준비 안 됨")
-        # 단일흐름 + '한 턴에 하나': 베턴이 내게 없다는 건 같은 턴에 내가 이미 보낸 다른 request가
-        # 진행 중이라는 뜻이다(한 메시지에 request tool_use를 여러 개 박은 '병렬 중복'). 이를 대기로
-        # 직렬화해 다 실행하면 동료를 같은 요청으로 여러 번 깨우는 '반사적 중복요청'이 된다 → 직렬화
-        # 대신 거부해 '앞 요청의 응답을 받아 확인한 뒤 다음'을 구조적으로 강제한다(중복 wake 차단).
-        if flow.comm.alive != me_id and not flow.comm.done:
+        # 직렬화: 베턴이 내 차례가 될 때까지 대기(거부 아님). 서로 다른 동료로의 병렬 요청은 순차 처리되며,
+        # 첫 요청이 길게(중첩 협의) 걸려도 베턴은 결국 돌아오므로 위임이 끊기지 않는다(이전엔 여기서 거부해
+        # 리더가 '요청이 막혔다'고 오판→독점하는 역효과가 났다). 데드라인은 교착 안전장치.
+        deadline = time.monotonic() + 600
+        while flow.comm.alive != me_id and not flow.comm.done and time.monotonic() < deadline:
+            await anyio.sleep(0.05)
+        # 같은 턴에 '같은 동료에게 같은 요청'을 다발로 보낸 병렬 중복은 합친다(idempotent): 동료를 다시
+        # 깨우지 않고 직전 응답을 그대로 재사용한다 → 반사적 중복 wake 차단(직렬화는 유지, 중복만 제거).
+        dupkey = (flow.leader_segment, me_id, to, str(getattr(kind, "value", kind)), body)
+        if dupkey in flow.req_results:
             if flow.log:
-                flow.log("dup_parallel_rejected", frm=me_id, to=to,
-                         kind=str(getattr(kind, "value", kind)), alive=flow.comm.alive,
-                         seg=flow.leader_segment)
-            _dbg(f"{tag} ✗거부:병렬중복(alive={flow.comm.alive}≠me)")
-            return _ok("요청 거부: 한 턴에 요청은 하나만 보냅니다 — 방금 보낸 요청의 응답을 받아 확인한 "
-                       "뒤 다음 요청을 보내세요(단일흐름이라 같은 턴의 병렬·중복 요청은 보내지 않습니다).")
+                flow.log("dup_parallel_merged", frm=me_id, to=to,
+                         kind=str(getattr(kind, "value", kind)), seg=flow.leader_segment)
+            _dbg(f"{tag} ⇉병렬중복 합침(동료 재호출 없이 같은 응답 재사용)")
+            return _ok(f"[{to} 응답] {flow.req_results[dupkey][:600]}\n"
+                       f"(같은 턴에 이미 보낸 동일 요청 — 동료를 다시 호출하지 않고 같은 응답을 재사용)")
         # 검증→점유는 await 없이 인접 실행 → 형제 요청과 경합하지 않음(원자적).
         try:
             flow.comm.check_request(me_id, to, kind)
@@ -362,6 +371,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if (kind == Kind.WORK and not was_clarify and flow.current
                 and flow.current.run_count > runs_before and flow.current.evidence):
             receipt = f"\n[owner 실행 증거(시스템 캡처)] {flow.current.evidence[:300]}"
+        flow.req_results[dupkey] = result   # 같은 턴 병렬 중복요청이 재사용할 응답 캐시(동료 재호출 방지)
         return _ok(f"[{to} 응답] {result[:600]}{receipt}")
 
     tools.append(request)
@@ -400,6 +410,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             return _ok("실행 불가: 작업공간이 설정되지 않았습니다.")
         if any(d in cmd.lower() for d in _RUN_DENY):
             return _ok(f"실행 거부(안전): 파괴/저장소/시스템 패턴 포함 — {cmd[:80]}")
+        if any(p in cmd for p in _RUN_AUTHOR):
+            return _ok("실행 거부: run은 '실행·빌드·검증' 전용입니다 — 파일 작성/수정은 Write/Edit 도구로 "
+                       "하세요(그래야 권한·협의 게이트가 적용되고 누가 무엇을 만들었는지 기록됩니다). 예: "
+                       "server.js 작성은 Write, 패키지 설치·서버 구동·curl 점검은 run. 남의 도메인 산출물을 "
+                       "run으로 대신 찍어내지 말고 그 owner에게 Work로 위임하세요.")
 
         def _exec():
             # 자체 세션(프로세스그룹)으로 실행 → 직속 셸 종료 후 그룹째 정리한다.

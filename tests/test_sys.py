@@ -79,6 +79,19 @@ def test_run_안전가드():
     assert "거부" in asyncio.run(rt.handler({"command": "git commit -am x"}))["content"][0]["text"]
 
 
+def test_run_파일작성_백도어_차단():
+    """run으로 파일 작성(heredoc·cat>·tee)은 막힌다 — 산출물 작성은 Write/Edit로(권한·협의 게이트·기록 적용).
+    이 백도어가 열려 있으면 리더가 위임 없이 전부 혼자 찍어내 독점하거나 협의 중 선구현이 가능했다."""
+    f = _flow(FakeGuide())
+    f.workspace = "/tmp"
+    rt = {t.name: t for t in make_guide_tools(f, 12, "member")}["run"]
+    for cmd in ("cat > server.js << 'EOF'\nx\nEOF", "echo hi | tee app.js", "cat>x.js"):
+        out = asyncio.run(rt.handler({"command": cmd}))["content"][0]["text"]
+        assert "거부" in out and "Write/Edit" in out, cmd
+    ok = asyncio.run(rt.handler({"command": "echo built"}))["content"][0]["text"]   # 정상 실행은 통과
+    assert "거부" not in ok and "built" in ok
+
+
 def test_run_백그라운드_프로세스_그룹째_정리():
     """run이 백그라운드로 띄운 자식(서버 등)을 끝나면 그룹째 정리 → 포트/프로세스 누수 없음."""
     import os
@@ -414,22 +427,27 @@ def test_재위임은_Redo로_바운드_정당한첫위임은_허용():
     assert not f.comm.delivered_work(11, 12)
 
 
-def test_같은턴_병렬중복요청은_거부():
-    """한 턴에 request tool_use를 여러 개 박으면(병렬 중복), 베턴을 쥔 형제가 진행 중이므로 나머지
-    요청은 거부된다 — 동료를 같은 요청으로 여러 번 깨우는 반사적 중복요청을 구조적으로 차단."""
+def test_같은턴_병렬중복요청은_합쳐서_재호출안함():
+    """같은 턴에 같은 동료에게 같은 요청을 다발로 보내면(병렬 중복), 동료를 다시 깨우지 않고 직전
+    응답을 재사용한다 — 반사적 중복 wake를 구조적으로 차단(서로 다른 동료 병렬요청은 직렬화·거부 아님)."""
     g = FakeGuide()
     f = _flow(g)                                   # leader 11, member 12; alive=11
     tools = _tools(f, 11, "leader")
     asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
     f.comm.history.append(("request", 11, 12, "r", Kind.INFO))
     asyncio.run(tools["set_goal"].handler({"goal": "g"}))
-    # 병렬 tool_use 중 형제 하나가 이미 베턴을 쥐고 진행 중인 상태 모의(alive→동료)
-    f.comm.request(11, 12, "sibling", Kind.WORK)
-    f.wake = lambda *a: None
-    r = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Info", "body": "질문"}))
-    txt = r["content"][0]["text"]
-    assert "한 턴에" in txt and "거부" in txt        # 병렬 형제 요청은 거부
-    assert not any(c[0] == "req" for c in g.calls)   # 동료를 깨우지/게시하지 않음
+    waked = []
+
+    async def wake(to, b, k):
+        waked.append(to)
+        return "동료응답"
+
+    f.wake = wake
+    r1 = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Info", "body": "질문"}))
+    assert waked == [12] and "동료응답" in r1["content"][0]["text"]   # 1차: 동료 깸·응답 캐시
+    r2 = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Info", "body": "질문"}))
+    assert waked == [12]                                              # 2차: 다시 깨우지 않음(합침)
+    assert "재사용" in r2["content"][0]["text"] and "동료응답" in r2["content"][0]["text"]
 
 
 def test_되묻기후_재위임은_Redo아님():
