@@ -162,14 +162,38 @@ def test_owner는_work수신자_goal합의후():
     blocked = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "서버 만들어"}))
     assert "Goal" in blocked["content"][0]["text"] and f.current.owner == 0
     assert not any(c[0] == "req" for c in g.calls)               # 거부 → 게시 안 함
-    # 팀 합의 결과를 리더가 set_goal로 확정
-    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))   # 목표는 팀 합의 산물 — 먼저 Info 협의
+    # 팀 합의 결과를 리더가 set_goal로 확정 — 이 Task의 멤버 전원(12,13)을 Info로 물어야 통과(Task별·멤버별)
+    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))
+    f.comm.history.append(("request", 11, 13, "r", Kind.INFO))
     asyncio.run(t["set_goal"].handler({"goal": "GET/POST /todos 동작"}))
     assert f.current.status.goal == "GET/POST /todos 동작"
     # 이제 Work 위임 → 받은 동료(12)가 owner가 됨 (수신=소유)
     asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "서버 만들어"}))
     assert f.current.owner == 12 and "A백엔드" in f.current.status.owner
     assert 12 in waked
+
+
+def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
+    """Goal은 'Task마다 그 담당 팀이 함께' 정한다(docs: Task.Team이 Goal을 정함) — 이 Task 멤버 전원을 Info로
+    물은 뒤에만 set_goal 통과. 전역 1회로 끝내는 리더 독단/선지정 차단, Task가 바뀌면 추적도 리셋(Task별)."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백", 13: "프"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
+    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))    # 12만 물음
+    r1 = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
+    assert "거부" in r1["content"][0]["text"] and not f.current.status.goal   # 13 미협의 → 거부
+    f.comm.history.append(("request", 11, 13, "r", Kind.INFO))    # 13도 물음
+    asyncio.run(t["set_goal"].handler({"goal": "동작"}))
+    assert f.current.status.goal == "동작"                         # 전원 협의 → 통과
+    # 다음 Task에선 추적 리셋(hist_start) → 이전 협의 재사용 불가
+    f.current.verified = True
+    asyncio.run(t["complete_task"].handler({"result": "ok"}))
+    asyncio.run(t["create_task"].handler({"purpose": "프론트", "members": "13"}))
+    r3 = asyncio.run(t["set_goal"].handler({"goal": "화면"}))     # 새 Task에서 13 다시 안 물음
+    assert "거부" in r3["content"][0]["text"]                      # Task별로 다시 합의해야 함
 
 
 def test_request_동료_깨우고_베턴복귀():

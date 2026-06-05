@@ -127,6 +127,7 @@ class TaskRef:
     status: TaskStatus
     team: List[int] = field(default_factory=list)   # 이 Task에 배정된 Organt들
     owner: int = 0                                   # 이 산출물의 단일 책임자(accountable)
+    hist_start: int = 0                              # 이 Task 생성 시점의 comm.history 길이(Task별 합의 검사용)
     verified: bool = False                           # run으로 한 번이라도 실행됐나(실행 0회 완료 차단)
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
@@ -504,7 +505,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             await _add_members(g, thread_id, [m for m in team if m != flow.leader])  # 멤버십=팀
             flow.project_channel = ch
             ref = TaskRef(task_id=tid, thread_id=thread_id, block_id=block_id,
-                          status=status, team=team, owner=0)
+                          status=status, team=team, owner=0,
+                          hist_start=len(flow.comm.history))   # 이 Task의 합의는 '여기 이후'만 인정(Task별)
             flow.tasks.append(ref)
             flow.current = ref
             flow.comm.reset_task_tracking()   # 새 산출물 단위 → '완료/Redo' 추적 초기화(Redo는 같은 Task 안에서만)
@@ -513,9 +515,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         tools.append(create_task)
 
         @tool("set_goal",
-              "팀과 합의된 이번 Task의 **측정가능한 Goal**을 확정·기록한다(상태블록 갱신). 혼자 정하지 말고 동료와 "
-              "request(Info)로 합의한 결과를 적으세요 — '목표는 팀 합의의 산물'을 보장하는 자리이며, Work 위임은 "
-              "Goal 확정 뒤에만 가능합니다.",
+              "이번 Task의 **측정가능한 Goal(성공 기준·결과)**을 팀과 합의해 확정·기록한다. 리더 혼자/선지정 금지 — "
+              "**이 Task의 멤버 전원**에게 request(Info)로 '네 도메인의 목표·성공기준'을 물어 수렴한 결과를 적는다. "
+              "Goal엔 '무엇이 되면 성공인가'(측정 가능한 결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·스택으로 만들지'"
+              "(구현 방법)는 쓰지 말 것 — 그건 owner가 정한다. Work 위임은 Goal 확정 뒤에만 가능.",
               {"goal": str})
         async def set_goal(args):
             if flow.current is None:
@@ -523,15 +526,20 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             goal = (args.get("goal") or "").strip()
             if not goal:
                 return _ok("오류: goal이 비었습니다.")
-            # 목표는 팀 합의의 산물(docs: Team이 Goal을 정한다). 팀과 Info 협의 없이 리더 독단 지정 차단.
-            discussed = any(
-                ev[0] == "request" and ev[1] == me_id and ev[2] != me_id
-                and str(getattr(ev[4], "value", ev[4])).lower().startswith("i")
-                for ev in flow.comm.history)
-            if not discussed:
-                return _ok("목표 지정 거부: 목표는 팀 합의의 산물입니다(리더 독단 금지). 먼저 관련 동료에게 "
-                           "request(Info)로 '이 요청에서 네 도메인의 목표·범위'를 물어 합의한 뒤, 그 합의를 "
-                           "set_goal로 기록하세요.")
+            # 목표는 '담당 팀이 함께' 정한다(docs: Task.Team이 Goal을 정한다). 전역 1회가 아니라 'Task마다,
+            # 멤버마다': 이 Task가 열린 뒤(hist_start 이후) 리더가 '이 Task의 멤버 전원'에게 Info로 의견을
+            # 물었는지 검사한다 → 매 Task를 팀이 모여 정하는 분산 구조를 구조적으로 강제(리더 독단·선지정 차단).
+            members = [x for x in flow.current.team if x != me_id]
+            recent = flow.comm.history[flow.current.hist_start:]
+            consulted = {ev[2] for ev in recent
+                         if ev[0] == "request" and ev[1] == me_id
+                         and str(getattr(ev[4], "value", ev[4])).lower().startswith("i")}
+            missing = [m for m in members if m not in consulted]
+            if missing:
+                return _ok(f"목표 지정 거부: 이 Task의 Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
+                           f"아직 의견을 안 받은 멤버: {flow._names(missing)} — 그들에게 request(Info)로 '이 Task에서 "
+                           f"네 도메인의 목표·성공기준'을 먼저 물어 수렴한 뒤 set_goal로 기록하세요(파일·엔드포인트 "
+                           f"같은 구현 스펙 말고 '측정가능한 결과'로).")
             flow.current.status.goal = goal
             await flow.refresh(flow.current)
             return _ok(f"task={flow.current.task_id} Goal 확정: {goal[:100]}")
