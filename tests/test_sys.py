@@ -414,6 +414,24 @@ def test_재위임은_Redo로_바운드_정당한첫위임은_허용():
     assert not f.comm.delivered_work(11, 12)
 
 
+def test_같은턴_병렬중복요청은_거부():
+    """한 턴에 request tool_use를 여러 개 박으면(병렬 중복), 베턴을 쥔 형제가 진행 중이므로 나머지
+    요청은 거부된다 — 동료를 같은 요청으로 여러 번 깨우는 반사적 중복요청을 구조적으로 차단."""
+    g = FakeGuide()
+    f = _flow(g)                                   # leader 11, member 12; alive=11
+    tools = _tools(f, 11, "leader")
+    asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
+    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))
+    asyncio.run(tools["set_goal"].handler({"goal": "g"}))
+    # 병렬 tool_use 중 형제 하나가 이미 베턴을 쥐고 진행 중인 상태 모의(alive→동료)
+    f.comm.request(11, 12, "sibling", Kind.WORK)
+    f.wake = lambda *a: None
+    r = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Info", "body": "질문"}))
+    txt = r["content"][0]["text"]
+    assert "한 턴에" in txt and "거부" in txt        # 병렬 형제 요청은 거부
+    assert not any(c[0] == "req" for c in g.calls)   # 동료를 깨우지/게시하지 않음
+
+
 def test_되묻기후_재위임은_Redo아님():
     """owner가 '되묻기(clarify)'만 하고 반환하면 미완이므로, 위임자가 다시 맡기는 건 '첫 구현'이지 Redo가 아니다."""
     g = FakeGuide()

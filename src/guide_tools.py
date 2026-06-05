@@ -250,11 +250,18 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 return _ok(f"요청 거부: {to}는 채용 풀에 없습니다. 풀: {flow._names(flow.pool)}")
         if flow.wake is None:
             return _ok("오류: 시스템 준비 안 됨")
-        # 병렬 요청 직렬화: 베턴이 '내 차례'가 될 때까지 대기(거부 대신 큐잉). 단일흐름 보존.
-        # 데드라인은 교착 안전장치(베턴은 동료가 응답하면 결국 풀림 → 넉넉히 둠).
-        deadline = time.monotonic() + 600
-        while flow.comm.alive != me_id and not flow.comm.done and time.monotonic() < deadline:
-            await anyio.sleep(0.05)
+        # 단일흐름 + '한 턴에 하나': 베턴이 내게 없다는 건 같은 턴에 내가 이미 보낸 다른 request가
+        # 진행 중이라는 뜻이다(한 메시지에 request tool_use를 여러 개 박은 '병렬 중복'). 이를 대기로
+        # 직렬화해 다 실행하면 동료를 같은 요청으로 여러 번 깨우는 '반사적 중복요청'이 된다 → 직렬화
+        # 대신 거부해 '앞 요청의 응답을 받아 확인한 뒤 다음'을 구조적으로 강제한다(중복 wake 차단).
+        if flow.comm.alive != me_id and not flow.comm.done:
+            if flow.log:
+                flow.log("dup_parallel_rejected", frm=me_id, to=to,
+                         kind=str(getattr(kind, "value", kind)), alive=flow.comm.alive,
+                         seg=flow.leader_segment)
+            _dbg(f"{tag} ✗거부:병렬중복(alive={flow.comm.alive}≠me)")
+            return _ok("요청 거부: 한 턴에 요청은 하나만 보냅니다 — 방금 보낸 요청의 응답을 받아 확인한 "
+                       "뒤 다음 요청을 보내세요(단일흐름이라 같은 턴의 병렬·중복 요청은 보내지 않습니다).")
         # 검증→점유는 await 없이 인접 실행 → 형제 요청과 경합하지 않음(원자적).
         try:
             flow.comm.check_request(me_id, to, kind)
