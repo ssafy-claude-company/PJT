@@ -11,6 +11,7 @@ import asyncio
 import glob
 import json
 import os
+import time
 from typing import Dict, Optional
 
 from .communication import CommError
@@ -40,6 +41,7 @@ class Sys:
         self.active_flow: Optional[Flow] = None
         self.queue = []                        # 진행 중 들어온 명령(순차 처리 대기)
         self.flow_log = []
+        self.flow_log_path = (os.path.join(session_dir, "flow.jsonl") if session_dir else None)
         self.projects_path = projects_path     # 레지스트리 영속 경로(없으면 인메모리)
         self.projects: Dict[int, dict] = {}    # channel_id → 프로젝트 컨텍스트(개입 진입점)
         self._proj_n = 0
@@ -90,7 +92,14 @@ class Sys:
         return pid
 
     def _log(self, event, **f):
-        self.flow_log.append({"event": event, **f})
+        rec = {"event": event, "ts": time.time(), **f}
+        self.flow_log.append(rec)
+        if self.flow_log_path:   # 메모리만이던 continue_incomplete/flow_done/req_sent를 디스크로 영속(관측)
+            try:
+                with open(self.flow_log_path, "a", encoding="utf-8") as fp:
+                    fp.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+            except OSError:
+                pass
 
     def _reset_sessions(self):
         """새 최상위 요청마다 에이전트 세션(resume용 session_id)을 초기화한다.
@@ -304,8 +313,10 @@ class Sys:
         if root_id is not None:
             flow.start_root(root_id)
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")
+        flow.log = self._log                       # 관측: req_sent 등을 flow.jsonl로 영속
         self.active_flow = flow
         try:
+            flow.leader_segment = 1
             result = await self.run_turn(flow, lead, body, Kind.WORK, "leader")
             # 구조적 연속 실행: 턴 한도로 작업이 끊겼으면(진행 중 Task가 남았거나 '턴 한도' 표시)
             # 같은 세션으로 이어서 완료까지 재호출한다 — '턴 한도 = 무조건 中断' 결함 해소.
@@ -313,6 +324,7 @@ class Sys:
             while ((flow.current is not None or "턴 한도 도달" in (result or ""))
                    and cont < self.max_continue):
                 cont += 1
+                flow.leader_segment = cont + 1
                 self._log("continue_incomplete",
                           task=(flow.current.task_id if flow.current else None), attempt=cont)
                 result = await self.run_turn(flow, lead, _CONTINUE_BODY, Kind.WORK, "leader")

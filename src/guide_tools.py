@@ -158,6 +158,8 @@ class Flow:
         self.intervention = None       # 기존 프로젝트 개입이면 그 정보(dict)
         self.deployed = None           # deploy 툴이 불리면 결과 문자열(배포 강제용 추적)
         self.pending_clarify = None    # 위임자에게 되묻기(확인요청 반환) 임시 보관
+        self.leader_segment = 0        # 리더 턴 세그먼트 번호(시작=1, continue마다 +1) — 관측용
+        self.log = None                # (event, **fields) 콜백 — SYS가 주입(flow.jsonl 영속)
 
     def start_root(self, root_id):
         self.root_id = str(root_id)
@@ -277,6 +279,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         req = await g.send_request(thread_id, me_id, to, kind, body)
         frame.request_id = str(req)                              # 실제 메시지 id로 기록 갱신
         _dbg(f"{tag} ✓전송 req={req}")
+        if flow.log:   # 관측: 모든 요청을 '보낸 순서'대로 영속 기록(중첩 PostToolUse 타이밍에 안 묻힘)
+            flow.log("req_sent", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),
+                     seg=flow.leader_segment, body=body[:60])
         try:
             result = await flow.wake(to, body, kind)            # 동료 깨워 응답(중첩 베턴)
             if _looks_transient(result):                        # 일시 오류면 한 번 더(답으로 취급 X)

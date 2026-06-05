@@ -6,6 +6,7 @@ docs(Other/Guide/Discord.md):
 - 그 상태블록 메시지에서 **Thread**를 파생 → 대화(Request/Response)는 Thread 안에서.
 - Request/Response는 **보낸 Organt 봇**으로 전송(From=봇). RepliesTo=reply, 식별=메시지 ID.
 """
+import asyncio
 from typing import Dict, List, Optional, Union
 
 from .protocol import (
@@ -76,7 +77,9 @@ class DiscordGuide:
         return first_id or "0"
 
     async def _send_one(self, ch, content: str, reply_to) -> Optional[str]:
-        for attempt in (1, 2):
+        # 일시 오류(특히 503/DNS resolution failure)는 점증 백오프로 여러 번 재시도 — 네트워크
+        # 블립에 Response·보고가 '조용히 유실'되던 문제(완료됐는데 응답 안 보임) 방지.
+        for attempt in range(1, 5):
             try:
                 if reply_to is not None:
                     ref = await ch.fetch_message(int(reply_to))
@@ -85,9 +88,11 @@ class DiscordGuide:
                     msg = await ch.send(content)
                 return str(msg.id)
             except Exception as e:   # 실패를 '보이게' 한다(조용한 유실 방지)
-                print(f"[discord_guide] 전송 실패(시도 {attempt}/2) {type(e).__name__}: {e} "
+                print(f"[discord_guide] 전송 실패(시도 {attempt}/4) {type(e).__name__}: {e} "
                       f"(len={len(content)}, reply_to={reply_to})", flush=True)
                 reply_to = None      # 재시도는 일반 전송으로(reply 대상 문제 회피)
+                if attempt < 4:
+                    await asyncio.sleep(2 ** (attempt - 1))   # 1s, 2s, 4s 백오프
         return None
 
     # --- Project = 채널 (담당 Organt가 'create_project' 기능으로 요청, System Bot이 실행) ---
@@ -96,11 +101,9 @@ class DiscordGuide:
         guild = self.system.get_guild(guild_id)
         if guild is None:
             guild = await self.system.fetch_guild(guild_id)
-        # 같은 이름 채널이 이미 있으면 재사용 — 중복 채널(고아 구조) 방지(find-or-create).
-        norm = name.strip().lower().replace(" ", "-")
-        for ch in getattr(guild, "text_channels", []):
-            if (ch.name or "").lower() == norm:
-                return ch.id
+        # 새 프로젝트는 '항상 새 채널'을 연다 — 같은 이름 기존 채널에 편입되면 안 됨(기존 프로젝트
+        # 기여는 그 채널 안에서의 개입 경로로만; 새 요청은 별도 공간). 단일 flow 내 중복 생성은
+        # create_project가 project_channel 세팅 여부로 이미 막는다(no-op).
         ch = await guild.create_text_channel(name)
         return ch.id
 
