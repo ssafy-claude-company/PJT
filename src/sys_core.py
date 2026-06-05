@@ -176,7 +176,8 @@ class Sys:
                 f"create_task(purpose=…, members=…)로 **Purpose(문제)만 갖고** 여세요 — **Goal·owner를 미리 정하지 말 것.** "
                 f"Goal은 Task 안에서 동료와 request(Info)로 합의해 **set_goal로 확정**하고, owner는 **그 일을 Work로 받는 "
                 f"동료가 됩니다**(수신=소유). **request 전에 create_task로 Task를 먼저 여세요.** 프로젝트 팀원은 request하면 "
-                f"자동 합류하고, 풀 밖 인력이 필요할 때만 recruit로 신중히.\n"
+                f"자동 합류하고, 풀 밖 인력이 필요할 때만 recruit로 신중히. **단일흐름이라 한 번에 한 명에게만 "
+                f"request하세요 — 여러 명에게 동시에 요청하지 말 것(직렬화돼 뒤 요청이 대기/시간초과됩니다).**\n"
                 f"[판단] 요청 성격을 보고 셋 중 하나로 처리하세요.\n"
                 f"- '단순 질문/인사이트'(혼자 답 가능) → 답만 간결히 반환.\n"
                 f"- '팀 논의/토론/선택' → create_project→create_task 후 **진행자로서** ① 각자에게 request(Info)로 "
@@ -242,6 +243,13 @@ class Sys:
             server = build_guide_server(flow, organt_id, role)
             organt = self.organt_builder(organt_id, server, role, flow)
             try:
+                # '…입력 중' 표시: 깨어난 Organt가 응답·작업을 작성하는 동안 현재 Task 스레드
+                # (없으면 유저 채널)에 가시화. guide에 typing 없으면(테스트 등) 그냥 건너뜀.
+                ch = (flow.current.thread_id if flow.current else None) or flow.user_channel
+                tcm = getattr(self.guide, "typing", None)
+                if tcm is not None:
+                    async with tcm(ch, organt_id):
+                        return await organt.handle(self._prompt(body, kind, role, organt_id))
                 return await organt.handle(self._prompt(body, kind, role, organt_id))
             except Exception as e:
                 last = f"(에이전트 {organt_id} 처리 실패: {e})"

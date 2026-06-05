@@ -259,6 +259,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         try:
             flow.comm.check_request(me_id, to, kind)
         except CommError as e:
+            if flow.log:   # 관측: 거부 시점의 베턴 상태(alive)·요청자를 영속 기록 → 원인 규명
+                flow.log("req_rejected", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),
+                         alive=flow.comm.alive, seg=flow.leader_segment, reason=str(e)[:70])
             _dbg(f"{tag} ✗거부:규약 ({e})")
             await _note(f"{flow._info(to) or to}에게 요청했으나 거부됨 — {e}")
             return _ok(f"요청 거부(규약): {e}")
@@ -302,7 +305,19 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             await _react(g, thread_id, req, "⚠️" if failed else "✅")  # 상태=이모지(해소/실패)
             _dbg(f"{tag} {'⚠실패' if failed else '✓응답'} len={len(result)}")
         finally:
-            flow.comm.respond(to, "accept", result)             # 프레임 close = 베턴 복귀(누수 방지)
+            # 프레임 close = 베턴 복귀(누수 방지). 정상이면 alive==to 라 그대로 닫힌다.
+            try:
+                flow.comm.respond(to, "accept", result)
+            except CommError:
+                # to의 중첩 하위요청이 응답 없이 끝나(크래시/이탈) 베턴이 to에 '굳은' 비정상 상황 →
+                # me_id(요청자)가 다시 alive 될 때까지 위 프레임을 강제 close. 흐름 교착(굳음) 방지.
+                if flow.log:
+                    flow.log("baton_recover", me=me_id, stuck_alive=flow.comm.alive, to=to)
+                guard = 0
+                while (not flow.comm.done and flow.comm.alive != me_id
+                       and flow.comm.open_requests and guard < 30):
+                    flow.comm.escalate("베턴 굳음 안전복구")
+                    guard += 1
         if failed:   # 실패는 답으로 넘기지 않고 재요청을 유도
             return _ok(f"[{to}] 일시 오류로 응답 실패 — 잠시 후 다시 request 하세요. ({result[:120]})")
         return _ok(f"[{to} 응답] {result[:600]}")

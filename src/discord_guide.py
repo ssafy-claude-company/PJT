@@ -7,6 +7,7 @@ docs(Other/Guide/Discord.md):
 - Request/Response는 **보낸 Organt 봇**으로 전송(From=봇). RepliesTo=reply, 식별=메시지 ID.
 """
 import asyncio
+from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Union
 
 from .protocol import (
@@ -94,6 +95,19 @@ class DiscordGuide:
                 if attempt < 4:
                     await asyncio.sleep(2 ** (attempt - 1))   # 1s, 2s, 4s 백오프
         return None
+
+    @asynccontextmanager
+    async def typing(self, channel_id, sender_id=None):
+        """채널/스레드에 '…입력 중' 표시(가시성 — Organt가 응답·작업 작성 중임을 사람이 봄).
+        보낸 봇 = sender의 Organt(없으면 system). 가이드 문서엔 없지만 Discord 기능을 활용한
+        관찰성. 실패해도 작업엔 영향 없게 방어적(타이핑은 부수효과)."""
+        try:
+            client = self.organts.get(sender_id) if sender_id else None
+            ch = await self._resolve(client or self.system, int(channel_id))
+            async with ch.typing():
+                yield
+        except Exception:
+            yield   # 타이핑 표시 실패는 무시(전송/작업과 무관)
 
     # --- Project = 채널 (담당 Organt가 'create_project' 기능으로 요청, System Bot이 실행) ---
 
