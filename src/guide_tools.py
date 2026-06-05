@@ -126,7 +126,6 @@ class TaskRef:
     verified: bool = False                           # run으로 한 번이라도 실행됐나(실행 0회 완료 차단)
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
-    delivered_owners: set = field(default_factory=set)  # 이 Task에서 Work 산출물을 낸 owner들(재발사 넛지용)
 
 
 class Flow:
@@ -272,17 +271,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             _dbg(f"{tag} ✗거부:Goal미확정")
             return _ok("Work 위임 거부: 이 Task의 Goal이 아직 확정되지 않았습니다. 먼저 동료와 request(Info)로 "
                        "목표를 합의하고 set_goal로 확정한 뒤 Work로 맡기세요(목표는 팀 합의의 산물 — 선분배 금지).")
-        # 재발사 차단(구조적 '검증→판정' 전이): 이미 이 Task 산출물을 낸 owner를 같은 일로 다시
-        # 깨우려 하면 막는다 — **owner는 한 번만 깨운다**. 풀리는 건 오직 run 검증 후(증거기반 redo).
-        # 맹목 재요청("이미 함" 루프)을 구조적으로 0으로 — 하드 거부가 아니라 'verify→complete/redo' 강제.
-        if kind == Kind.WORK and to in flow.current.delivered_owners:
-            if flow.log:
-                flow.log("redeliver_nudge", frm=me_id, to=to, seg=flow.leader_segment,
-                         task=flow.current.task_id, body=body[:70])
-            _dbg(f"{tag} ↩재발사차단(미검증)")
-            return _ok(f"{flow._info(to) or to}는 이미 이 Task 산출물을 제출했습니다 — 같은 owner를 같은 일로 "
-                       f"다시 깨우지 마세요. **run으로 직접 검증**하세요: goal 충족이면 complete_task로 마감, 결함이 "
-                       f"보이면 그 '구체적 결함'을 적어 보내세요(run 검증을 거쳐야 재위임이 풀립니다). 맹목 재요청 금지.")
         frame = flow.comm.request(me_id, to, "pending", kind)   # 베턴 점유(alive→to)
         thread_id = flow.current.thread_id
         # Owner = 그 일을 Work로 받은 동료(수신=소유). 선배정이 아니라 요청으로 owner가 떠오른다 —
@@ -332,8 +320,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     guard += 1
         if failed:   # 실패는 답으로 넘기지 않고 재요청을 유도
             return _ok(f"[{to}] 일시 오류로 응답 실패 — 잠시 후 다시 request 하세요. ({result[:120]})")
-        if kind == Kind.WORK and flow.current is not None:
-            flow.current.delivered_owners.add(to)   # 산출물 제출 기록 → 동일 Work 재발사 시 넛지
         return _ok(f"[{to} 응답] {result[:600]}")
 
     tools.append(request)
@@ -410,7 +396,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if flow.current is not None:
             flow.current.verified = True          # 실행 0회 완료 차단(layer1)
             flow.current.run_count += 1
-            flow.current.delivered_owners.clear()  # run 검증을 거쳤으니 재위임 잠금 해제(증거기반 redo 허용)
             # 시스템이 직접 캡처한 영수증(에이전트 말이 아니라 실제 출력). 완료 보고에 떼어낼 수 없게 묶인다.
             errtail = ("\n[stderr] " + err[-200:]) if (err or "").strip() else ""
             flow.current.evidence = f"exit={rc} `{cmd[:50]}`\n{(out or '')[-400:]}{errtail}"
