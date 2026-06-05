@@ -90,6 +90,20 @@ def _looks_transient(text: str) -> bool:
     return t.startswith("api error") or t.startswith("(동료 처리 중 오류")
 
 
+# 협의로 '인정되는' Info인지 — 순수 응답확인 핑('응답 가능하신가요?')은 합의로 치지 않는다(빈 핑 차단).
+# 짧은데 핑 문구가 거의 전부일 때만 비실질(긴 메시지는 핑 문구가 섞여도 실질로 본다).
+_HOLLOW_PING = ("응답 가능", "응답가능", "응답 되시", "응답되시", "계신가요", "준비되셨", "들리시",
+                "확인 가능하신", "ready?", "available?", "are you there", "are you available")
+
+
+def _is_substantive(body: str) -> bool:
+    b = (body or "").strip()
+    if not b:
+        return False
+    low = b.lower()
+    return not (len(b) <= 30 and any(h in low for h in _HOLLOW_PING))
+
+
 def _reap_pgroup(pgid: int):
     """프로세스그룹 pgid에 남은 프로세스를 모두 종료한다(백그라운드 서버 누수 차단).
     셸을 self-session으로 띄우면 모든 자손이 pgid==셸pid를 공유한다. 다만 리더(셸)가
@@ -127,7 +141,7 @@ class TaskRef:
     status: TaskStatus
     team: List[int] = field(default_factory=list)   # 이 Task에 배정된 Organt들
     owner: int = 0                                   # 이 산출물의 단일 책임자(accountable)
-    hist_start: int = 0                              # 이 Task 생성 시점의 comm.history 길이(Task별 합의 검사용)
+    participated: set = field(default_factory=set)   # 이 Task 정의에 '실질 협의'로 참여한 동료(보낸/받은 쪽 모두)
     verified: bool = False                           # run으로 한 번이라도 실행됐나(실행 0회 완료 차단)
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
@@ -327,6 +341,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if flow.log:   # 관측: 모든 요청을 '보낸 순서'대로 영속 기록(중첩 PostToolUse 타이밍에 안 묻힘)
             flow.log("req_sent", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),
                      seg=flow.leader_segment, redo=is_redo, body=body[:60])
+        # Task 정의 '실질 협의' 참여 기록 — 보낸 쪽·받은 쪽 모두(누가 물었든: 리더든 peer든). 빈 핑은 제외.
+        # → set_goal 게이트가 'peer 협의도 합의로 인정'하고 '빈 핑은 불인정'하게 만든다(허브 완화·실질 강제).
+        if kind == Kind.INFO and flow.current and _is_substantive(body):
+            for x in (me_id, to):
+                if x in flow.current.team and x != flow.leader:
+                    flow.current.participated.add(x)
         runs_before = flow.current.run_count if flow.current else 0
         try:
             result = await flow.wake(to, owner_body, kind)      # 동료 깨워 응답(중첩 베턴)
@@ -364,8 +384,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                        and flow.comm.open_requests and guard < 30):
                     flow.comm.escalate("베턴 굳음 안전복구")
                     guard += 1
-        if failed:   # 실패는 답으로 넘기지 않고 재요청을 유도
-            return _ok(f"[{to}] 일시 오류로 응답 실패 — 잠시 후 다시 request 하세요. ({result[:120]})")
+        if failed:   # 동료 무응답/일시오류 → 리더가 직접 떠안지 말고 '재배정/recruit'로 분산 유지
+            return _ok(f"[{to}] 응답 실패(무응답/일시오류). **직접 떠안지 마세요** — 같은 도메인의 다른 동료에게 "
+                       f"재배정(request Work)하거나, 없으면 recruit로 풀에서 충원해 맡기세요(분산 유지). 같은 동료 "
+                       f"재시도는 한 번만. ({result[:100]})")
         # 위임 응답엔 owner가 '직접 돌린 실행 증거(시스템 캡처)'를 붙여 돌려준다 — 위임자가 말이 아니라
         # 증거로 '검증 후 수락'할 수 있게(반사적 재요청 대신). owner가 이번에 run을 돌렸을 때만.
         receipt = ""
@@ -506,8 +528,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             await _add_members(g, thread_id, [m for m in team if m != flow.leader])  # 멤버십=팀
             flow.project_channel = ch
             ref = TaskRef(task_id=tid, thread_id=thread_id, block_id=block_id,
-                          status=status, team=team, owner=0,
-                          hist_start=len(flow.comm.history))   # 이 Task의 합의는 '여기 이후'만 인정(Task별)
+                          status=status, team=team, owner=0)   # participated는 빈 set에서 시작(Task별 협의 추적)
             flow.tasks.append(ref)
             flow.current = ref
             flow.comm.reset_task_tracking()   # 새 산출물 단위 → '완료/Redo' 추적 초기화(Redo는 같은 Task 안에서만)
@@ -529,15 +550,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             purpose = (args.get("purpose") or "").strip()
             if not goal:
                 return _ok("오류: goal이 비었습니다.")
-            # Purpose·Goal은 '담당 팀이 함께' 정한다(docs: Task.Team이 Goal을 정한다). 전역 1회가 아니라
-            # 'Task마다, 멤버마다': 이 Task가 열린 뒤(hist_start 이후) '이 Task의 멤버 전원'에게 Info로 물었는지
-            # 검사 → 매 Task를 팀이 모여 정하는 분산 구조를 구조적으로 강제(리더 독단·선지정 차단).
+            # Purpose·Goal은 '담당 팀이 함께' 정한다(docs: Task.Team이 Goal을 정한다). 이 Task 멤버 전원이
+            # '실질 협의(participated)'에 참여했는지 검사 — 리더가 물었든 peer끼리 물었든 인정(허브 완화),
+            # 단 빈 핑('응답 가능?')은 불인정(실질 강제). → 매 Task를 팀이 모여 정하는 분산 구조를 구조적으로 보장.
             members = [x for x in flow.current.team if x != me_id]
-            recent = flow.comm.history[flow.current.hist_start:]
-            consulted = {ev[2] for ev in recent
-                         if ev[0] == "request" and ev[1] == me_id
-                         and str(getattr(ev[4], "value", ev[4])).lower().startswith("i")}
-            missing = [m for m in members if m not in consulted]
+            missing = [m for m in members if m not in flow.current.participated]
             if missing:
                 return _ok(f"확정 거부: 이 Task의 Purpose·Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
                            f"아직 의견을 안 받은 멤버: {flow._names(missing)} — 그들에게 request(Info)로 '이 Task에서 "

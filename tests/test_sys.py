@@ -174,8 +174,8 @@ def test_owner는_work수신자_goal합의후():
     assert "Goal" in blocked["content"][0]["text"] and f.current.owner == 0
     assert not any(c[0] == "req" for c in g.calls)               # 거부 → 게시 안 함
     # 팀 합의 결과를 리더가 set_goal로 확정 — 이 Task의 멤버 전원(12,13)을 Info로 물어야 통과(Task별·멤버별)
-    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))
-    f.comm.history.append(("request", 11, 13, "r", Kind.INFO))
+    f.current.participated.add(12)
+    f.current.participated.add(13)
     asyncio.run(t["set_goal"].handler({"goal": "GET/POST /todos 동작"}))
     assert f.current.status.goal == "GET/POST /todos 동작"
     # 이제 Work 위임 → 받은 동료(12)가 owner가 됨 (수신=소유)
@@ -193,10 +193,10 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
     asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
-    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))    # 12만 물음
+    f.current.participated.add(12)    # 12만 물음
     r1 = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
     assert "거부" in r1["content"][0]["text"] and not f.current.status.goal   # 13 미협의 → 거부
-    f.comm.history.append(("request", 11, 13, "r", Kind.INFO))    # 13도 물음
+    f.current.participated.add(13)    # 13도 물음
     asyncio.run(t["set_goal"].handler({"goal": "동작"}))
     assert f.current.status.goal == "동작"                         # 전원 협의 → 통과
     # 다음 Task에선 추적 리셋(hist_start) → 이전 협의 재사용 불가
@@ -217,10 +217,54 @@ def test_create_task_빈껍데기_purpose는_팀이_set_goal로():
     assert f.current.status.purpose == "" and f.current.status.goal == ""   # 빈 껍데기(리더 선지정 없음)
     r0 = asyncio.run(t["set_goal"].handler({"purpose": "서버", "goal": "동작"}))
     assert "거부" in r0["content"][0]["text"]                                # 멤버 협의 전엔 거부
-    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))               # 팀 회의
+    f.current.participated.add(12)               # 팀 회의
     asyncio.run(t["set_goal"].handler({"purpose": "할 일 저장 문제 해결", "goal": "추가·삭제 시나리오 통과"}))
     assert f.current.status.purpose == "할 일 저장 문제 해결"                  # Purpose가 팀 회의로 채워짐
     assert f.current.status.goal == "추가·삭제 시나리오 통과"
+
+
+def test_협의게이트_peer협의_인정_빈핑_불인정():
+    """set_goal 합의 게이트 개선: (1) peer끼리 협의(member→member)도 합의로 인정 → 리더 허브 완화,
+    (2) 빈 핑('응답 가능하신가요?')은 실질 협의로 안 침(허울뿐인 협의 차단)."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백", 13: "프"})
+    f.start_root("root")
+
+    async def wake(to, b, k):
+        return "ok"
+
+    f.wake = wake
+    tL = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(tL["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(tL["create_task"].handler({"members": "12,13"}))
+    asyncio.run(tL["request"].handler({"to_id": "12", "kind": "Info", "body": "응답 가능하신가요?"}))
+    assert 12 not in f.current.participated                       # 빈 핑은 협의로 불인정
+    asyncio.run(tL["request"].handler({"to_id": "12", "kind": "Info", "body": "백엔드 도메인 목표·성공기준을 제안해줘"}))
+    assert 12 in f.current.participated and 13 not in f.current.participated   # 실질 질문은 인정
+    r = asyncio.run(tL["set_goal"].handler({"purpose": "p", "goal": "g"}))
+    assert "거부" in r["content"][0]["text"]                       # 13 미참여 → 거부
+    f.comm.request(11, 12, "w", Kind.WORK)                         # alive→12 (12가 요청 가능하게)
+    tM = {x.name: x for x in make_guide_tools(f, 12, "member")}
+    asyncio.run(tM["request"].handler({"to_id": "13", "kind": "Info", "body": "API 필드명 id/title로 맞출까요?"}))
+    assert 13 in f.current.participated                           # peer 협의(12→13)로 13도 참여 인정
+
+
+def test_무응답시_재배정_안내_독점아님():
+    """동료가 무응답/일시오류면 리더가 직접 떠안으라 하지 않고 '재배정/recruit'를 안내한다(독점 방지)."""
+    g = FakeGuide()
+    f = _flow(g)                                   # leader 11, member 12
+
+    async def wake(to, b, k):
+        return "API Error: 529 overloaded"         # 무응답/일시오류 모의
+
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"purpose": "p", "goal": "g"}))
+    r = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
+    txt = r["content"][0]["text"]
+    assert "재배정" in txt and "recruit" in txt and "떠안지" in txt   # 독점 대신 분산 안내
 
 
 def test_continue전_고아베턴_복구():
@@ -260,7 +304,7 @@ def test_request_동료_깨우고_베턴복귀():
     f.wake = wake
     tools = _tools(f, 11, "leader")
     asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
-    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))   # 목표 합의 전 팀 Info 협의
+    f.current.participated.add(12)   # 목표 합의 전 팀 Info 협의
     asyncio.run(tools["set_goal"].handler({"goal": "g"}))     # Work 위임은 Goal 확정 후 가능
     res = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "백엔드"}))
     assert len(waked) == 1 and waked[0][0] == 12 and waked[0][2] == Kind.WORK   # 동료 깨움
@@ -453,7 +497,7 @@ def test_위임자측_확인요청_질문으로_표면화():
     f = _flow(g)
     tools11 = _tools(f, 11, "leader")
     asyncio.run(tools11["create_task"].handler({"purpose": "p", "members": "12"}))
-    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))   # 목표 합의 전 팀 Info 협의
+    f.current.participated.add(12)   # 목표 합의 전 팀 Info 협의
     asyncio.run(tools11["set_goal"].handler({"goal": "g"}))   # Work 위임 전 Goal 확정
 
     async def wake(to, body, kind):                    # 12가 위임자(11)에게 확인요청 남기고 반환했다고 모의
@@ -481,7 +525,7 @@ def test_재위임은_Redo로_바운드_정당한첫위임은_허용():
     f.wake = wake
     tools = _tools(f, 11, "leader")
     asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
-    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))   # 목표는 팀 합의 산물
+    f.current.participated.add(12)   # 목표는 팀 합의 산물
     asyncio.run(tools["set_goal"].handler({"goal": "GET/POST /todos 동작"}))
     # 1) 첫 Work 위임(정상) → owner=12, '완료 응답'까지 닫혀 delivered로 기록됨
     asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
@@ -510,7 +554,7 @@ def test_같은턴_병렬중복요청은_합쳐서_재호출안함():
     f = _flow(g)                                   # leader 11, member 12; alive=11
     tools = _tools(f, 11, "leader")
     asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
-    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))
+    f.current.participated.add(12)
     asyncio.run(tools["set_goal"].handler({"goal": "g"}))
     waked = []
 
@@ -542,7 +586,7 @@ def test_되묻기후_재위임은_Redo아님():
     f.wake = wake
     tools = _tools(f, 11, "leader")
     asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
-    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))
+    f.current.participated.add(12)
     asyncio.run(tools["set_goal"].handler({"goal": "g"}))
     asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))   # 되묻기 → 미완
     assert not f.comm.delivered_work(11, 12)                       # 완료 아님 → delivered 기록 안 됨
