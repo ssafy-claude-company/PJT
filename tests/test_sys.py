@@ -158,6 +158,29 @@ def test_owner는_work수신자_goal합의후():
     assert 12 in waked
 
 
+def test_재발사_넛지_검증후_재위임_유도():
+    """이미 산출물 낸 owner에게 같은 Work를 또 보내면 깨우기 전 '넛지'(검증·완료/구체적 결함 유도),
+    진짜 redo면 넛지 1회 뒤 통과 — 맹목 재발사("이미 함")를 구조적으로 줄이되 하드 차단은 아님."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드"})
+    f.start_root("root")
+
+    async def wake(to, b, k):
+        return "구현 완료"
+
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12"}))
+    asyncio.run(t["set_goal"].handler({"goal": "server.js 동작"}))
+    r1 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "server.js 구현"}))
+    assert "응답" in r1["content"][0]["text"] and 12 in f.current.delivered_owners   # 제출 기록
+    r2 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "server.js 구현"}))
+    assert "잠깐" in r2["content"][0]["text"] and 12 not in f.current.delivered_owners  # 넛지(안 깨움)
+    r3 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "X가 빠졌으니 보완"}))
+    assert "응답" in r3["content"][0]["text"]                                          # 진짜 redo는 통과
+
+
 def test_request_동료_깨우고_베턴복귀():
     g = FakeGuide()
     f = _flow(g)

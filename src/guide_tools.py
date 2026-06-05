@@ -126,6 +126,7 @@ class TaskRef:
     verified: bool = False                           # run으로 한 번이라도 실행됐나(실행 0회 완료 차단)
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
+    delivered_owners: set = field(default_factory=set)  # 이 Task에서 Work 산출물을 낸 owner들(재발사 넛지용)
 
 
 class Flow:
@@ -271,6 +272,18 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             _dbg(f"{tag} ✗거부:Goal미확정")
             return _ok("Work 위임 거부: 이 Task의 Goal이 아직 확정되지 않았습니다. 먼저 동료와 request(Info)로 "
                        "목표를 합의하고 set_goal로 확정한 뒤 Work로 맡기세요(목표는 팀 합의의 산물 — 선분배 금지).")
+        # 재발사 넛지(구조적 '검증→판정' 전이): 이미 이 Task 산출물을 낸 owner에게 같은 Work를 또 보내면,
+        # 깨우기 전에 한 번 멈춰 '검증·완료 또는 구체적 결함 명시'로 유도 → 맹목 재발사("이미 함") 차단.
+        # 진짜 redo면 넛지 1회 뒤 통과(하드 차단 아님 — 설계상 '판정 후 재위임'을 강제).
+        if kind == Kind.WORK and to in flow.current.delivered_owners:
+            flow.current.delivered_owners.discard(to)
+            if flow.log:
+                flow.log("redeliver_nudge", frm=me_id, to=to, seg=flow.leader_segment,
+                         task=flow.current.task_id)
+            _dbg(f"{tag} ↩재발사넛지")
+            return _ok(f"잠깐 — {flow._info(to) or to}는 이미 이 Task 산출물을 제출했습니다. 같은 지시를 다시 "
+                       f"보내지 말고: ① Read로 검증해 goal 충족이면 complete_task, ② 동작 검증이 필요하면 QA에게 "
+                       f"request(Work), ③ 정말 보완이 필요하면 '무엇이/왜 부족한지' 구체적 결함을 적어 보내세요(그땐 통과).")
         frame = flow.comm.request(me_id, to, "pending", kind)   # 베턴 점유(alive→to)
         thread_id = flow.current.thread_id
         # Owner = 그 일을 Work로 받은 동료(수신=소유). 선배정이 아니라 요청으로 owner가 떠오른다 —
@@ -320,6 +333,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     guard += 1
         if failed:   # 실패는 답으로 넘기지 않고 재요청을 유도
             return _ok(f"[{to}] 일시 오류로 응답 실패 — 잠시 후 다시 request 하세요. ({result[:120]})")
+        if kind == Kind.WORK and flow.current is not None:
+            flow.current.delivered_owners.add(to)   # 산출물 제출 기록 → 동일 Work 재발사 시 넛지
         return _ok(f"[{to} 응답] {result[:600]}")
 
     tools.append(request)
