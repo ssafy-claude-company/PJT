@@ -138,10 +138,10 @@ async def main():
         # 역할: 목표는 팀 합의로 정하고(set_goal), Work 위임 본문은 '구현 스펙'이 아니라
         # '측정가능한 목표'이며, 받은 owner가 구현·검증·증거보고까지 끝까지 책임진다.
         allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
-        turns = 34
+        turns = 45              # 결과형 Goal은 owner가 방법을 정해 구현·검증해야 하므로 여유
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
-            turns = 64          # 합의+분배+조율이 얹혀 턴이 더 필요
+            turns = 110         # Task마다 빈 껍데기→팀 회의(멤버별 Info)+분배+조율이 얹혀 턴이 더 필요
         label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
         # 리더 추론 기록(관측): '왜 재호출하나'를 추측 말고 직접 보려고 매 발화를 audit에 남긴다.
         narrate = ((lambda t: audit.record("narration", actor=organt_id, role=label, text=t[:800]))

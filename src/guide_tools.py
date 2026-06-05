@@ -482,13 +482,14 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         tools.append(create_project)
 
         @tool("create_task",
-              "Task 공간을 연다 — **Purpose(풀어야 할 문제)만** 부여한다. Goal·Owner는 미리 못 정한다(중앙집권 방지): "
-              "**Goal은 Task 안에서 팀과 request(Info)로 합의한 뒤 set_goal로 확정**하고, **Owner는 그 일을 Work로 "
-              "받은 동료가 된다**(선배정 금지). members=함께 논의·작업할 동료(비우면 프로젝트팀 전체).",
-              {"purpose": str, "members": str})
+              "Task '빈 껍데기'를 연다 — **Purpose도 비운 채 멤버만 배정**한다(리더가 할 일을 미리 못 박음 = 중앙집권 "
+              "방지). 이후 **배정된 팀이 모여(request Info) Purpose(풀 문제)·Goal(성공기준)을 함께 정해 set_goal로 "
+              "확정**한다. Owner는 그 일을 Work로 받은 동료가 된다(선배정 금지). members=이 Task를 함께 정하고 수행할 "
+              "동료(비우면 프로젝트팀 전체).",
+              {"members": str})
         async def create_task(args):
             if flow.current is not None and flow.current.status.status != "완료":
-                return _ok(f"현재 Task({flow.current.task_id}: {flow.current.status.purpose[:24]})가 아직 "
+                return _ok(f"현재 Task({flow.current.task_id}: {(flow.current.status.purpose or '미정')[:24]})가 아직 "
                            f"'진행'입니다 — 단일흐름은 한 번에 Task 하나만. complete_task로 먼저 마감한 뒤 "
                            f"다음 Task를 여세요(여러 산출물도 하나씩 순차로).")
             ch = flow.project_channel or flow.user_channel
@@ -497,9 +498,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             picked = _resolve_members(args.get("members", ""), flow, pool)
             base = picked if picked else [m for m in flow.project_team if m != flow.leader]
             team = _uniq([flow.leader] + base)
-            # Goal·Owner는 비워둔다 — Goal은 팀 합의(set_goal)로, Owner는 Work-request 수신으로 떠오른다
-            # (판 걸 때 업무를 분배하던 중앙집권 구조 제거: 분배의 출처 = 실제 요청).
-            status = TaskStatus(task_id=tid, purpose=args["purpose"], status="진행",
+            # Purpose·Goal·Owner 모두 비워둔다 — 빈 껍데기. Purpose·Goal은 배정된 팀이 모여 set_goal로 정하고,
+            # Owner는 Work-request 수신으로 떠오른다(리더가 할 일·목표·담당을 미리 박던 중앙집권 제거).
+            status = TaskStatus(task_id=tid, purpose="", status="진행",
                                 goal="", owner="", group=_group_of(flow, team))
             block_id, thread_id = await g.open_task(ch, status)
             await _add_members(g, thread_id, [m for m in team if m != flow.leader])  # 멤버십=팀
@@ -510,25 +511,27 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.tasks.append(ref)
             flow.current = ref
             flow.comm.reset_task_tracking()   # 새 산출물 단위 → '완료/Redo' 추적 초기화(Redo는 같은 Task 안에서만)
-            return _ok(f"task={tid} thread={thread_id} 팀={flow._names(team)} — 이제 팀과 request(Info)로 "
-                       f"Goal을 합의해 set_goal로 확정하고, 일을 맡길 동료에게 Work로 요청하세요(받은 동료가 owner).")
+            return _ok(f"task={tid} (빈 껍데기) thread={thread_id} 팀={flow._names(team)} — 배정된 팀 전원에게 "
+                       f"request(Info)로 'Purpose(풀 문제)·Goal(성공기준)'을 물어 함께 정한 뒤 set_goal로 확정하세요 "
+                       f"(리더 단독 작성 금지). 그 다음 일을 맡길 동료에게 Work로 위임(받은 동료가 owner).")
         tools.append(create_task)
 
         @tool("set_goal",
-              "이번 Task의 **측정가능한 Goal(성공 기준·결과)**을 팀과 합의해 확정·기록한다. 리더 혼자/선지정 금지 — "
-              "**이 Task의 멤버 전원**에게 request(Info)로 '네 도메인의 목표·성공기준'을 물어 수렴한 결과를 적는다. "
-              "Goal엔 '무엇이 되면 성공인가'(측정 가능한 결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·스택으로 만들지'"
-              "(구현 방법)는 쓰지 말 것 — 그건 owner가 정한다. Work 위임은 Goal 확정 뒤에만 가능.",
-              {"goal": str})
+              "팀 회의로 정한 이번 Task의 **Purpose(풀 문제)와 Goal(측정가능한 성공기준)**을 확정·기록한다. 리더 "
+              "단독/선지정 금지 — **이 Task의 멤버 전원**에게 request(Info)로 'Purpose·네 도메인의 목표·성공기준'을 "
+              "물어 수렴한 결과를 적는다. Goal엔 '무엇이 되면 성공인가'(결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·"
+              "스택으로 만들지'(구현 방법)는 쓰지 말 것 — 그건 owner가 정한다. Work 위임은 확정 뒤에만 가능.",
+              {"purpose": str, "goal": str})
         async def set_goal(args):
             if flow.current is None:
                 return _ok("오류: 진행 중인 Task가 없습니다. create_task로 먼저 여세요.")
             goal = (args.get("goal") or "").strip()
+            purpose = (args.get("purpose") or "").strip()
             if not goal:
                 return _ok("오류: goal이 비었습니다.")
-            # 목표는 '담당 팀이 함께' 정한다(docs: Task.Team이 Goal을 정한다). 전역 1회가 아니라 'Task마다,
-            # 멤버마다': 이 Task가 열린 뒤(hist_start 이후) 리더가 '이 Task의 멤버 전원'에게 Info로 의견을
-            # 물었는지 검사한다 → 매 Task를 팀이 모여 정하는 분산 구조를 구조적으로 강제(리더 독단·선지정 차단).
+            # Purpose·Goal은 '담당 팀이 함께' 정한다(docs: Task.Team이 Goal을 정한다). 전역 1회가 아니라
+            # 'Task마다, 멤버마다': 이 Task가 열린 뒤(hist_start 이후) '이 Task의 멤버 전원'에게 Info로 물었는지
+            # 검사 → 매 Task를 팀이 모여 정하는 분산 구조를 구조적으로 강제(리더 독단·선지정 차단).
             members = [x for x in flow.current.team if x != me_id]
             recent = flow.comm.history[flow.current.hist_start:]
             consulted = {ev[2] for ev in recent
@@ -536,13 +539,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                          and str(getattr(ev[4], "value", ev[4])).lower().startswith("i")}
             missing = [m for m in members if m not in consulted]
             if missing:
-                return _ok(f"목표 지정 거부: 이 Task의 Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
+                return _ok(f"확정 거부: 이 Task의 Purpose·Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
                            f"아직 의견을 안 받은 멤버: {flow._names(missing)} — 그들에게 request(Info)로 '이 Task에서 "
-                           f"네 도메인의 목표·성공기준'을 먼저 물어 수렴한 뒤 set_goal로 기록하세요(파일·엔드포인트 "
-                           f"같은 구현 스펙 말고 '측정가능한 결과'로).")
+                           f"풀 문제·네 도메인의 목표·성공기준'을 먼저 물어 수렴한 뒤 set_goal로 기록하세요(파일·"
+                           f"엔드포인트 같은 구현 스펙 말고 '측정가능한 결과'로).")
+            if purpose:
+                flow.current.status.purpose = purpose
             flow.current.status.goal = goal
             await flow.refresh(flow.current)
-            return _ok(f"task={flow.current.task_id} Goal 확정: {goal[:100]}")
+            return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}")
         tools.append(set_goal)
 
         @tool("complete_task",

@@ -87,12 +87,14 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
         # 역할: 목표는 팀 합의로 정하고(set_goal), Work 위임 본문은 '스펙'이 아니라
         # '측정가능한 목표'이며, 받은 owner가 구현·검증까지 끝까지 책임진다.
         allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
+        turns = 45
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
+            turns = 110         # Task마다 빈 껍데기→팀 회의+분배+조율로 턴이 더 필요(기본 16은 부족)
         state_path = cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"
         label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
         return Organt(cfg, build_options(
-            cfg, allowed_tools=allowed, mcp_servers={"guide": server},
+            cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={
                 "PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label, flow=flow)])],
                 "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit, actor=organt_id, role=label)])],

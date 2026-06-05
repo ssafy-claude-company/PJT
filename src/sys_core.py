@@ -204,11 +204,13 @@ class Sys:
                 f"owner가 됨), 겹치거나 충돌하면 그때 공정하게 조율·결정(수렴). "
                 f"즉 **분해·담당은 회의의 산물**이고 당신은 진행자입니다.\n"
                 f"  합의된 계획대로 **산출물 단위**로 진행하되 **단일흐름이라 Task는 한 번에 하나만**(complete_task로 "
-                f"마감해야 다음). 각 Task는 **create_task(purpose)로 열고 → 그 Task의 멤버 전원에게 request(Info)로 "
-                f"'네 도메인의 목표·성공기준'을 물어 수렴한 뒤 set_goal로 확정**(Task마다 그 담당 팀이 함께 정함 — 전역 "
-                f"1회로 끝내지 말 것)**. **Goal은 '무엇이 되면 성공인가'(측정가능한 결과·시나리오)만 적고, '어떤 파일·"
-                f"엔드포인트·스택으로 만들지'는 적지 마세요 — 그 구현 결정은 owner의 몫**(리더가 작업물의 구현 지점을 "
-                f"지정해 버리면 중앙집권입니다). 그런 다음 **그 일을 맡기로 한 동료에게 request(Work)로 위임**(그 동료가 "
+                f"마감해야 다음). 각 Task는 **‘빈 껍데기’로 엽니다 — create_task(members)에 Purpose를 적지 마세요"
+                f"(리더가 할 일을 미리 못 박지 않음)**. 연 직후 **그 Task의 멤버 전원에게 request(Info)로 한 번씩 "
+                f"'이 Task에서 풀 문제(Purpose)·네 도메인의 목표·성공기준'을 물어**(같은 사람에게 같은 질문 반복 금지 — "
+                f"한 번 묻고 답을 반영), 받은 답을 **수렴해 set_goal(purpose, goal)로 Purpose·Goal을 함께 확정**합니다 "
+                f"(Task마다 그 담당 팀이 모여 정함). **Goal은 '무엇이 되면 성공인가'(측정가능한 결과·시나리오)만 적고, "
+                f"'어떤 파일·엔드포인트·스택으로 만들지'는 적지 마세요 — 구현 결정은 owner의 몫**(리더가 작업물의 구현 "
+                f"지점을 지정하면 중앙집권). 그런 다음 **그 일을 맡기로 한 동료에게 request(Work)로 위임**(그 동료가 "
                 f"owner가 되어 구현 방법을 스스로 정해 직접 구현)하세요. 당신이 모든 걸 직접 "
                 f"구현하지 말 것(중앙집권 금지). 맞물리는 인터페이스는 owner끼리 request(Info)로 합의. **owner가 산출물을 "
                 f"내면 곧장 다시 시키지 말고 — 먼저 '검증'하세요**: run으로 실제 동작을 확인(또는 QA에게 위임)하고, "
@@ -340,6 +342,19 @@ class Sys:
             cont = 0
             while ((flow.current is not None or "턴 한도 도달" in (result or ""))
                    and cont < self.max_continue):
+                # 위임 도중 리더 턴이 끝나면(턴 한도) 깨우던 동료가 취소되며 베턴이 그 동료에 굳는다.
+                # 그대로 리더를 다시 띄우면 '두 흐름'처럼 모든 요청이 '활성=동료'로 거부된다 →
+                # 먼저 베턴을 리더로 강제 복구(고아 프레임 escalate-drain)한 뒤 이어간다.
+                if flow.comm.alive != lead and not flow.comm.done:
+                    guard = 0
+                    while (flow.comm.alive != lead and not flow.comm.done
+                           and flow.comm.open_requests and guard < 64):
+                        try:
+                            flow.comm.escalate("continue 전 베턴 복구(위임 고아 정리)")
+                        except CommError:
+                            break
+                        guard += 1
+                    self._log("baton_recover_continue", alive=flow.comm.alive, recovered=(flow.comm.alive == lead))
                 cont += 1
                 flow.leader_segment = cont + 1
                 self._log("continue_incomplete",

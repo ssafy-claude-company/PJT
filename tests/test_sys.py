@@ -196,6 +196,47 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     assert "거부" in r3["content"][0]["text"]                      # Task별로 다시 합의해야 함
 
 
+def test_create_task_빈껍데기_purpose는_팀이_set_goal로():
+    """create_task는 Purpose를 비운 '빈 껍데기'로 연다(리더가 할 일 선지정 금지) — Purpose·Goal은 그 Task
+    멤버 협의 후 set_goal(purpose, goal)로 함께 확정된다(분산: 무엇을 풀지도 팀이 정함)."""
+    g = FakeGuide()
+    f = _flow(g)                                   # leader 11, member 12
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    assert f.current.status.purpose == "" and f.current.status.goal == ""   # 빈 껍데기(리더 선지정 없음)
+    r0 = asyncio.run(t["set_goal"].handler({"purpose": "서버", "goal": "동작"}))
+    assert "거부" in r0["content"][0]["text"]                                # 멤버 협의 전엔 거부
+    f.comm.history.append(("request", 11, 12, "r", Kind.INFO))               # 팀 회의
+    asyncio.run(t["set_goal"].handler({"purpose": "할 일 저장 문제 해결", "goal": "추가·삭제 시나리오 통과"}))
+    assert f.current.status.purpose == "할 일 저장 문제 해결"                  # Purpose가 팀 회의로 채워짐
+    assert f.current.status.goal == "추가·삭제 시나리오 통과"
+
+
+def test_continue전_고아베턴_복구():
+    """위임 도중 리더 턴이 끝나 베턴이 동료에 굳으면(고아), continue가 리더를 다시 띄우기 전에 베턴을
+    리더로 강제 복구한다 — '활성=동료'로 모든 요청이 거부되는 '두 흐름' 버그 방지."""
+    import types
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"}, workspace="/ws", max_continue=3)
+    calls = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        calls.append(role)
+        if len(calls) == 1:                        # seg1: 위임 도중 끝남 → 베턴이 동료(12)에 굳음
+            flow.current = types.SimpleNamespace(
+                task_id="t1", status=types.SimpleNamespace(status="진행", result=None))
+            flow.comm.request(11, 12, "leak", Kind.WORK)        # alive→12(고아 프레임)
+            return "작업 중 (⚠ 턴 한도 도달 — 미완)"
+        assert flow.comm.alive == 11, f"continue 진입 시 베턴이 리더가 아님: {flow.comm.alive}"  # 복구됨
+        flow.current = None
+        return "완료"
+
+    s.run_turn = fake_run_turn
+    asyncio.run(s.handle_user_input(500, 11, "큰 작업", root_id="r"))
+    assert len(calls) == 2
+    assert any(e["event"] == "baton_recover_continue" and e.get("recovered") for e in s.flow_log)
+
+
 def test_request_동료_깨우고_베턴복귀():
     g = FakeGuide()
     f = _flow(g)
