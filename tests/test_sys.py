@@ -45,6 +45,17 @@ def _tools(f, me, role):
     return {t.name: t for t in make_guide_tools(f, me, role)}
 
 
+def test_서브프로세스_사망_143은_일시오류로_재시도대상():
+    """SDK 서브프로세스가 SIGTERM(143)/파이프끊김으로 죽으면 일시오류로 보고 resume 재시도해야 한다
+    — 작업이 끝났는데 마무리 메시지만 깨져 에러가 최종 응답으로 올라오는 일 방지."""
+    from src.organt import _is_transient_api_error
+    assert _is_transient_api_error("API Error: Command failed with exit code 143 (exit code: 143)")
+    assert _is_transient_api_error("API Error: Fatal error in message reader")
+    assert _is_transient_api_error("API Error: 529 overloaded")
+    assert not _is_transient_api_error("배포 완료. 라이브 URL: https://x")   # 정상 응답은 재시도 아님
+    assert not _is_transient_api_error("API Error: invalid request 400")    # 비일시 오류는 재시도 아님
+
+
 def test_member는_request_recruit_run():
     f = _flow(FakeGuide())
     assert {t.name for t in make_guide_tools(f, 12, "member")} == {"request", "recruit", "run"}

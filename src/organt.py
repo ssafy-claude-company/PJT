@@ -49,11 +49,14 @@ _MAX_API_RETRY = 3   # 일시적 API 오류(과부하 등) 재시도 횟수
 
 
 def _is_transient_api_error(text: str) -> bool:
-    """응답이 일시적 API 오류(429/5xx/529 과부하·rate limit)로 보이는지 — 재시도 대상."""
+    """응답이 일시적 오류(429/5xx/529 과부하·rate limit, 또는 SDK 서브프로세스 사망=SIGTERM/143·
+    파이프 끊김·메시지리더 크래시)로 보이는지 — 같은 세션으로 resume 재시도 대상."""
     t = (text or "").strip().lower()
     if not t.startswith("api error"):
         return False
-    return any(s in t for s in ("429", "500", "502", "503", "529", "overload", "rate", "timeout"))
+    return any(s in t for s in ("429", "500", "502", "503", "529", "overload", "rate", "timeout",
+                                "command failed", "exit code", "sigterm", "143", "137",
+                                "broken pipe", "message reader", "connection"))
 
 
 def _strip_decoration(text: str) -> str:
