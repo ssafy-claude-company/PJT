@@ -158,14 +158,17 @@ def test_owner는_work수신자_goal합의후():
     assert 12 in waked
 
 
-def test_재발사_넛지_검증후_재위임_유도():
-    """이미 산출물 낸 owner에게 같은 Work를 또 보내면 깨우기 전 '넛지'(검증·완료/구체적 결함 유도),
-    진짜 redo면 넛지 1회 뒤 통과 — 맹목 재발사("이미 함")를 구조적으로 줄이되 하드 차단은 아님."""
+def test_재발사_차단_owner는_한번만_run검증후_재위임():
+    """owner가 산출물을 낸 뒤 같은 Work 재발사는 **지속 차단**(검증 전엔 안 풀림) → owner 재깨움 0.
+    run으로 검증하면 잠금 해제 → 증거기반 redo만 허용. 맹목 '이미 함' 루프를 구조적으로 0."""
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드"})
     f.start_root("root")
+    f.workspace = "/tmp"
+    waked = []
 
     async def wake(to, b, k):
+        waked.append(to)
         return "구현 완료"
 
     f.wake = wake
@@ -174,11 +177,17 @@ def test_재발사_넛지_검증후_재위임_유도():
     asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12"}))
     asyncio.run(t["set_goal"].handler({"goal": "server.js 동작"}))
     r1 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "server.js 구현"}))
-    assert "응답" in r1["content"][0]["text"] and 12 in f.current.delivered_owners   # 제출 기록
+    assert "응답" in r1["content"][0]["text"] and 12 in f.current.delivered_owners
+    # 같은 Work 재발사 → 차단(지속). 검증 전엔 몇 번을 보내도 안 풀리고 owner는 안 깨워진다.
     r2 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "server.js 구현"}))
-    assert "잠깐" in r2["content"][0]["text"] and 12 not in f.current.delivered_owners  # 넛지(안 깨움)
-    r3 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "X가 빠졌으니 보완"}))
-    assert "응답" in r3["content"][0]["text"]                                          # 진짜 redo는 통과
+    r3 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "server.js 다시"}))
+    assert "검증" in r2["content"][0]["text"] and "검증" in r3["content"][0]["text"]
+    assert 12 in f.current.delivered_owners and waked == [12]   # owner는 단 한 번만 깨워짐
+    # run 검증 → 잠금 해제
+    asyncio.run(t["run"].handler({"command": "echo ok"}))
+    assert not f.current.delivered_owners
+    r4 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "X 빠짐 보완"}))
+    assert "응답" in r4["content"][0]["text"] and waked == [12, 12]   # 검증 후 증거기반 redo만 통과
 
 
 def test_request_동료_깨우고_베턴복귀():
