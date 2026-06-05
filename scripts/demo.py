@@ -121,7 +121,7 @@ async def main():
     for sp in cfg.audit_log_path.parent.glob("organt_state_*.json"):
         sp.unlink()
 
-    def organt_builder(organt_id, server, role):
+    def organt_builder(organt_id, server, role, flow=None):
         # 담당자(리더)도 같은 직군 기여자(Write/run 보유) + 구조적 조율 도구(LEADER_TOOLS).
         allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
         turns = 34
@@ -131,7 +131,7 @@ async def main():
         label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
         return Organt(cfg, build_options(
             cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
-            hooks={"PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label)])],
+            hooks={"PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label, flow=flow)])],
                    "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit, actor=organt_id, role=label)])]},
         ), state_path=str(cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"))
 

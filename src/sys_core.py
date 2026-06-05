@@ -210,7 +210,8 @@ class Sys:
             f"{self._PRINCIPLE}\n\n"
             f"**기획 단계에서 '당신 도메인의 할 일·담당'을 물으면**, 당신 전문 영역(디자인이면 디자인, 서버면 서버 등)의 "
             f"할 일을 스스로 정의해 구체적으로 제안하고 당신이 맡을 것을 밝히세요 — 리더가 당신 도메인을 대신 정하게 두지 "
-            f"말 것(그 분야 전문가는 당신입니다).\n"
+            f"말 것(그 분야 전문가는 당신입니다). **단 협의(Info) 단계에선 '제안·합의'만 — 파일 구현(Write)은 금지됩니다. "
+            f"실제 구현은 Goal이 합의된 뒤 Work로 위임받았을 때만 하세요(협의 중 선구현 금지 — 구조적으로 차단됨).**\n"
             f"**당신이 이 산출물의 owner(책임자)라면**, 받은 목표를 끝까지 책임지고 **직접 구현·검증까지 몰고 가세요** "
             f"— 리더에게 되넘기지 말 것. 산출물은 **최소 동작판이 아니라 완성·정돈된 판**으로 만드세요 — 그 종류 "
             f"결과물이 당연히 갖출 요소·손맛·디자인을 갖추고, 리더/동료의 깊이 비평이 오면 변명 말고 끌어올리세요. "
@@ -230,7 +231,7 @@ class Sys:
         last = ""
         for attempt in range(3):
             server = build_guide_server(flow, organt_id, role)
-            organt = self.organt_builder(organt_id, server, role)
+            organt = self.organt_builder(organt_id, server, role, flow)
             try:
                 return await organt.handle(self._prompt(body, kind, role, organt_id))
             except Exception as e:

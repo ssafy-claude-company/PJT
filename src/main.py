@@ -81,7 +81,7 @@ async def _connect(token: str) -> Tuple[discord.Client, asyncio.Task]:
 def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
     """role에 맞는 도구·권한·훅·State를 갖춘 Organt를 만드는 빌더를 돌려준다."""
     bot_info = bot_info or {}
-    def organt_builder(organt_id, server, role):
+    def organt_builder(organt_id, server, role, flow=None):
         # 담당자(리더)도 팀과 같은 직군의 기여자(Write/Edit/run 보유) — 자기 도메인은 직접, 다른 도메인은
         # 위임·합의(create_task 합의강제 + QA게이트로 중앙집권 완화).
         allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
@@ -92,7 +92,7 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
         return Organt(cfg, build_options(
             cfg, allowed_tools=allowed, mcp_servers={"guide": server},
             hooks={
-                "PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label)])],
+                "PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label, flow=flow)])],
                 "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit, actor=organt_id, role=label)])],
             },
         ), state_path=str(state_path))
