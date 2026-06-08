@@ -16,6 +16,14 @@
 실행:
   python scripts/create_discord_bots.py 10                 # 봇 10개(슬롯 8번부터)
   python scripts/create_discord_bots.py 10 myteam 8        # 이름 접두사 myteam, .env 슬롯 8번부터
+  → 설치된 '진짜 크롬'이 '저장 프로필'(.chrome_bot_profile)로 뜬다. **처음 한 번만 디스코드 로그인**하면
+    이후 실행부턴 로그인이 유지된다(매번 로그인 X). 크로미움 다운로드도 필요 없다.
+
+[옵션] 이미 디버그 모드로 켜둔 크롬에 '그대로 붙기'(로그인 세션 재사용):
+  1) 크롬을 이렇게 띄운다(일반 창엔 보안상 못 붙음 — 반드시 이 플래그로):
+       chrome.exe --remote-debugging-port=9222 --user-data-dir="%TEMP%\chrome-bot"
+  2) 그 창에서 디스코드 로그인 → 환경변수 주고 실행:
+       set CHROME_CDP=http://localhost:9222 && python scripts/create_discord_bots.py 10
 산출물(현재 폴더):
   created_bots.env   # 'ORGANT_BOT_8=...' 형식 — 운영 서버 .env에 붙여넣으면 핫리로드가 자동 인식
   invite_urls.txt    # 봇별 '원터치 초대' 링크 — 클릭 한 번씩 서버에 추가(당신의 '클릭 한 번 개입')
@@ -23,6 +31,7 @@
 봇 추가 후 흐름(요약): created_bots.env → 서버 .env 에 붙여넣기 → invite_urls.txt 링크 클릭(봇당 1회) → 끝.
 이름(한국 이름)·직군(역할)은 운영 리스너가 알아서 붙입니다(이 스크립트는 토큰만 뽑음).
 """
+import os
 import random
 import string
 import sys
@@ -90,16 +99,39 @@ def main() -> None:
     created = []   # (name, token, app_id)
 
     with sync_playwright() as pw:
-        try:                                                    # 설치된 '크롬'을 그대로 사용(크로미움 다운로드 불필요)
-            browser = pw.chromium.launch(headless=False, channel="chrome")
-        except Exception:                                       # 크롬이 없으면 번들 크로미움으로 폴백
-            print("크롬 실행 실패 — 번들 크로미움으로 시도(없으면: python -m playwright install chromium)")
-            browser = pw.chromium.launch(headless=False)
-        ctx = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
-        page = ctx.new_page()
+        # (B) CHROME_CDP가 있으면 '디버그 모드로 켜둔 크롬'에 그대로 붙는다(로그인 세션 재사용).
+        #     크롬을 다음처럼 띄워야 함(디버그 포트 없이 켜둔 일반 창엔 보안상 못 붙음):
+        #       chrome.exe --remote-debugging-port=9222 --user-data-dir="%TEMP%\chrome-bot"
+        #     그 창에서 디스코드 로그인 후, set CHROME_CDP=http://localhost:9222 로 실행.
+        # (A) 없으면 '설치된 크롬'을 '저장 프로필'로 실행 → 처음 한 번만 로그인하면 이후 계속 유지.
+        cdp = os.environ.get("CHROME_CDP", "").strip()
+        profile = os.environ.get("CHROME_PROFILE", str(Path.cwd() / ".chrome_bot_profile"))
+        browser = ctx = None
+        using_cdp = False
+        if cdp:
+            try:
+                browser = pw.chromium.connect_over_cdp(cdp)
+                ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+                using_cdp = True
+                print(f"[연결] 디버그 크롬에 붙음({cdp}) — 로그인 세션 그대로 사용")
+            except Exception as e:
+                print(f"CDP 연결 실패({type(e).__name__}: {e}) — 크롬 직접 실행으로 전환")
+        if ctx is None:
+            try:                                                # 설치된 '크롬'을 저장 프로필로 실행
+                ctx = pw.chromium.launch_persistent_context(
+                    profile, headless=False, channel="chrome", args=["--start-maximized"])
+            except Exception:                                   # 크롬 없으면 번들 크로미움
+                print("크롬 실행 실패 — 번들 크로미움 시도(없으면: python -m playwright install chromium)")
+                ctx = pw.chromium.launch_persistent_context(profile, headless=False)
+            print(f"[실행] 크롬 실행 — 저장 프로필: {profile} (처음 한 번만 로그인하면 다음부턴 유지)")
+        try:
+            ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin="https://discord.com")
+        except Exception:
+            pass
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(PORTAL)
-        print("\n[1] 열린 브라우저에서 디스코드에 로그인하세요(캡차·2FA 포함).")
-        input("    로그인 끝나고 'Applications' 목록이 보이면 여기서 Enter ▶ ")
+        print("\n[1] 이 크롬 창에서 디스코드에 로그인돼 있어야 합니다(처음이면 지금 로그인·캡차·2FA).")
+        input("    'Applications' 목록이 보이면 여기서 Enter ▶ ")
 
         for i in range(count):
             name = f"{prefix}-{start_idx + i}-{_rand()}"
@@ -124,7 +156,13 @@ def main() -> None:
                     pass
                 print(f"    ({i + 1}/{count}) {name}  ✗ 실패: {type(e).__name__}: {str(e)[:120]}\n"
                       f"        (error_{i}.png 스크린샷 확인 — 포털 UI가 바뀌었으면 _grab_token 셀렉터 조정)")
-        browser.close()
+        try:
+            if using_cdp and browser is not None:
+                browser.close()      # CDP: 연결만 끊김(당신 크롬 창은 유지)
+            elif ctx is not None:
+                ctx.close()          # 저장 프로필: 다음 실행 때 재사용(로그인 유지)
+        except Exception:
+            pass
 
     # 산출물: .env 토큰 줄 + 초대 링크
     env_path, inv_path = Path("created_bots.env"), Path("invite_urls.txt")
