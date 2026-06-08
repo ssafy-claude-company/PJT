@@ -203,7 +203,12 @@ async def run() -> None:
                 return
             ch = message.channel.id
             is_project = ch in sysm.projects        # 등록된 프로젝트 채널이면 '개입'
+            # 도착 가시화(요청 미수신 진단): 봇이 본 모든 비-봇 메시지를 채널 정보와 함께 남긴다.
+            log.info("메시지 도착: ch=%s (main=%s, project=%s) author=%s content=%r",
+                     ch, ch == cfg.channel_id, is_project, message.author.id, (message.content or "")[:80])
             if ch != cfg.channel_id and not is_project:
+                log.info("  → 무시(감시 안 하는 채널). 메인=%s 프로젝트=%s",
+                         cfg.channel_id, list(sysm.projects))
                 return
             req = parse(
                 message_id=str(message.id),
@@ -217,6 +222,7 @@ async def run() -> None:
                     req = Request(to_id=None, kind=Kind.WORK, body=message.content.strip(),
                                   from_id=message.author.id, message_id=str(message.id))
                 else:
+                    log.info("  → 무시(메인 채널은 '[Request] To: @봇' 형식만 시작). 받은 형식이 아님.")
                     return                   # 메인 채널은 구조적 [Request]만 시작
             if str(message.id) in seen:      # 같은 메시지 두 번 처리 금지(세션 내 재전달 가드)
                 return
