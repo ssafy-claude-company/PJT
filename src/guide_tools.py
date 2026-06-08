@@ -612,7 +612,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 첫 Task = '전원 기획 회의': 채용 풀 '전체'를 강제로 멤버에 넣는다(리더가 프로젝트팀을 좁혀
             # 일부를 빼두거나, 좁은 1인 Task로 후퇴하는 걸 차단 — 정의는 놀던 인력까지 모두 모여서). 풀 전원을
             # 프로젝트 팀에도 반영해 이후 구현 Task에서도 쓸 수 있게 한다. 구현 Task는 owner 중심으로 좁혀도 됨.
-            is_first = not flow.tasks
+            # 새 프로젝트의 첫 Task만 '전원 기획'으로 강제한다. 기존 프로젝트 '개입(수정)'은 타깃 작업이므로
+            # 전원 소집하지 않고 리더가 고장난 도메인 담당만 부른다(작은 수정에 10명 소집 방지).
+            is_first = not flow.tasks and not getattr(flow, "intervention", None)
             if is_first:
                 # 직군이 정해진 동료 전원 강제(놀던 인력 포함). '예비'(직군 미배정)는 제외 — 필요할 때
                 # recruit(role=…)로 그 직군을 채용해 합류시킨다(전원 기획엔 실제 직군 보유자만).

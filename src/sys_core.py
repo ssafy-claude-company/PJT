@@ -353,11 +353,17 @@ class Sys:
             flow.project_channel = int(channel_id)   # 기존 채널 재사용 → create_project는 no-op
             flow.workspace = proj["workspace"]
             flow.project_id, flow.intervention = proj["id"], proj
-            body = (f"[프로젝트 {proj['id']} 개입] 이 프로젝트엔 이미 작업공간·산출물이 있습니다. "
-                    f"create_project를 다시 만들지 말고, **먼저 run으로 아래 보고된 증상을 실제로 재현·관찰**한 "
-                    f"뒤 그 증상을 일으키는 원인 코드를 찾아 고치세요(스펙 문서에서 유추하거나 스펙의 미완 기능을 "
-                    f"임의로 구현하지 말 것 — 오직 아래 보고된 그 증상만). 동작·물리·판정 문제는 서버(server.js), "
-                    f"색·레이아웃·그리기 순서만 클라이언트(public/)입니다.\n보고된 증상/요청: {user_text}")
+            body = (
+                f"[프로젝트 {proj['id']} 개입 — 기존 산출물 수정] 이미 작업공간·산출물이 있습니다. create_project 다시 만들지 마세요.\n"
+                f"사용자가 보고한 요청/증상: {user_text}\n\n"
+                f"[개입도 정식 절차로 — 즉흥·독단 수정 금지] **당신 개인 견해로 곧장 파일을 고치지 마세요.** 아래 순서를 지키세요:\n"
+                f"① 재현/확인: run으로 보고된 증상을 실제로 재현하고 관련 코드를 Read로 확인해 '진짜 원인'을 파악(스펙·추측에서 "
+                f"유추 금지). ② Task 개설 + 목표 확정: create_task(members=고장난 부분의 도메인 담당자)로 수정 Task를 열고, "
+                f"**재현된 사실과 사용자의 보고에 근거해** set_goal로 Purpose(무엇이 잘못됐나)·Goal(무엇이 되면 '고쳐짐'인가 — "
+                f"측정가능)을 확정하세요. **목표(Goal)가 정해지기 전엔 파일 수정이 구조적으로 막힙니다.** 당신 생각이 아니라 "
+                f"보고된 그 문제에만 한정 — 요청하지 않은 기능 추가·임의 개선 금지. ③ 위임: 그 도메인 owner에게 request(Work)로 "
+                f"수정을 맡기세요(당신 도메인이면 직접). 혼자 다 떠안지 말 것. ④ 검증 후 마감: run으로 Goal 충족을 확인하고 "
+                f"complete_task. 동작·물리·판정 문제는 server.js, 색·레이아웃·그리기 순서만 public/입니다.")
             self._log("intervention", project=proj["id"], text=user_text[:60])
         else:
             flow.workspace = self.workspace

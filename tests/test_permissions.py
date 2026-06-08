@@ -112,10 +112,10 @@ def test_flow없으면_게이트_미적용():
 
 
 class _FakeTask:
-    """Fix B용 최소 Task: owner와 status.owner(표시용)만."""
-    def __init__(self, owner, owner_label="프A"):
+    """Fix B용 최소 Task: owner·status.owner(표시용)·status.goal(개입 게이트용)."""
+    def __init__(self, owner, owner_label="프A", goal=""):
         self.owner = owner
-        self.status = type("S", (), {"owner": owner_label})()
+        self.status = type("S", (), {"owner": owner_label, "goal": goal})()
 
 
 class _FakeFlow2(_FakeFlow):
@@ -156,3 +156,27 @@ def test_위임전_owner0_Task는_리더구현_허용():
     hook = make_pre_tool_use_hook(a, ALLOWED, actor=11, flow=flow)
     assert _run(hook, "Write", {"file_path": "server.js"}) == {}
     assert flow.act_count == 1
+
+
+def test_개입은_목표확정_전_수정차단():
+    """개입(기존 프로젝트 수정)에서 Task Goal이 없으면 Write/Edit 거부 — 재현·목표합의 전 즉흥수정(개인 견해
+    선반영) 차단. Goal이 확정되면 허용 → '목표 먼저, 그다음 수정' 순서를 구조적으로 강제."""
+    a = FakeAudit()
+    task = _FakeTask(owner=0, goal="")                       # 목표 미확정 상태
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=task, leader=11)
+    flow.intervention = {"id": "P-001"}                      # 개입 흐름
+    out = _run(make_pre_tool_use_hook(a, ALLOWED, actor=11, flow=flow), "Edit", {"file_path": "server.js"})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "개입 목표 미확정 선수정"
+    # Goal 확정되면 허용
+    task.status.goal = "충돌 판정이 정상 동작(평타가 적에게 적중)"
+    a2 = FakeAudit()
+    assert _run(make_pre_tool_use_hook(a2, ALLOWED, actor=11, flow=flow), "Edit", {"file_path": "server.js"}) == {}
+
+
+def test_개입아닌_새작업은_목표게이트_미적용():
+    """개입이 아닌 일반 흐름(intervention 없음)에선 이 개입 게이트가 적용되지 않는다(기존 동작 보존)."""
+    a = FakeAudit()
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=_FakeTask(owner=0, goal=""), leader=11)
+    # intervention 미설정 → 개입 게이트 통과(owner0이라 대리구현 게이트도 통과)
+    assert _run(make_pre_tool_use_hook(a, ALLOWED, actor=11, flow=flow), "Write", {"file_path": "a.js"}) == {}

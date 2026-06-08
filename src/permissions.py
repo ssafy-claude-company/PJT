@@ -95,6 +95,17 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                 f"맡겨 끝내게 하고(기다리세요), 끝내 무응답이면 recruit/재배정하세요. 직접 구현은 당신이 owner인 "
                 f"(위임하지 않은) Task에서만.")
 
+        # 5) 개입(기존 프로젝트 수정)도 '목표 먼저' — Task의 Goal이 확정되기 전엔 파일 수정 금지. 개입에서
+        #    리더가 재현·합의 없이 개인 견해로 즉흥 수정하던 걸 구조적으로 차단(Purpose/Goal 없이 끝나는 문제).
+        if (tool in ("Write", "Edit") and flow is not None and getattr(flow, "intervention", None)):
+            cur = getattr(flow, "current", None)
+            goal = (cur.status.goal or "").strip() if (cur and getattr(cur, "status", None)) else ""
+            if not goal:
+                audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                             reason="개입 목표 미확정 선수정", tool_use_id=tool_use_id)
+                return _deny("개입 수정 거부: 먼저 create_task + set_goal로 Purpose·Goal을 확정한 뒤 고치세요 — "
+                             "run으로 증상을 재현·확인하고 목표를 합의하기 전에 개인 견해로 즉흥 수정하지 마세요.")
+
         # 작업공간을 실제로 바꾸는 도구(run/Write/Edit)는 act_count로 누계 — request 도구가 wake 전후 차이로
         # 'owner가 위임 도중 실제로 일했나'를 판정해 허위완료/독점을 막는다. deny를 모두 통과한 뒤에만 집계.
         if tool in ("Write", "Edit", "mcp__guide__run") and flow is not None:

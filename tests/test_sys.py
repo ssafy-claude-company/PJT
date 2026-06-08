@@ -183,6 +183,20 @@ def test_예비인력_새직군_런타임채용_말로만배정차단():
     assert "못 찾음" in r3["content"][0]["text"]
 
 
+def test_개입_Task는_전원소집_안함():
+    """개입(intervention) 흐름의 create_task는 '전원 기획' 강제를 안 한다 — 리더가 부른 담당만 모임(작은 수정에
+    10명 소집 방지). 새 프로젝트 첫 Task만 전원 강제."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "백엔드", 12: "프론트엔드", 13: "디자이너", 14: "QA"})
+    f.start_root("root")
+    f.intervention = {"id": "P-001"}        # 개입 표시
+    f.project_channel = 500
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))   # 프론트만 부름
+    assert set(f.current.team) == {11, 12}   # 전원(13·14) 강제 합류 안 됨
+
+
 def test_직군미배정_예비에게_위임_거부():
     """직군 미배정('예비') 봇에겐 request가 거부된다 — 말로 직군 주고 일 시키는 것을 구조적으로 차단."""
     g = FakeGuide()
