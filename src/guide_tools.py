@@ -525,7 +525,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             tid = flow.next_task_id()
             pool = flow.project_team or flow.pool
             picked = _resolve_members(args.get("members", ""), flow, pool)
-            base = picked if picked else [m for m in flow.project_team if m != flow.leader]
+            # 첫 Task = '전원 기획 회의': 프로젝트 팀 전원을 강제로 멤버에 넣는다(리더가 일부만 부르거나
+            # 좁은 1인 Task로 후퇴하는 걸 차단 — 정의는 모두 모여서). 이후 구현 Task는 owner 중심으로 좁혀도 됨.
+            is_first = not flow.tasks
+            if is_first:
+                base = [m for m in pool if m != flow.leader]            # 전원 강제(놀던 인력 포함)
+            else:
+                base = picked if picked else [m for m in flow.project_team if m != flow.leader]
             team = _uniq([flow.leader] + base)
             # Purpose·Goal·Owner 모두 비워둔다 — 빈 껍데기. Purpose·Goal은 배정된 팀이 모여 set_goal로 정하고,
             # Owner는 Work-request 수신으로 떠오른다(리더가 할 일·목표·담당을 미리 박던 중앙집권 제거).
@@ -539,9 +545,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.tasks.append(ref)
             flow.current = ref
             flow.comm.reset_task_tracking()   # 새 산출물 단위 → '완료/Redo' 추적 초기화(Redo는 같은 Task 안에서만)
-            return _ok(f"task={tid} (빈 껍데기) thread={thread_id} 팀={flow._names(team)} — 배정된 팀 전원에게 "
-                       f"request(Info)로 'Purpose(풀 문제)·Goal(성공기준)'을 물어 함께 정한 뒤 set_goal로 확정하세요 "
-                       f"(리더 단독 작성 금지). 그 다음 일을 맡길 동료에게 Work로 위임(받은 동료가 owner).")
+            tag0 = "전원 기획 회의(모두 모여 정의)" if is_first else "빈 껍데기"
+            return _ok(f"task={tid} ({tag0}) thread={thread_id} 팀={flow._names(team)} — 배정된 팀 **전원**에게 "
+                       f"request(Info)로 'Purpose(풀 문제)·Goal(성공기준)·각자 도메인 할 일'을 물어 함께 정한 뒤 "
+                       f"set_goal로 확정하세요(전원 협의 전엔 set_goal 거부됨). 그 다음 일을 맡길 동료에게 Work로 위임.")
         tools.append(create_task)
 
         @tool("set_goal",

@@ -207,6 +207,24 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     assert "거부" in r3["content"][0]["text"]                      # Task별로 다시 합의해야 함
 
 
+def test_첫Task는_전원_기획회의_강제():
+    """첫 Task(기획·정의)는 리더가 일부만 지정해도 프로젝트 팀 '전원'이 멤버가 된다(모두 모여 정의,
+    놀던 인력 포함). 구현 Task(2번째~)는 리더가 owner 중심으로 좁혀도 된다."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백", 13: "프", 14: "디"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13,14"}))
+    asyncio.run(t["create_task"].handler({"members": "12"}))      # 첫 Task에 12만 지정해도
+    assert set(f.current.team) == {11, 12, 13, 14}                # → 전원 강제(13,14도 합류)
+    f.current.participated.update({12, 13, 14})
+    asyncio.run(t["set_goal"].handler({"purpose": "분담", "goal": "계획 확정"}))
+    f.current.verified = True
+    asyncio.run(t["complete_task"].handler({"result": "ok"}))
+    asyncio.run(t["create_task"].handler({"members": "13"}))      # 2번째 Task는 좁힘 허용
+    assert set(f.current.team) == {11, 13}
+
+
 def test_create_task_빈껍데기_purpose는_팀이_set_goal로():
     """create_task는 Purpose를 비운 '빈 껍데기'로 연다(리더가 할 일 선지정 금지) — Purpose·Goal은 그 Task
     멤버 협의 후 set_goal(purpose, goal)로 함께 확정된다(분산: 무엇을 풀지도 팀이 정함)."""
