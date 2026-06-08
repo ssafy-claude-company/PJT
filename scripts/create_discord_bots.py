@@ -104,8 +104,10 @@ def main() -> None:
         #       chrome.exe --remote-debugging-port=9222 --user-data-dir="%TEMP%\chrome-bot"
         #     그 창에서 디스코드 로그인 후, set CHROME_CDP=http://localhost:9222 로 실행.
         # (A) 없으면 '설치된 크롬'을 '저장 프로필'로 실행 → 처음 한 번만 로그인하면 이후 계속 유지.
-        cdp = os.environ.get("CHROME_CDP", "").strip()
-        profile = os.environ.get("CHROME_PROFILE", str(Path.cwd() / ".chrome_bot_profile"))
+        # 기본으로 localhost:9222(디버그 크롬)에 먼저 붙어 본다 → 당신이 띄워둔 그 창을 그대로 사용.
+        # 없으면 아래에서 '저장 프로필'로 크롬을 새로 띄운다(로그인 1회 후 유지). 프로필 경로는 CWD와 무관하게 고정.
+        cdp = os.environ.get("CHROME_CDP", "http://localhost:9222").strip()
+        profile = os.environ.get("CHROME_PROFILE", str(Path.home() / ".organt_chrome_profile"))
         browser = ctx = None
         using_cdp = False
         if cdp:
@@ -114,8 +116,9 @@ def main() -> None:
                 ctx = browser.contexts[0] if browser.contexts else browser.new_context()
                 using_cdp = True
                 print(f"[연결] 디버그 크롬에 붙음({cdp}) — 로그인 세션 그대로 사용")
-            except Exception as e:
-                print(f"CDP 연결 실패({type(e).__name__}: {e}) — 크롬 직접 실행으로 전환")
+            except Exception:
+                print(f"[알림] {cdp}에 붙을 디버그 크롬이 없음 → 저장 프로필로 크롬을 새로 띄웁니다.\n"
+                       f"       (당신이 '띄워둔 창'을 쓰고 싶으면: 먼저 start_chrome_debug.bat 실행해 그 창에서 로그인 후 이 스크립트 재실행)")
         if ctx is None:
             try:                                                # 설치된 '크롬'을 저장 프로필로 실행
                 ctx = pw.chromium.launch_persistent_context(
