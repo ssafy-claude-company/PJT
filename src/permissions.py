@@ -106,6 +106,25 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                 return _deny("개입 수정 거부: 먼저 create_task + set_goal로 Purpose·Goal을 확정한 뒤 고치세요 — "
                              "run으로 증상을 재현·확인하고 목표를 합의하기 전에 개인 견해로 즉흥 수정하지 마세요.")
 
+        # 6) 리더 독식 차단(중앙집권의 핵심 구멍): 팀(다른 도메인 동료)이 있는 Task에서, 리더가 구현을
+        #    '위임(Work) 없이' 혼자 다 쓰는 걸 막는다. 기존 #4 훅은 '위임된 owner 도메인 침범'만 잡아서,
+        #    리더가 Info로 자문만 받고 한 번도 위임 안 하면(owner 미설정) 통째로 우회됐다. → 팀이 있으면
+        #    리더는 한 파일(grace) 직접 쓴 뒤부턴 구현을 동료에게 request(Work)로 위임해야 한다.
+        if (tool in ("Write", "Edit") and flow is not None and actor is not None
+                and actor == getattr(flow, "leader", None)
+                and getattr(flow, "current", None) is not None):
+            cur = flow.current
+            others = [m for m in getattr(cur, "team", []) if m != flow.leader]
+            if others and getattr(cur, "work_delegated", 0) == 0 and getattr(cur, "leader_writes", 0) >= 1:
+                audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                             reason="리더 독식(위임 없이 단독 구현)", tool_use_id=tool_use_id)
+                return _deny(
+                    "리더 단독 구현 차단: 이 Task엔 도메인 동료들이 있는데 당신이 위임(Work) 없이 혼자 다 만들고 "
+                    "있습니다(중앙집권·독점). 나머지 구현은 적합한 도메인 동료에게 request(Work)로 맡기세요 — "
+                    "owner가 자기 도메인을 구현합니다. 당신은 조율·통합·검증(run)·자기 도메인 일부만. "
+                    "동료가 무응답이면 그건 인프라 문제니 사용자에게 보고하세요(혼자 떠안지 말 것).")
+            cur.leader_writes = getattr(cur, "leader_writes", 0) + 1   # 통과한 리더 직접작성 집계
+
         # 작업공간을 실제로 바꾸는 도구(run/Write/Edit)는 act_count로 누계 — request 도구가 wake 전후 차이로
         # 'owner가 위임 도중 실제로 일했나'를 판정해 허위완료/독점을 막는다. deny를 모두 통과한 뒤에만 집계.
         if tool in ("Write", "Edit", "mcp__guide__run") and flow is not None:

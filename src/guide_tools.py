@@ -155,6 +155,8 @@ class TaskRef:
     owner_delivered: bool = False                    # owner가 '검증된 실작업 산출물'을 위임 도중 실제로 내고 응답이 돌아왔나
                                                      #   → 거짓이면 complete_task 거부(owner 미응답·착수전인데 리더가 대신 허위완료 차단)
     verified: bool = False                           # run으로 한 번이라도 실행됐나(실행 0회 완료 차단)
+    work_delegated: int = 0                          # 리더가 이 Task에서 보낸 Work 위임 수(0이면 '자문만 받고 독식' 의심)
+    leader_writes: int = 0                           # 리더가 이 Task에서 직접 쓴 파일 수(위임 없이 독식하면 차단)
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
 
@@ -365,6 +367,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             await flow.refresh(flow.current)
         req = await g.send_request(thread_id, me_id, to, kind, body)
         frame.request_id = str(req)                              # 실제 메시지 id로 기록 갱신
+        if kind == Kind.WORK and me_id == flow.leader and flow.current:
+            flow.current.work_delegated += 1   # 리더의 구현 위임 카운트 — 0이면 '자문만 받고 독식'(권한 훅이 차단)
         _dbg(f"{tag} ✓전송 req={req}{' (Redo)' if is_redo else ''}")
         if flow.log:   # 관측: 모든 요청을 '보낸 순서'대로 영속 기록(중첩 PostToolUse 타이밍에 안 묻힘)
             flow.log("req_sent", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),

@@ -174,6 +174,28 @@ def test_개입은_목표확정_전_수정차단():
     assert _run(make_pre_tool_use_hook(a2, ALLOWED, actor=11, flow=flow), "Edit", {"file_path": "server.js"}) == {}
 
 
+def test_리더_위임없이_단독구현_차단():
+    """팀이 있는 Task에서 리더가 Work 위임 없이 혼자 다 쓰는 걸 차단 — '자문(Info)만 받고 독식'(QA가 12파일
+    단독 작성) 구멍을 막는다. 한 파일은 grace, 그다음부턴 위임해야 함. 위임하면 다시 허용. 단독 Task는 무제한."""
+    a = FakeAudit()
+    task = _FakeTask(owner=0, goal="g")
+    task.team = [11, 12, 13]       # 리더 11 + 도메인 동료 12·13
+    task.work_delegated = 0
+    task.leader_writes = 0
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=task, leader=11)
+    hook = make_pre_tool_use_hook(a, ALLOWED, actor=11, flow=flow)
+    assert _run(hook, "Write", {"file_path": "server.js"}) == {} and task.leader_writes == 1   # 1파일 grace
+    out = _run(hook, "Write", {"file_path": "game.js"})                                        # 2파일째 차단
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "리더 독식(위임 없이 단독 구현)"
+    task.work_delegated = 1                                                                     # 위임하면 다시 허용
+    assert _run(hook, "Write", {"file_path": "cfg.js"}) == {}
+    # 동료 없는 단독 Task: 제한 없음
+    solo = _FakeTask(owner=0, goal="g"); solo.team = [11]; solo.work_delegated = 0; solo.leader_writes = 9
+    f2 = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=solo, leader=11)
+    assert _run(make_pre_tool_use_hook(FakeAudit(), ALLOWED, actor=11, flow=f2), "Write", {"file_path": "x"}) == {}
+
+
 def test_개입아닌_새작업은_목표게이트_미적용():
     """개입이 아닌 일반 흐름(intervention 없음)에선 이 개입 게이트가 적용되지 않는다(기존 동작 보존)."""
     a = FakeAudit()
