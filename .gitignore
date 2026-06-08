@@ -11,3 +11,8 @@ venv/
 # 런타임 로그 (Organt 작업공간은 repo 밖 ../organt_workspace)
 /logs/*
 !/logs/.gitkeep
+
+# create_discord_bots.py 산출물(봇 토큰 — 비밀)
+created_bots.env
+invite_urls.txt
+error_*.png
