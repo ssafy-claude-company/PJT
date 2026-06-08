@@ -592,6 +592,34 @@ def test_같은턴_병렬중복요청은_합쳐서_재호출안함():
     assert "재사용" in r2["content"][0]["text"] and "동료응답" in r2["content"][0]["text"]
 
 
+def test_미완owner_Task는_완료거부_이어가기는_Redo아님():
+    """owner가 '턴 한도'로 미완 반환하면 그 Task는 완료 거부(허위완료→다음Task churn 차단). 같은 owner
+    재위임은 '이어가기'라 Redo 아님(미완은 delivered로 안 침 → 횟수 제한 무관)."""
+    g = FakeGuide()
+    f = _flow(g)
+    st = {"n": 0}
+
+    async def wake(to, b, k):
+        st["n"] += 1
+        return "작업 중 (⚠ 턴 한도 도달 — 작업이 미완일 수 있음)" if st["n"] == 1 else "완료"
+
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"purpose": "p", "goal": "g"}))
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))   # 1차 → 미완 반환
+    assert f.current.owner_incomplete is True and not f.comm.delivered_work(11, 12)
+    f.current.verified = True
+    r = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert "완료 거부" in r["content"][0]["text"] and "미완" in r["content"][0]["text"]   # 미완 → 완료 거부
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "이어서"}))   # 이어가기(완료 반환)
+    assert not any(ev[0] == "redo" for ev in f.comm.history)        # 이어가기는 Redo 아님
+    assert f.current.owner_incomplete is False                      # 완료 반환 → 미완 해제
+    r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert "완료" in r2["content"][0]["text"]                        # 이제 완료 허용
+
+
 def test_되묻기후_재위임은_Redo아님():
     """owner가 '되묻기(clarify)'만 하고 반환하면 미완이므로, 위임자가 다시 맡기는 건 '첫 구현'이지 Redo가 아니다."""
     g = FakeGuide()

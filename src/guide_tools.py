@@ -142,6 +142,7 @@ class TaskRef:
     team: List[int] = field(default_factory=list)   # 이 Task에 배정된 Organt들
     owner: int = 0                                   # 이 산출물의 단일 책임자(accountable)
     participated: set = field(default_factory=set)   # 이 Task 정의에 '실질 협의'로 참여한 동료(보낸/받은 쪽 모두)
+    owner_incomplete: bool = False                   # owner가 '턴 한도'로 미완 반환 → 완료 차단(이어서 끝내야)
     verified: bool = False                           # run으로 한 번이라도 실행됐나(실행 0회 완료 차단)
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
@@ -373,14 +374,22 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             result = (f"[확인요청 from {flow._info(to)}] {q}\n"
                       f"(→ 답을 정한 뒤, 이 작업을 {flow._info(to)}에게 request(Work)로 다시 맡기세요)")
         failed = _looks_transient(result)
+        # 동료가 'turn 한도'로 미완 반환했나(Work) — 그러면 이 Task는 완료로 못 닫고(complete_task 거부),
+        # 같은 owner에게 '이어서(continuation)' 재위임해 끝내야 한다(허위완료→다음 Task churn 차단). 미완은
+        # delivered(accept)로 안 쳐서 respond 마커를 'incomplete'로 두면, 재위임이 Redo 한도에 안 걸린다
+        # (이어가기는 '직전 결함 보완'이 아니라 '남은 작업 마저 하기'이므로 횟수 제한 없이 계속 가능).
+        incomplete = (kind == Kind.WORK and not was_clarify and not failed
+                      and "턴 한도 도달" in (result or ""))
+        if kind == Kind.WORK and not was_clarify and flow.current:
+            flow.current.owner_incomplete = incomplete
         try:
             await g.send_response(thread_id, to, req, result)
             await _react(g, thread_id, req, "⚠️" if failed else "✅")  # 상태=이모지(해소/실패)
-            _dbg(f"{tag} {'⚠실패' if failed else '✓응답'} len={len(result)}")
+            _dbg(f"{tag} {'⚠실패' if failed else ('…미완' if incomplete else '✓응답')} len={len(result)}")
         finally:
             # 프레임 close = 베턴 복귀(누수 방지). 정상이면 alive==to 라 그대로 닫힌다.
             try:
-                flow.comm.respond(to, "clarify" if was_clarify else "accept", result)
+                flow.comm.respond(to, "clarify" if was_clarify else ("incomplete" if incomplete else "accept"), result)
             except CommError:
                 # to의 중첩 하위요청이 응답 없이 끝나(크래시/이탈) 베턴이 to에 '굳은' 비정상 상황 →
                 # me_id(요청자)가 다시 alive 될 때까지 위 프레임을 강제 close. 흐름 교착(굳음) 방지.
@@ -592,6 +601,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             if not flow.current.verified:
                 return _ok(f"완료 거부: 이 Task({flow.current.task_id})를 run으로 한 번도 실행하지 않았습니다 "
                            f"— 산출물을 run으로 실제 실행한 뒤 complete_task 하세요(허위 완료 금지).")
+            # owner가 '턴 한도'로 미완 반환한 Task는 완료 불가 — 같은 owner에게 request(Work)로 '이어서' 재위임해
+            # 마저 끝내야 한다(허위완료→다음 Task churn·유실 차단). 이어가기는 Redo 한도와 무관하게 계속 가능.
+            if flow.current.owner_incomplete:
+                return _ok(f"완료 거부: 이 Task의 담당자가 '턴 한도'로 작업을 미완 반환했습니다 — 새 Task로 넘어가지 말고, "
+                           f"같은 담당자에게 request(Work)로 '이어서 남은 부분을 마저 끝내라'고 재위임해 완성시킨 뒤 "
+                           f"complete_task 하세요(이어가기는 횟수 제한 없음). 미완을 두고 다음으로 넘어가면 그 작업이 유실됩니다.")
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.
