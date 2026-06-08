@@ -525,11 +525,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             tid = flow.next_task_id()
             pool = flow.project_team or flow.pool
             picked = _resolve_members(args.get("members", ""), flow, pool)
-            # 첫 Task = '전원 기획 회의': 프로젝트 팀 전원을 강제로 멤버에 넣는다(리더가 일부만 부르거나
-            # 좁은 1인 Task로 후퇴하는 걸 차단 — 정의는 모두 모여서). 이후 구현 Task는 owner 중심으로 좁혀도 됨.
+            # 첫 Task = '전원 기획 회의': 채용 풀 '전체'를 강제로 멤버에 넣는다(리더가 프로젝트팀을 좁혀
+            # 일부를 빼두거나, 좁은 1인 Task로 후퇴하는 걸 차단 — 정의는 놀던 인력까지 모두 모여서). 풀 전원을
+            # 프로젝트 팀에도 반영해 이후 구현 Task에서도 쓸 수 있게 한다. 구현 Task는 owner 중심으로 좁혀도 됨.
             is_first = not flow.tasks
             if is_first:
-                base = [m for m in pool if m != flow.leader]            # 전원 강제(놀던 인력 포함)
+                base = [m for m in flow.pool if m != flow.leader]       # 채용 풀 전체 강제(백2 등 놀던 인력 포함)
+                flow.project_team = _uniq([flow.leader] + base)         # 프로젝트 팀에도 반영
             else:
                 base = picked if picked else [m for m in flow.project_team if m != flow.leader]
             team = _uniq([flow.leader] + base)

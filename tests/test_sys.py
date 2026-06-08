@@ -135,19 +135,23 @@ def test_run_백그라운드_프로세스_그룹째_정리():
     assert not _running(pid), f"백그라운드 자식(pid={pid})이 정리되지 않고 누수됨"
 
 
-def test_팀_배정_recruit_팀밖요청거부():
+def test_recruit로_좁힌Task에_풀인력_합류():
+    """첫 Task(전원) 완료 후, 좁힌 두번째 구현 Task에 recruit로 풀 인력을 합류시킬 수 있다.
+    (첫 Task가 풀 전원을 강제하므로 '팀 밖 거부'는 더는 없고, 좁힌 Task에 인력 추가가 recruit의 역할.)"""
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "A", 13: "B"})
     f.start_root("root")
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))   # 13 제외 배정
-    assert set(f.project_team) == {11, 12}
-    asyncio.run(t["create_task"].handler({"purpose": "x", "goal": "g", "members": "12"}))
-    assert set(f.current.team) == {11, 12}
-    r = asyncio.run(t["request"].handler({"to_id": "13", "kind": "Info", "body": "x"}))
-    assert "팀이 아닙니다" in r["content"][0]["text"]          # 팀 밖 → 거부(게시 안 함)
-    assert not any(c[0] == "req" for c in g.calls)
-    asyncio.run(t["recruit"].handler({"member": "B", "reason": "부족"}))   # 역할명으로 채용
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))   # 리더가 좁혀도
+    asyncio.run(t["create_task"].handler({"members": "12"}))                # 첫 Task → 풀 전원 강제
+    assert set(f.current.team) == {11, 12, 13}
+    f.current.participated.update({12, 13})
+    asyncio.run(t["set_goal"].handler({"purpose": "p", "goal": "g"}))
+    f.current.verified = True
+    asyncio.run(t["complete_task"].handler({"result": "ok"}))
+    asyncio.run(t["create_task"].handler({"members": "12"}))                # 두번째 → 좁힘(11,12)
+    assert set(f.current.team) == {11, 12} and 13 not in f.current.team
+    asyncio.run(t["recruit"].handler({"member": "B", "reason": "부족"}))     # 역할명으로 합류
     assert 13 in f.current.team
 
 
@@ -214,9 +218,9 @@ def test_첫Task는_전원_기획회의_강제():
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백", 13: "프", 14: "디"})
     f.start_root("root")
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13,14"}))
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))   # 리더가 프로젝트팀을 12만으로 좁혀도
     asyncio.run(t["create_task"].handler({"members": "12"}))      # 첫 Task에 12만 지정해도
-    assert set(f.current.team) == {11, 12, 13, 14}                # → 전원 강제(13,14도 합류)
+    assert set(f.current.team) == {11, 12, 13, 14}               # → 채용 풀 전원 강제(빠졌던 13,14도 합류)
     f.current.participated.update({12, 13, 14})
     asyncio.run(t["set_goal"].handler({"purpose": "분담", "goal": "계획 확정"}))
     f.current.verified = True
