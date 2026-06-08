@@ -149,6 +149,28 @@ class DiscordGuide:
         except Exception:
             pass
 
+    async def set_nick(self, guild_id: int, user_id: int, nick: str) -> bool:
+        """길드에서 한 봇의 '서버 닉네임'을 그 봇의 직군으로 바꾼다 — 멤버 목록에서 '누가 어떤 직군인지'
+        디스코드 네이티브하게 보이게(가시성). System 봇에 '닉네임 관리' 권한·상위 역할이 있어야 함.
+        권한/계층 문제로 실패할 수 있어 best-effort(실패해도 흐름엔 무관)."""
+        try:
+            guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
+            member = guild.get_member(int(user_id)) or await guild.fetch_member(int(user_id))
+            await member.edit(nick=(nick or "")[:32])   # 디스코드 닉 32자 한도
+            return True
+        except Exception as e:
+            print(f"[discord_guide] 닉네임 설정 실패 user={user_id} nick={nick!r}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return False
+
+    async def set_nicks(self, guild_id: int, id_to_nick: Dict[int, str]) -> int:
+        """여러 봇의 서버 닉네임을 한 번에 직군으로 설정(best-effort). 성공 개수 반환."""
+        ok = 0
+        for uid, nick in (id_to_nick or {}).items():
+            if uid in self.organts and await self.set_nick(guild_id, uid, nick):
+                ok += 1
+        return ok
+
     # --- Task = 채널 상태블록 + 스레드 ---
 
     async def open_task(self, channel_id: int, status: TaskStatus):

@@ -36,11 +36,11 @@ DEFAULT_TASK = (
 )
 
 
-async def _connect(token):
+async def _connect(token, message_content=False):
     # 일시적 Discord WS/DNS 블립엔 재시도(main.py._connect와 동일) — 한 봇의 연결 실패로 데모가
-    # 통째로 죽지 않도록.
+    # 통째로 죽지 않도록. message_content 특권 인텐트는 System 봇만(내용 읽기) — Organt는 게시·타이핑만.
     intents = discord.Intents.default()
-    intents.message_content = True
+    intents.message_content = message_content
     last = None
     for attempt in range(4):
         c = discord.Client(intents=intents)
@@ -110,7 +110,7 @@ async def main():
     cfg = load_config()
     audit = AuditLog(cfg.audit_log_path)
 
-    system_client, st = await _connect(cfg.system_bot_token)
+    system_client, st = await _connect(cfg.system_bot_token, message_content=True)
     organts, bot_info, tasks, leader_id = {}, {}, [st], None
     for i, (token, role) in enumerate(load_roster()):
         c, t = await _connect(token)

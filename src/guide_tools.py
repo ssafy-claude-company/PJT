@@ -477,6 +477,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.bot_info[mid] = role_name        # 예비를 요청 직군으로 '신규 채용'(런타임 직군 배정)
             flow.current.status.group = _group_of(flow, flow.current.team)
             hired = f" — '{role_name}'(으)로 신규 채용"
+            fn = getattr(g, "set_nick", None)     # 디스코드 닉네임도 직군으로(가시성, best-effort)
+            if fn and getattr(flow, "guild_id", None):
+                try:
+                    await fn(flow.guild_id, mid, role_name)
+                except Exception:
+                    pass
         if mid not in flow.project_team:
             flow.project_team.append(mid)
         if mid not in flow.current.team:

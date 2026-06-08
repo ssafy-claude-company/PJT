@@ -54,10 +54,14 @@ def load_roster() -> List[Tuple[str, str]]:
     return roster
 
 
-async def _connect(token: str) -> Tuple[discord.Client, asyncio.Task]:
-    """봇 하나를 연결하고 on_ready까지 기다린다. 일시적 TLS/클럭 스큐 블립엔 재시도."""
+async def _connect(token: str, message_content: bool = False) -> Tuple[discord.Client, asyncio.Task]:
+    """봇 하나를 연결하고 on_ready까지 기다린다. 일시적 TLS/클럭 스큐 블립엔 재시도.
+
+    message_content(특권 인텐트)는 '메시지 내용을 읽어야 하는' System 봇만 True. Organt 봇은
+    게시·타이핑만 하므로 불필요 → 새 봇이 개발자 포털에서 이 인텐트를 안 켜도 연결된다(봇 추가 간소화).
+    """
     intents = discord.Intents.default()
-    intents.message_content = True
+    intents.message_content = message_content
     last = None
     for attempt in range(4):
         client = discord.Client(intents=intents)
@@ -121,22 +125,36 @@ async def run() -> None:
     except Exception:
         pass
 
-    system_client, sys_task = await _connect(cfg.system_bot_token)
+    system_client, sys_task = await _connect(cfg.system_bot_token, message_content=True)
     tasks = [sys_task]
     organts: Dict[int, object] = {}
     bot_info: Dict[int, str] = {}
     leader_id = None
-    for i, (token, role_label) in enumerate(load_roster()):
-        client, task = await _connect(token)
+    for token, role_label in load_roster():
+        # 한 봇의 토큰이 만료/오타여도 리스너 전체가 죽지(→래퍼 무한 재시작) 않게 — 그 봇만 건너뛰고
+        # 나머지로 가동한다(예비 토큰을 점진적으로 늘리는 자동화의 안전장치).
+        try:
+            client, task = await _connect(token)
+        except Exception as e:
+            log.error("봇 연결 실패(건너뜀) role=%s: %s", role_label, e)
+            continue
         organts[client.user.id] = client
         bot_info[client.user.id] = role_label
         tasks.append(task)
-        if i == 0:
+        if leader_id is None:        # 첫 '연결 성공' 봇이 기본 담당자(To 없을 때의 폴백)
             leader_id = client.user.id
+    if leader_id is None:
+        raise RuntimeError("연결된 Organt 봇이 없습니다(토큰 확인). 로스터의 모든 봇이 연결 실패.")
 
     guide = DiscordGuide(system_client, organts)
     channel = (system_client.get_channel(cfg.channel_id)
                or await system_client.fetch_channel(cfg.channel_id))
+    # 가시성: 각 봇의 서버 닉네임을 직군으로 설정 → 멤버 목록에서 누가 무슨 직군인지 보인다(best-effort).
+    try:
+        n_ok = await guide.set_nicks(channel.guild.id, dict(bot_info))
+        log.info("봇 닉네임(직군) 설정: %d/%d", n_ok, len(bot_info))
+    except Exception:
+        pass
     sysm = Sys(guide, channel.guild.id, _make_builder(cfg, audit, bot_info), bot_info=bot_info,
                workspace=cfg.workspace_dir,
                projects_path=str(cfg.audit_log_path.parent / "projects.json"),
