@@ -38,6 +38,7 @@ class Sys:
         # 로스터 원본 라벨(직군). recruit(role=…)로 '예비'를 런타임 직군으로 채용하면 bot_info가 바뀌므로,
         # 새 흐름 시작 때 이걸로 원복한다(예비는 다음 흐름에서 다른 직군으로 다시 채용 가능).
         self._roster_labels = dict(self.bot_info)
+        self._origin_request = ""   # 이번 흐름의 '사용자 원문 요청'(담당자 paraphrase 아닌 원문) — 모든 프롬프트에 주입
         self.workspace = workspace             # run 툴 cwd(작업공간 경로)
         self.session_dir = session_dir         # organt_state_*.json 위치(새 요청마다 세션 초기화)
         self.max_continue = max_continue       # 턴 한도로 미완 시 같은 세션으로 이어가는 최대 횟수
@@ -175,14 +176,27 @@ class Sys:
             return f"{lbl}(담당자)" if i == leader_id else lbl
         peers = ", ".join(f"{i}({_peer(i)})" for i in self.bot_info if i != me)
         domain = self.bot_info.get(me, "")
+        # 탈중앙(퍼실리테이터): 모두가 '담당자의 요약'이 아니라 '사용자 원문'을 직접 본다 → 한 명의 해석을
+        # 거치며 의도가 왜곡되는 걸 막는다. 받은 지시가 원문과 어긋나면 원문 의도를 우선·되물음.
+        orig = (getattr(self, "_origin_request", "") or "").strip()
+        origin_note = (f"[사용자 원문 요청 — 진짜 의도(누구의 요약·해석도 아닌, 사용자가 실제로 한 말)]: {orig}\n"
+                       f"이 원문이 기준입니다. 받은 지시·질문이 원문과 어긋나 보이면 원문 의도를 우선하고, 모호하면 되물으세요.\n\n"
+                       if orig else "")
         if role == "leader":
             my_role = f"{domain}(담당자)" if domain else "담당자"
             return (
                 f"당신은 이번 요청의 To로 지정돼 흐름을 여는 '담당자'입니다 — 고정 직책이 아니라 To를 받아 "
                 f"이번 흐름의 담당이 된 것이며(다른 흐름에선 한 직원으로 참여), 특별한 권력자가 아닙니다. "
                 f"당신의 역할: {my_role}\n"
-                f"User 요청: {body}\n동료: {peers}\n\n"
+                f"{origin_note}"
+                f"받은 형태: {body}\n동료: {peers}\n\n"
                 f"{self._PRINCIPLE}\n\n"
+                f"[퍼실리테이터 — 중요] 당신은 '해석자'가 아니라 '진행자'입니다. **사용자 원문을 당신 식으로 바꿔 팀에 "
+                f"전달하지 마세요** — request로 동료에게 물을 때 사용자 원문을 그대로 인용해 함께 보여주고(당신 요약만 주지 "
+                f"말 것), set_goal의 Purpose·Goal은 **당신 생각이 아니라 각 전문가가 제안한 것을 종합**해 적으세요(혼자 "
+                f"저작 금지). 채용은 당신 짐작이 아니라 **기획에서 드러난 도메인 공백** 기준입니다 — '이펙트가 약하다'면 VFX, "
+                f"'기획이 허술'이면 게임 기획자, '봇이 필요'면 봇 전문가를 recruit(role=…). **무응답·타임아웃이 연속되면 "
+                f"새 사람을 계속 뽑지 마세요(같은 불안정으로 똑같이 실패) — 잠시 뒤 재시도하거나 사용자에게 보고**하세요.\n"
                 f"[당신의 위치 — 중요] 당신도 팀의 한 직원입니다 — 파일 작성(Write/Edit)·실행(run) 도구를 그대로 가지며 "
                 f"직접 구현할 수 있습니다. 리더는 특별한 권력자가 아니라 '구현'에 더해 '조율·수렴·판정'을 함께 맡는 자리일 "
                 f"뿐입니다(중앙집권 금지). **모든 걸 혼자 만들지도, 전부 위임하고 지켜보기만 하지도 마세요** — 둘 다 "
@@ -262,7 +276,7 @@ class Sys:
         my_role = domain or "팀원"
         return (
             f"당신은 자율적으로 일하는 팀원입니다(당신도 필요하면 동료에게 먼저 묻습니다). "
-            f"당신의 역할: {my_role}\n받은 요청({getattr(kind, 'value', kind)}): {body}\n동료: {peers}\n\n"
+            f"당신의 역할: {my_role}\n{origin_note}받은 요청({getattr(kind, 'value', kind)}): {body}\n동료: {peers}\n\n"
             f"{self._PRINCIPLE}\n\n"
             f"**기획 단계에서 '당신 도메인의 할 일·담당'을 물으면**, 당신 전문 영역(디자인이면 디자인, 서버면 서버 등)의 "
             f"할 일을 스스로 정의해 구체적으로 제안하고 당신이 맡을 것을 밝히세요 — 리더가 당신 도메인을 대신 정하게 두지 "
@@ -350,6 +364,7 @@ class Sys:
         # 이전 흐름의 런타임 채용(예비→직군) 라벨 원복 — dict는 그대로 두고 내용만 갱신(빌더 클로저가 참조 중).
         self.bot_info.clear()
         self.bot_info.update(self._roster_labels)
+        self._origin_request = (user_text or "").strip()   # 원문 보존 — 담당자가 요약·해석하기 전 '사용자가 실제로 한 말'
         proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'
         lead = proj["leader"] if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)

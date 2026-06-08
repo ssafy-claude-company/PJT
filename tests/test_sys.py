@@ -223,6 +223,19 @@ def test_담당자_표식은_To수신자_동적():
     assert "프론트엔드(담당자)" in p_lead2
 
 
+def test_원문요청_프롬프트주입_탈중앙():
+    """퍼실리테이터: '사용자 원문 요청'이 담당자·팀원 프롬프트에 그대로 주입된다 — 담당자 paraphrase를 거치며
+    의도가 왜곡되는 중앙집권을 구조적으로 완화(팀원도 원문을 직접 봄). 원문 없으면 주입 안 함(하위호환)."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "백엔드", 12: "프론트엔드"})
+    s._origin_request = "캐릭터 10개로 늘리고 이펙트 구분해줘"
+    p_mem = s._prompt("프론트 성공기준 제안해줘", Kind.INFO, "member", 12, leader_id=11)
+    p_lead = s._prompt("x", Kind.WORK, "leader", 11, leader_id=11)
+    assert "사용자 원문 요청" in p_mem and "캐릭터 10개로 늘리고 이펙트 구분해줘" in p_mem   # 팀원도 원문 직접
+    assert "캐릭터 10개로 늘리고 이펙트 구분해줘" in p_lead                               # 리더도 원문 그대로
+    s._origin_request = ""
+    assert "사용자 원문 요청" not in s._prompt("x", Kind.INFO, "member", 12, leader_id=11)
+
+
 def test_owner는_work수신자_goal합의후():
     """새 모델(중앙집권 방지): create_task는 Purpose만 — Goal·owner 선배정 없음. Goal은 set_goal로 확정해야
     Work 위임 가능(선분배 금지), 그 Work를 받은 동료가 곧 그 Task의 owner가 된다(수신=소유)."""
