@@ -54,6 +54,17 @@ def load_roster() -> List[Tuple[str, str]]:
     return roster
 
 
+# 봇의 '이름'은 직군이 아니라 사람 이름으로 둔다(직군은 Discord 역할로 부여). 회사 직원처럼 보이게.
+KOREAN_NAMES = ["김민준", "이서연", "박지호", "최예은", "정우진", "강하린", "조성민", "윤지아",
+                "장도현", "임수아", "한건우", "오유진", "신예준", "권나윤", "황시윤", "송하영",
+                "배준영", "노아름", "문태경", "심유빈"]
+
+
+def assign_korean_names(ids) -> Dict[int, str]:
+    """봇 id들에 사람 이름(닉네임)을 차례로 배정 — 직군과 무관한 고정 정체성."""
+    return {uid: KOREAN_NAMES[i % len(KOREAN_NAMES)] for i, uid in enumerate(ids)}
+
+
 async def _connect(token: str, message_content: bool = False) -> Tuple[discord.Client, asyncio.Task]:
     """봇 하나를 연결하고 on_ready까지 기다린다. 일시적 TLS/클럭 스큐 블립엔 재시도.
 
@@ -151,10 +162,14 @@ async def run() -> None:
     guide = DiscordGuide(system_client, organts)
     channel = (system_client.get_channel(cfg.channel_id)
                or await system_client.fetch_channel(cfg.channel_id))
-    # 가시성: 각 봇의 서버 닉네임을 직군으로 설정 → 멤버 목록에서 누가 무슨 직군인지 보인다(best-effort).
+    # 이름은 '사람 이름'(닉네임, 고정 정체성), 직군은 'Discord 역할(권한)'로 부여한다 — 한 봇이 직군을
+    # 여러 개 가질 수 있고, 직군이 바뀌어도 이름은 안 바뀐다(사용자 요청). 둘 다 best-effort.
+    names = assign_korean_names(list(organts))
     try:
-        n_ok = await guide.set_nicks(channel.guild.id, dict(bot_info))
-        log.info("봇 닉네임(직군) 설정: %d/%d", n_ok, len(bot_info))
+        n_name = await guide.set_nicks(channel.guild.id, names)                 # 닉네임 = 사람 이름
+        jobs = {u: r for u, r in bot_info.items() if not str(r).startswith("예비")}  # 예비는 직군 역할 없음
+        n_role = await guide.assign_job_roles(channel.guild.id, jobs)           # 직군 = 역할(권한)
+        log.info("이름 설정 %d/%d · 직군 역할 부여 %d/%d", n_name, len(names), n_role, len(jobs))
     except Exception:
         pass
     # 원터치 초대: 토큰은 있는데 아직 '서버에 없는' 봇은 클릭 한 번이면 합류하는 초대 링크를 띄운다
@@ -276,7 +291,10 @@ async def run() -> None:
                     guide.register_organt(uid, client)
                     tasks.append(task)
                     try:
-                        await guide.set_nick(channel.guild.id, uid, role)
+                        await guide.set_nick(channel.guild.id, uid,           # 이름=사람 이름
+                                             KOREAN_NAMES[(len(organts) - 1) % len(KOREAN_NAMES)])
+                        if not str(role).startswith("예비"):                  # 예비면 직군 역할 없음
+                            await guide.assign_job_role(channel.guild.id, uid, role)
                     except Exception:
                         pass
                     if await guide.not_in_guild(channel.guild.id, [uid]):

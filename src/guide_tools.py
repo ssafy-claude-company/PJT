@@ -259,6 +259,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if flow.current is None:
             _dbg(f"{tag} ✗거부:Task없음")
             return _ok("오류: 진행 중인 Task가 없습니다. (리더가 create_task 먼저 여세요.)")
+        # 직군 미배정(예비) 봇에게는 위임/질의 불가 — 말로 '너는 X야' 하고 일을 시키는 걸 구조적으로 막는다.
+        # 먼저 recruit(role='직군')로 실제 직군을 부여해야 그 봇이 일할 수 있다(말로만 배정 차단).
+        if _is_spare(flow, to):
+            _dbg(f"{tag} ✗거부:직군 미배정(예비)")
+            return _ok(f"요청 거부: {flow._info(to) or to}는 아직 직군 미배정('예비')입니다 — 말로 직군을 정하지 말고 "
+                       f"recruit(member='{to}', role='직군명')으로 직군을 실제로 부여한 뒤 요청하세요(직군이 부여돼야 일을 맡길 수 있음).")
         # 위임자에게 되묻기(확인요청 반환): 직속 위임자에게 Info로 물으면 '재진입 불가' 에러 대신
         # 베턴을 위임자에게 질문과 함께 돌려준다 — 위임자가 답하고 그 일을 다시 맡긴다(협업 가능).
         if kind == Kind.INFO and to == flow.comm.direct_delegator(me_id) and to != me_id:
@@ -472,12 +478,23 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 return _ok(f"채용할 인력을 못 찾음 — member로 기존 동료(id/역할)를 지정하거나, role로 새 직군을 "
                            f"적어 '예비'를 채용하세요. 남은 예비: {len(spares)}명 / 현재 풀: {flow._names(flow.pool)}")
         mid = cand[0]
+        # 예비(직군 미배정)는 'role=직군'을 줘야만 채용된다 — 말로만 배정 차단(직군은 구조적으로 부여).
+        if _is_spare(flow, mid) and not role_name:
+            return _ok(f"채용 거부: {flow._info(mid) or mid}는 '예비'(직군 미배정)입니다 — role='직군명'을 함께 "
+                       f"지정해 어떤 직군으로 채용할지 정하세요(예: recruit(member='{mid}', role='게임 기획자')). "
+                       f"직군 없이는 합류·위임 불가(말로만 배정 금지 — 직군이 실제로 부여돼야 일을 맡길 수 있음).")
         hired = ""
-        if role_name and (_is_spare(flow, mid) or not flow._info(mid)):
-            flow.bot_info[mid] = role_name        # 예비를 요청 직군으로 '신규 채용'(런타임 직군 배정)
+        if role_name:
+            cur = flow._info(mid)
+            if _is_spare(flow, mid) or not cur:
+                flow.bot_info[mid] = role_name                    # 예비/무직 → 직군 배정
+                hired = f" — '{role_name}' 직군으로 채용"
+            elif role_name not in cur:
+                flow.bot_info[mid] = f"{cur}/{role_name}"          # 이미 직군 있음 → 직군 추가(겸직 가능)
+                hired = f" — '{role_name}' 직군 추가(겸직)"
             flow.current.status.group = _group_of(flow, flow.current.team)
-            hired = f" — '{role_name}'(으)로 신규 채용"
-            fn = getattr(g, "set_nick", None)     # 디스코드 닉네임도 직군으로(가시성, best-effort)
+            # 이름은 그대로 두고 '직군'을 Discord 역할(권한)로 부여 — 한 봇이 직군 여럿 가능(best-effort).
+            fn = getattr(g, "assign_job_role", None)
             if fn and getattr(flow, "guild_id", None):
                 try:
                     await fn(flow.guild_id, mid, role_name)

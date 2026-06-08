@@ -164,10 +164,39 @@ class DiscordGuide:
             return False
 
     async def set_nicks(self, guild_id: int, id_to_nick: Dict[int, str]) -> int:
-        """여러 봇의 서버 닉네임을 한 번에 직군으로 설정(best-effort). 성공 개수 반환."""
+        """여러 봇의 서버 닉네임을 한 번에 설정(best-effort). 성공 개수 반환. (닉네임=사람 이름 용도)"""
         ok = 0
         for uid, nick in (id_to_nick or {}).items():
             if uid in self.organts and await self.set_nick(guild_id, uid, nick):
+                ok += 1
+        return ok
+
+    async def assign_job_role(self, guild_id: int, user_id: int, job_name: str) -> bool:
+        """봇에게 '직군'을 **Discord 역할(권한)**로 부여한다(같은 이름 역할 없으면 생성). 이름(닉네임)은
+        그대로 두고 '역할'만 더하므로 **한 봇이 직군을 여러 개** 가질 수 있다(닉네임 방식의 한계 해소).
+        System 봇에 '역할 관리' 권한 + 대상보다 높은 역할이 필요(없으면 best-effort 실패)."""
+        import discord
+        job = (job_name or "").strip()
+        if not job:
+            return False
+        try:
+            guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
+            role = discord.utils.get(guild.roles, name=job)
+            if role is None:
+                role = await guild.create_role(name=job, mentionable=True, reason="Organt 직군")
+            member = guild.get_member(int(user_id)) or await guild.fetch_member(int(user_id))
+            await member.add_roles(role, reason="Organt 직군 배정")
+            return True
+        except Exception as e:
+            print(f"[discord_guide] 직군 역할 부여 실패 user={user_id} job={job!r}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return False
+
+    async def assign_job_roles(self, guild_id: int, id_to_job: Dict[int, str]) -> int:
+        """여러 봇에 직군 역할을 한 번에 부여(best-effort). 성공 개수 반환."""
+        ok = 0
+        for uid, job in (id_to_job or {}).items():
+            if uid in self.organts and await self.assign_job_role(guild_id, uid, job):
                 ok += 1
         return ok
 

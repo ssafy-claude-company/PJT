@@ -155,9 +155,9 @@ def test_recruit로_좁힌Task에_풀인력_합류():
     assert 13 in f.current.team
 
 
-def test_예비인력_새직군_런타임채용():
-    """'예비'(직군 미배정)는 첫 '전원 기획'에 안 들어가고, 필요할 때 recruit(role=…)로 그 직군으로
-    신규 채용된다 — 로스터에 없는 직군(게임 기획자 등)을 런타임에 만든다(직군은 미리 박지 않음)."""
+def test_예비인력_새직군_런타임채용_말로만배정차단():
+    """'예비'(직군 미배정)는 첫 '전원 기획'에 안 들어가고, recruit(role=…)로 '실제' 직군이 부여돼야 한다 —
+    role 없이 예비 채용/위임은 거부(말로만 배정 차단). 한 사람에게 직군 2개(겸직)도 가능."""
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
              bot_info={11: "백엔드", 12: "프론트엔드", 13: "예비", 14: "예비"})
@@ -165,17 +165,34 @@ def test_예비인력_새직군_런타임채용():
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_task"].handler({"members": ""}))      # 첫 Task = 전원 기획
     assert set(f.current.team) == {11, 12} and 13 not in f.current.team   # 예비는 제외
-    # 새 직군이 필요 → 예비를 '게임 기획자'로 채용(member 미지정 → 예비 자동 선발)
+    # role 없이 예비 채용 시도 → 거부, 팀에 안 들어옴(말로만 배정 차단)
+    rno = asyncio.run(t["recruit"].handler({"member": "13"}))
+    assert "거부" in rno["content"][0]["text"] and "예비" in rno["content"][0]["text"]
+    assert 13 not in f.current.team and f.bot_info[13] == "예비"
+    # 새 직군이 필요 → 예비를 '게임 기획자'로 실제 채용(member 미지정 → 예비 자동 선발)
     r = asyncio.run(t["recruit"].handler({"role": "게임 기획자", "reason": "기획 필요"}))
-    assert "신규 채용" in r["content"][0]["text"] and "게임 기획자" in r["content"][0]["text"]
+    assert "직군으로 채용" in r["content"][0]["text"] and "게임 기획자" in r["content"][0]["text"]
     hired = next(i for i in (13, 14) if f.bot_info[i] == "게임 기획자")
     assert hired in f.current.team and f.bot_info[hired] == "게임 기획자"
-    # 두 번째 예비를 'UX 디자이너'로
+    # 겸직: 같은 사람에게 직군 하나 더 → 'A/B'(직군 2개)
+    asyncio.run(t["recruit"].handler({"member": str(hired), "role": "레벨 디자이너"}))
+    assert "게임 기획자" in f.bot_info[hired] and "레벨 디자이너" in f.bot_info[hired]
+    # 남은 예비를 'UX 디자이너'로, 그 뒤 예비 소진 → 채용 불가 안내
     asyncio.run(t["recruit"].handler({"role": "UX 디자이너", "reason": "UX"}))
-    assert sorted(f.bot_info[i] for i in (13, 14)) == ["UX 디자이너", "게임 기획자"]
-    # 예비 소진 후 또 요청 → 안내(없음)
     r3 = asyncio.run(t["recruit"].handler({"role": "사운드", "reason": "x"}))
     assert "못 찾음" in r3["content"][0]["text"]
+
+
+def test_직군미배정_예비에게_위임_거부():
+    """직군 미배정('예비') 봇에겐 request가 거부된다 — 말로 직군 주고 일 시키는 것을 구조적으로 차단."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "백엔드", 13: "예비"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": ""}))
+    r = asyncio.run(t["request"].handler({"to_id": "13", "kind": "Info", "body": "기획 해줘"}))
+    txt = r["content"][0]["text"]
+    assert "거부" in txt and "예비" in txt and "recruit" in txt   # recruit(role=)로 직군 먼저
 
 
 def test_담당자_표식은_To수신자_동적():
