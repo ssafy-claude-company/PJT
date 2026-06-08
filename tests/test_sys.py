@@ -155,6 +155,43 @@ def test_recruit로_좁힌Task에_풀인력_합류():
     assert 13 in f.current.team
 
 
+def test_예비인력_새직군_런타임채용():
+    """'예비'(직군 미배정)는 첫 '전원 기획'에 안 들어가고, 필요할 때 recruit(role=…)로 그 직군으로
+    신규 채용된다 — 로스터에 없는 직군(게임 기획자 등)을 런타임에 만든다(직군은 미리 박지 않음)."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "백엔드", 12: "프론트엔드", 13: "예비", 14: "예비"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": ""}))      # 첫 Task = 전원 기획
+    assert set(f.current.team) == {11, 12} and 13 not in f.current.team   # 예비는 제외
+    # 새 직군이 필요 → 예비를 '게임 기획자'로 채용(member 미지정 → 예비 자동 선발)
+    r = asyncio.run(t["recruit"].handler({"role": "게임 기획자", "reason": "기획 필요"}))
+    assert "신규 채용" in r["content"][0]["text"] and "게임 기획자" in r["content"][0]["text"]
+    hired = next(i for i in (13, 14) if f.bot_info[i] == "게임 기획자")
+    assert hired in f.current.team and f.bot_info[hired] == "게임 기획자"
+    # 두 번째 예비를 'UX 디자이너'로
+    asyncio.run(t["recruit"].handler({"role": "UX 디자이너", "reason": "UX"}))
+    assert sorted(f.bot_info[i] for i in (13, 14)) == ["UX 디자이너", "게임 기획자"]
+    # 예비 소진 후 또 요청 → 안내(없음)
+    r3 = asyncio.run(t["recruit"].handler({"role": "사운드", "reason": "x"}))
+    assert "못 찾음" in r3["content"][0]["text"]
+
+
+def test_담당자_표식은_To수신자_동적():
+    """담당자는 고정 직책이 아니라 흐름의 To 수신자(leader) — _prompt가 그 봇에게만 '(담당자)'를 붙이고,
+    같은 봇이라도 다른 흐름(다른 leader)에선 직군만으로 한 직원으로 참여한다."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "백엔드", 12: "프론트엔드"})
+    # 11이 담당자(To)일 때: 11은 '백엔드(담당자)', 12는 동료 목록에서 그냥 '프론트엔드'
+    p_lead = s._prompt("x", Kind.WORK, "leader", 11, leader_id=11)
+    assert "백엔드(담당자)" in p_lead
+    p_mem = s._prompt("x", Kind.INFO, "member", 12, leader_id=11)
+    assert "11(백엔드(담당자))" in p_mem and "역할: 프론트엔드" in p_mem
+    # 12가 담당자(To)인 다른 흐름: 12가 '프론트엔드(담당자)', 11은 한 직원
+    p_lead2 = s._prompt("x", Kind.WORK, "leader", 12, leader_id=12)
+    assert "프론트엔드(담당자)" in p_lead2
+
+
 def test_owner는_work수신자_goal합의후():
     """새 모델(중앙집권 방지): create_task는 Purpose만 — Goal·owner 선배정 없음. Goal은 set_goal로 확정해야
     Work 위임 가능(선분배 금지), 그 Work를 받은 동료가 곧 그 Task의 owner가 된다(수신=소유)."""

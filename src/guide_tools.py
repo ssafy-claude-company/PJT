@@ -90,6 +90,15 @@ def _looks_transient(text: str) -> bool:
     return t.startswith("api error") or t.startswith("(동료 처리 중 오류")
 
 
+# 채용 대기 인력(직군 미배정). recruit(role=…)로 런타임에 '게임 기획자·UX 디자이너' 등 필요한 직군으로
+# 채용해 합류시킨다. 로스터에서 라벨이 '예비'인 봇들이며, 첫 '전원 기획'엔 안 들어가고 필요할 때 합류한다.
+_SPARE_LABEL = "예비"
+
+
+def _is_spare(flow, oid) -> bool:
+    return (flow._info(oid) or "").strip().startswith(_SPARE_LABEL)
+
+
 # 협의로 '인정되는' Info인지 — 순수 응답확인 핑('응답 가능하신가요?')은 합의로 치지 않는다(빈 핑 차단).
 # 짧은데 핑 문구가 거의 전부일 때만 비실질(긴 메시지는 핑 문구가 섞여도 실질로 본다).
 _HOLLOW_PING = ("응답 가능", "응답가능", "응답 되시", "응답되시", "계신가요", "준비되셨", "들리시",
@@ -444,15 +453,30 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
     tools.append(request)
 
     @tool("recruit",
-          "인원이 부족하면 채용 풀에서 동료를 현재 Task 팀에 합류시킨다(member=id 또는 역할명, reason).",
-          {"member": str, "reason": str})
+          "인원이 부족하거나 '새 직군'이 필요하면 채용한다. role=맡길 직군(예: 게임 기획자, UX 디자이너, "
+          "사운드 — '예비' 인력을 이 직군으로 신규 채용). member=특정 동료 id/역할명(비우고 role만 주면 예비에서 "
+          "자동 선발). reason=사유. 로스터에 없는 직군도 이렇게 런타임에 채용해 쓴다.",
+          {"member": str, "role": str, "reason": str})
     async def recruit(args):
-        cand = _resolve_members(args.get("member", ""), flow, flow.pool)
-        if not cand:
-            return _ok(f"'{args.get('member','')}'를 채용 풀에서 못 찾음. 풀: {flow._names(flow.pool)}")
         if flow.current is None:
-            return _ok("오류: 진행 중인 Task가 없습니다.")
+            return _ok("오류: 진행 중인 Task가 없습니다. 먼저 create_task로 Task를 여세요.")
+        role_name = (args.get("role") or "").strip()
+        spec = (args.get("member") or "").strip()
+        cand = _resolve_members(spec, flow, flow.pool) if spec else []
+        if not cand:
+            # member 미지정(또는 못 찾음): 직군 채용이면 '예비' 인력에서 자동 선발(아직 프로젝트팀에 없는 예비)
+            spares = [m for m in flow.pool if _is_spare(flow, m) and m not in flow.project_team]
+            if role_name and spares:
+                cand = [spares[0]]
+            else:
+                return _ok(f"채용할 인력을 못 찾음 — member로 기존 동료(id/역할)를 지정하거나, role로 새 직군을 "
+                           f"적어 '예비'를 채용하세요. 남은 예비: {len(spares)}명 / 현재 풀: {flow._names(flow.pool)}")
         mid = cand[0]
+        hired = ""
+        if role_name and (_is_spare(flow, mid) or not flow._info(mid)):
+            flow.bot_info[mid] = role_name        # 예비를 요청 직군으로 '신규 채용'(런타임 직군 배정)
+            flow.current.status.group = _group_of(flow, flow.current.team)
+            hired = f" — '{role_name}'(으)로 신규 채용"
         if mid not in flow.project_team:
             flow.project_team.append(mid)
         if mid not in flow.current.team:
@@ -460,7 +484,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.current.status.group = _group_of(flow, flow.current.team)
             await flow.refresh()
             await _add_members(g, flow.current.thread_id, [mid])   # 스레드에 합류(멤버십=팀)
-        return _ok(f"{flow._info(mid) or mid} 합류(사유: {args.get('reason', '')}). "
+        return _ok(f"{flow._info(mid) or mid} 합류{hired}(사유: {args.get('reason', '')}). "
                    f"현재 팀: {flow._names(flow.current.team)}")
 
     tools.append(recruit)
@@ -567,7 +591,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 프로젝트 팀에도 반영해 이후 구현 Task에서도 쓸 수 있게 한다. 구현 Task는 owner 중심으로 좁혀도 됨.
             is_first = not flow.tasks
             if is_first:
-                base = [m for m in flow.pool if m != flow.leader]       # 채용 풀 전체 강제(백2 등 놀던 인력 포함)
+                # 직군이 정해진 동료 전원 강제(놀던 인력 포함). '예비'(직군 미배정)는 제외 — 필요할 때
+                # recruit(role=…)로 그 직군을 채용해 합류시킨다(전원 기획엔 실제 직군 보유자만).
+                base = [m for m in flow.pool if m != flow.leader and not _is_spare(flow, m)]
                 flow.project_team = _uniq([flow.leader] + base)         # 프로젝트 팀에도 반영
             else:
                 base = picked if picked else [m for m in flow.project_team if m != flow.leader]

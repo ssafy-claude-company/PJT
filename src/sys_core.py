@@ -35,6 +35,9 @@ class Sys:
         self.guild_id = guild_id
         self.organt_builder = organt_builder   # (organt_id, guide_server, role) -> Organt
         self.bot_info = bot_info or {}
+        # 로스터 원본 라벨(직군). recruit(role=…)로 '예비'를 런타임 직군으로 채용하면 bot_info가 바뀌므로,
+        # 새 흐름 시작 때 이걸로 원복한다(예비는 다음 흐름에서 다른 직군으로 다시 채용 가능).
+        self._roster_labels = dict(self.bot_info)
         self.workspace = workspace             # run 툴 cwd(작업공간 경로)
         self.session_dir = session_dir         # organt_state_*.json 위치(새 요청마다 세션 초기화)
         self.max_continue = max_continue       # 턴 한도로 미완 시 같은 세션으로 이어가는 최대 횟수
@@ -158,12 +161,20 @@ class Sys:
         "'---' 구분선/'✅ 완성' 배너/표/긴 머리말 같은 장식은 쓰지 말고, 보고하려고 request 쓰지 마세요."
     )
 
-    def _prompt(self, body, kind, role, me):
-        peers = ", ".join(f"{i}({self.bot_info.get(i, '?')})" for i in self.bot_info if i != me)
-        my_role = self.bot_info.get(me, "리더" if role == "leader" else "팀원")
+    def _prompt(self, body, kind, role, me, leader_id=None):
+        # '담당자'는 고정 직책이 아니라 이번 흐름의 To 수신자(=leader)다. 동료 목록엔 직군만 적고, 담당자에게만
+        # '(담당자)' 표식을 단다(다른 흐름에선 같은 봇이 한 직원으로 참여).
+        def _peer(i):
+            lbl = self.bot_info.get(i, "?")
+            return f"{lbl}(담당자)" if i == leader_id else lbl
+        peers = ", ".join(f"{i}({_peer(i)})" for i in self.bot_info if i != me)
+        domain = self.bot_info.get(me, "")
         if role == "leader":
+            my_role = f"{domain}(담당자)" if domain else "담당자"
             return (
-                f"당신은 흐름을 여는 '담당자'입니다 — 단, 특별한 권력자가 아닙니다. 당신의 역할: {my_role}\n"
+                f"당신은 이번 요청의 To로 지정돼 흐름을 여는 '담당자'입니다 — 고정 직책이 아니라 To를 받아 "
+                f"이번 흐름의 담당이 된 것이며(다른 흐름에선 한 직원으로 참여), 특별한 권력자가 아닙니다. "
+                f"당신의 역할: {my_role}\n"
                 f"User 요청: {body}\n동료: {peers}\n\n"
                 f"{self._PRINCIPLE}\n\n"
                 f"[당신의 위치 — 중요] 당신도 팀의 한 직원입니다 — 파일 작성(Write/Edit)·실행(run) 도구를 그대로 가지며 "
@@ -183,7 +194,10 @@ class Sys:
                 f"[팀 구성 — 작업 무게에 맞춰] 시작 시 **작업의 무게를 보고 팀 규모를 정해** create_project(team=…)로 "
                 f"배정하세요. '도메인당 1명' 최소 구성으로 기계적으로 돌리지 말 것 — **무겁거나 중요한 도메인엔 여러 명을 "
                 f"배정**해 일을 나눠 맡기거나 교차 검증하게 하고(단일흐름이라 동시 실행은 아니지만 분담·리뷰로 품질을 높입니다), "
-                f"**풀에 여유 인력이 있으면 적극 끌어쓰세요**(한가하게 놀리지 말 것; 부족하면 recruit로 더). 각 Task는 "
+                f"**풀에 여유 인력이 있으면 적극 끌어쓰세요**(한가하게 놀리지 말 것; 부족하면 recruit로 더). "
+                f"**로스터에 없는 전문 직군(게임 기획자·UX 디자이너·사운드·레벨 디자이너 등)이 필요하면 "
+                f"recruit(role='직군명')으로 '예비' 인력을 그 직군으로 채용**해 맡기세요(직군은 미리 박힌 게 아니라 "
+                f"필요에 따라 런타임에 채용하는 것). 각 Task는 "
                 f"create_task(purpose=…, members=…)로 **Purpose(문제)만 갖고** 여세요 — **Goal·owner를 미리 정하지 말 것.** "
                 f"Goal은 Task 안에서 동료와 request(Info)로 합의해 **set_goal로 확정**하고, owner는 **그 일을 Work로 받는 "
                 f"동료가 됩니다**(수신=소유). **request 전에 create_task로 Task를 먼저 여세요.** 프로젝트 팀원은 request하면 "
@@ -237,6 +251,7 @@ class Sys:
                 f"확인되면 **deploy 툴로 반드시 배포**하고(검증만 하고 멈추면 미완) 라이브 URL 결과를 간결히 반환하세요 "
                 f"(검증이 구체적 결함을 드러내면 그 결함만 보완→재검증→배포)."
             )
+        my_role = domain or "팀원"
         return (
             f"당신은 자율적으로 일하는 팀원입니다(당신도 필요하면 동료에게 먼저 묻습니다). "
             f"당신의 역할: {my_role}\n받은 요청({getattr(kind, 'value', kind)}): {body}\n동료: {peers}\n\n"
@@ -272,8 +287,8 @@ class Sys:
                 tcm = getattr(self.guide, "typing", None)
                 if tcm is not None:
                     async with tcm(ch, organt_id):
-                        return await organt.handle(self._prompt(body, kind, role, organt_id))
-                return await organt.handle(self._prompt(body, kind, role, organt_id))
+                        return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader))
+                return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader))
             except Exception as e:
                 last = f"(에이전트 {organt_id} 처리 실패: {e})"
                 self._log("agent_revive", organt=organt_id, attempt=attempt + 1, err=str(e)[:100])
@@ -324,6 +339,9 @@ class Sys:
             return {"mode": "queued", "queued": len(self.queue)}
 
         self._reset_sessions()   # 새 요청 → 세션 초기화(이전 '이미 했다' 앵커링 차단)
+        # 이전 흐름의 런타임 채용(예비→직군) 라벨 원복 — dict는 그대로 두고 내용만 갱신(빌더 클로저가 참조 중).
+        self.bot_info.clear()
+        self.bot_info.update(self._roster_labels)
         proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'
         lead = proj["leader"] if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
