@@ -193,6 +193,7 @@ class Flow:
         self.req_results = {}          # (seg,from,to,kind,body)->응답: 같은 턴 병렬 중복요청 합치기용 캐시
         self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로
                                        #   일했나'를 wake 전후 스냅샷 차이로 판정(허위완료/독점 차단)
+        self.consec_fail = 0           # 연속 '응답 실패(무응답/타임아웃)' 횟수 — 시스템 일시불안정 판별(충원 루프 차단)
         self.log = None                # (event, **fields) 콜백 — SYS가 주입(flow.jsonl 영속)
 
     def start_root(self, root_id):
@@ -432,10 +433,21 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                        and flow.comm.open_requests and guard < 30):
                     flow.comm.escalate("베턴 굳음 안전복구")
                     guard += 1
-        if failed:   # 동료 무응답/일시오류 → 리더가 직접 떠안지 말고 '재배정/recruit'로 분산 유지
+        if failed:   # 동료 무응답/일시오류
+            flow.consec_fail = getattr(flow, "consec_fail", 0) + 1
+            if flow.log:
+                flow.log("req_failed", to=to, consec=flow.consec_fail, seg=flow.leader_segment)
+            # 연속 2회+ 실패 = '그 한 명' 문제가 아니라 시스템 일시불안정 → 더 채용/재배정해도 같이 실패한다.
+            # 충원 루프(예: 타임아웃 백엔드를 계속 새로 뽑는 것)를 끊고, 잠시 기다렸다 재시도하라고 안내.
+            if flow.consec_fail >= 2:
+                return _ok(f"[{to}] 또 응답 실패 — **연속 {flow.consec_fail}회**. 한 사람 문제가 아니라 시스템이 일시 "
+                           f"불안정한 상태입니다. **더 채용(recruit)하거나 새 사람에게 재배정하지 마세요** — 똑같이 "
+                           f"실패합니다. 같은 동료에게 잠시 뒤 한 번만 다시 요청하거나, 계속 안 되면 현재까지 상태를 "
+                           f"사용자에게 보고하고 멈추세요(무한 충원 루프 금지). ({result[:80]})")
             return _ok(f"[{to}] 응답 실패(무응답/일시오류). **직접 떠안지 마세요** — 같은 도메인의 다른 동료에게 "
                        f"재배정(request Work)하거나, 없으면 recruit로 풀에서 충원해 맡기세요(분산 유지). 같은 동료 "
                        f"재시도는 한 번만. ({result[:100]})")
+        flow.consec_fail = 0   # 정상 응답 → 연속 실패 카운터 리셋(일시 블립 회복)
         # owner가 깨어났지만 '실작업 없이'(run/Write/Edit 0회) 곧장 반환 = 아직 착수 전/계획만. 리더가 대신
         # 구현·완료하지 말 것(독점·허위완료의 정확한 진입점). 같은 owner에게 다시 맡겨 '검증된 산출물'을 받게
         # 안내한다. 이 응답은 캐시하지 않는다 → 같은 턴에 재위임해도 합쳐지지 않고 실제로 다시 깨운다.

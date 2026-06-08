@@ -357,6 +357,28 @@ def test_무응답시_재배정_안내_독점아님():
     assert "재배정" in txt and "recruit" in txt and "떠안지" in txt   # 독점 대신 분산 안내
 
 
+def test_연속실패는_충원루프_차단():
+    """무응답/타임아웃이 '연속'되면(시스템 일시불안정) '더 채용 말라'로 바뀐다 — 타임아웃 백엔드를 계속
+    새로 뽑던 충원 루프(백엔드 6명 사태) 차단. 정상 응답이 한 번 오면 카운터 리셋."""
+    g = FakeGuide()
+    f = _flow(g)
+    state = {"fail": True}
+
+    async def wake(to, b, k):
+        return "API Error: timeout" if state["fail"] else "완료"
+
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"purpose": "p", "goal": "g"}))
+    r1 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "1차"}))
+    assert "recruit" in r1["content"][0]["text"] and f.consec_fail == 1   # 1회: 재배정/충원 안내
+    r2 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "2차"}))
+    assert "더 채용" in r2["content"][0]["text"] and "시스템" in r2["content"][0]["text"]  # 2회+: 루프 차단
+    assert f.consec_fail == 2
+
+
 def test_continue전_고아베턴_복구():
     """위임 도중 리더 턴이 끝나 베턴이 동료에 굳으면(고아), continue가 리더를 다시 띄우기 전에 베턴을
     리더로 강제 복구한다 — '활성=동료'로 모든 요청이 거부되는 '두 흐름' 버그 방지."""
