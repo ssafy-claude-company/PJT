@@ -65,10 +65,16 @@ class Sys:
         if not self.projects_path:
             return
         try:
-            with open(self.projects_path, "w", encoding="utf-8") as f:
-                json.dump({"n": self._proj_n,
-                           "projects": {str(k): v for k, v in self.projects.items()}},
-                          f, ensure_ascii=False, indent=2)
+            data = {"n": self._proj_n,
+                    "projects": {str(k): v for k, v in self.projects.items()}}
+            # 원자적 저장: 임시파일에 다 쓰고 flush+fsync 후 교체 → 쓰는 도중 프로세스가 죽어도
+            # 원본 projects.json이 '반쪽(깨진 JSON)'으로 남지 않는다(개입 레지스트리 유실 방지).
+            tmp = f"{self.projects_path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.projects_path)
         except Exception:
             pass
 
