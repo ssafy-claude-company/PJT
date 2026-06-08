@@ -390,6 +390,13 @@ def test_연속실패는_충원루프_차단():
     r2 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "2차"}))
     assert "더 채용" in r2["content"][0]["text"] and "시스템" in r2["content"][0]["text"]  # 2회+: 루프 차단
     assert f.consec_fail == 2
+    # consec_fail>=2 → recruit 자체가 '하드 차단'(안내가 아니라 거부) — 백엔드 6명 충원 구조적으로 불가
+    rc = asyncio.run(t["recruit"].handler({"role": "백엔드", "reason": "충원"}))
+    assert "채용 보류" in rc["content"][0]["text"]
+    # 정상 응답이 한 번 오면 consec_fail 리셋 → 다시 채용 가능
+    state["fail"] = False
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "3차"}))
+    assert f.consec_fail == 0
 
 
 def test_continue전_고아베턴_복구():

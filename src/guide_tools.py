@@ -478,6 +478,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
     async def recruit(args):
         if flow.current is None:
             return _ok("오류: 진행 중인 Task가 없습니다. 먼저 create_task로 Task를 여세요.")
+        # 충원 루프 하드 차단: 최근 요청이 연속 2회+ 실패(시스템 일시불안정)면 채용을 막는다 — 지금 새로
+        # 뽑아도 같은 불안정으로 똑같이 실패한다('백엔드 6명' 사태의 구조적 차단; 안내가 아니라 거부).
+        # 기존 동료에게 다시 요청해 한 명이라도 응답이 오면 consec_fail이 리셋돼 다시 채용 가능.
+        if getattr(flow, "consec_fail", 0) >= 2:
+            return _ok(f"채용 보류: 최근 요청이 연속 {flow.consec_fail}회 무응답/실패 — 시스템 일시 불안정입니다. "
+                       f"지금 새로 뽑아도 같이 실패하니 채용을 막습니다(무한 충원 루프 방지). 기존 동료에게 잠시 뒤 "
+                       f"다시 요청해 한 명이라도 응답이 오면 그때 충원하거나, 계속 안 되면 사용자에게 보고하고 멈추세요.")
         role_name = (args.get("role") or "").strip()
         spec = (args.get("member") or "").strip()
         cand = _resolve_members(spec, flow, flow.pool) if spec else []
