@@ -11,8 +11,9 @@ Organt 로스터는 ORGANT_ROSTER 환경변수로 구성한다(없으면 TEST_BO
 각 항목은 '토큰_환경변수명:역할'이며 첫 항목이 리더다(토큰 값은 각 환경변수에 둔다).
 """
 import asyncio
-import json
+import logging
 import os
+import traceback
 from typing import Dict, List, Tuple
 
 import discord
@@ -107,6 +108,18 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
 async def run() -> None:
     cfg = load_config()
     audit = AuditLog(cfg.audit_log_path)
+    # 진단 로깅: discord 게이트웨이·asyncio·SDK 경고/오류를 stderr로 흘려 listener.log에 남긴다
+    # (리스너가 '조용히' 죽던 원인을 보기 위함). asyncio 미처리 예외도 잡아 기록.
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    log = logging.getLogger("organt.listener")
+    try:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(
+            lambda lp, ctx: log.error("asyncio 미처리 예외: %s", ctx.get("message") or ctx,
+                                      exc_info=ctx.get("exception")))
+    except Exception:
+        pass
 
     system_client, sys_task = await _connect(cfg.system_bot_token)
     tasks = [sys_task]
@@ -132,67 +145,66 @@ async def run() -> None:
     print(f"SYS 가동 — 리더={bot_info[leader_id]}({leader_id}), 팀={list(bot_info.values())}")
     print(f"#{channel.name} 에서 User 입력 대기 중 — 그냥 말 걸어도 됩니다(Ctrl+C 종료)")
 
-    # 메시지 중복처리 영구 차단: 같은 [Request]를 두 번 처리하지 않는다(부팅스캔↔on_message 중복,
-    # 재시작 시 직전 요청 재처리, 디스코드 재전달 모두 차단). 처리한 message_id를 디스크에 영속.
-    seen_path = cfg.audit_log_path.parent / "processed_ids.json"
-    try:
-        seen = set(json.load(open(seen_path, encoding="utf-8")))
-    except Exception:
-        seen = set()
-
-    def _seen_once(mid) -> bool:
-        """처음 보는 메시지면 기록하고 True. 이미 처리된 메시지면 False(중복 → 건너뜀)."""
-        mid = str(mid)
-        if not mid or mid in seen:
-            return False
-        seen.add(mid)
-        try:
-            json.dump(sorted(seen)[-3000:], open(seen_path, "w", encoding="utf-8"))
-        except OSError:
-            pass
-        return True
+    # 같은 메시지를 이 세션에서 두 번 처리하지 않는 가드(디스코드 재전달 등). 재시작 간 '완료 여부'는
+    # 채널에 [Response]가 달렸는지로 판단한다(아래 부팅 복구) — 그래서 영속 dedup 파일은 쓰지 않는다.
+    seen = set()
 
     @system_client.event
     async def on_message(message):
-        # 흐름은 User에서만 시작 — Organt/System 발화는 무시.
-        if message.author.id in organts or message.author.id == system_client.user.id:
-            return
-        ch = message.channel.id
-        is_project = ch in sysm.projects        # 등록된 프로젝트 채널이면 '개입'
-        if ch != cfg.channel_id and not is_project:
-            return
-        req = parse(
-            message_id=str(message.id),
-            author_id=message.author.id,
-            mention_ids=[m.id for m in message.mentions],
-            reply_to_id=(message.reference.message_id if message.reference else None),
-            content=message.content,
-        )
-        if not isinstance(req, Request):
-            if is_project and (message.content or "").strip():
-                # 프로젝트 채널의 평문 = 그 프로젝트 개입 명령(그냥 말 걸어도 됨)
-                req = Request(to_id=None, kind=Kind.WORK, body=message.content.strip(),
-                              from_id=message.author.id, message_id=str(message.id))
-            else:
-                return                   # 메인 채널은 구조적 [Request]만 시작
-        if not _seen_once(message.id):   # 같은 메시지 두 번 처리 금지(중복 흐름 차단)
-            return
-        if req.to_id is None:
-            req.to_id = sysm.projects[ch]["leader"] if is_project else leader_id
-        audit.record("user_request", to=req.to_id, body=req.body[:200])
-        await sysm.route_channel_request(ch, req)   # 실제 채널 id로 라우팅 → 개입 자동 감지
+        try:
+            # 흐름은 User에서만 시작 — Organt/System 발화는 무시.
+            if message.author.id in organts or message.author.id == system_client.user.id:
+                return
+            ch = message.channel.id
+            is_project = ch in sysm.projects        # 등록된 프로젝트 채널이면 '개입'
+            if ch != cfg.channel_id and not is_project:
+                return
+            req = parse(
+                message_id=str(message.id),
+                author_id=message.author.id,
+                mention_ids=[m.id for m in message.mentions],
+                reply_to_id=(message.reference.message_id if message.reference else None),
+                content=message.content,
+            )
+            if not isinstance(req, Request):
+                if is_project and (message.content or "").strip():
+                    req = Request(to_id=None, kind=Kind.WORK, body=message.content.strip(),
+                                  from_id=message.author.id, message_id=str(message.id))
+                else:
+                    return                   # 메인 채널은 구조적 [Request]만 시작
+            if str(message.id) in seen:      # 같은 메시지 두 번 처리 금지(세션 내 재전달 가드)
+                return
+            seen.add(str(message.id))
+            if req.to_id is None:
+                req.to_id = sysm.projects[ch]["leader"] if is_project else leader_id
+            audit.record("user_request", to=req.to_id, body=req.body[:200])
+            log.info("요청 수신: to=%s body=%r", req.to_id, (req.body or '')[:60])
+            await sysm.route_channel_request(ch, req)   # 실제 채널 id로 라우팅
+            log.info("요청 처리 완료: to=%s", req.to_id)
+        except Exception:
+            # 흐름 처리 중 어떤 예외도 리스너를 죽이지 않게 삼키고 전체 트레이스를 남긴다(조용한 죽음 방지).
+            log.error("on_message 처리 중 예외:\n%s", traceback.format_exc())
 
-    # 부팅 시점에 채널에 이미 있던 메시지는 '처리됨'으로 표시만 한다(자동 재처리 안 함) — 재시작마다
-    # 직전 요청을 또 돌리던 중복 버그 차단. 라이브 요청은 위 on_message가 받는다.
+    # 부팅 복구: 응답이 안 달린 [Request](중단됐거나 연결 직전 도착)는 다시 처리한다 — 리스너가 흐름
+    # 도중 죽어도 재시작 시 그 요청을 마저 완료한다([Response]가 달린 요청은 완료로 보고 건너뜀).
     try:
         recent = await guide.read_thread(cfg.channel_id, limit=30)
-        for m in recent:
-            mid = getattr(m, "message_id", None)
-            if mid:
-                seen.add(str(mid))
-        json.dump(sorted(seen)[-3000:], open(seen_path, "w", encoding="utf-8"))
     except Exception:
-        pass
+        recent = []
+    known = set(organts) | {system_client.user.id}
+    pending = None
+    for m in recent:
+        if isinstance(m, Request) and m.from_id not in known:
+            pending = m                  # User가 올린 미처리 Request 후보(응답이 뒤따르면 아래에서 해제)
+        elif isinstance(m, Response):
+            pending = None
+    if pending is not None and str(pending.message_id) not in seen:
+        seen.add(str(pending.message_id))
+        if pending.to_id is None:
+            pending.to_id = leader_id
+        log.info("부팅 복구: 미응답 [Request] 재처리: %r", (pending.body or '')[:60])
+        audit.record("user_request", to=pending.to_id, body=(pending.body or '')[:200])
+        asyncio.create_task(sysm.route_channel_request(cfg.channel_id, pending))
 
     await asyncio.gather(*tasks)
 
