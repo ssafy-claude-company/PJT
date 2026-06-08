@@ -271,9 +271,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if flow.wake is None:
             return _ok("오류: 시스템 준비 안 됨")
         # 직렬화: 베턴이 내 차례가 될 때까지 대기(거부 아님). 서로 다른 동료로의 병렬 요청은 순차 처리되며,
-        # 첫 요청이 길게(중첩 협의) 걸려도 베턴은 결국 돌아오므로 위임이 끊기지 않는다(이전엔 여기서 거부해
-        # 리더가 '요청이 막혔다'고 오판→독점하는 역효과가 났다). 데드라인은 교착 안전장치.
-        deadline = time.monotonic() + 600
+        # 첫 요청이 길게(중첩 협의·긴 구현) 걸려도 베턴은 결국 돌아오므로 위임이 끊기지 않는다. 데드라인은
+        # 교착 안전장치 — 게임처럼 한 동료가 10분+ 작업하는 경우까지 넉넉히(1시간) 둬 '활성=동료' 반려가
+        # 안 뜨게 한다(이전 600초는 긴 작업 중 병렬요청이 타임아웃돼 무서운 '거부' 노이즈를 냈다).
+        deadline = time.monotonic() + 3600
         while flow.comm.alive != me_id and not flow.comm.done and time.monotonic() < deadline:
             await anyio.sleep(0.05)
         # 같은 턴에 '같은 동료에게 같은 요청'을 다발로 보낸 병렬 중복은 합친다(idempotent): 동료를 다시
@@ -286,6 +287,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             _dbg(f"{tag} ⇉병렬중복 합침(동료 재호출 없이 같은 응답 재사용)")
             return _ok(f"[{to} 응답] {flow.req_results[dupkey][:600]}\n"
                        f"(같은 턴에 이미 보낸 동일 요청 — 동료를 다시 호출하지 않고 같은 응답을 재사용)")
+        # 대기 한도까지 베턴이 안 돌아옴(동료가 비정상적으로 오래 작업) — 규약위반이 아니므로 무서운 '거부'
+        # 안내를 사용자에게 띄우지 않고 조용히 '보류'로 소프트 반환(리더는 응답 받은 뒤 다시 시도).
+        if flow.comm.alive != me_id and not flow.comm.done:
+            _dbg(f"{tag} ⏸보류:대기 한도 초과(활성={flow.comm.alive})")
+            return _ok(f"[보류] {flow._info(to) or to}가 아직 작업 중이라 지금은 보내지 않았습니다 — 그 동료의 "
+                       f"응답을 받은 뒤 다시 요청하세요(오류 아님).")
         # 검증→점유는 await 없이 인접 실행 → 형제 요청과 경합하지 않음(원자적).
         try:
             flow.comm.check_request(me_id, to, kind)
