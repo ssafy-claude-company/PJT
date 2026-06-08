@@ -352,13 +352,14 @@ def test_협의게이트_peer협의_인정_빈핑_불인정():
     assert 13 in f.current.participated                           # peer 협의(12→13)로 13도 참여 인정
 
 
-def test_무응답시_재배정_안내_독점아님():
-    """동료가 무응답/일시오류면 리더가 직접 떠안으라 하지 않고 '재배정/recruit'를 안내한다(독점 방지)."""
+def test_무응답은_인프라로_취급_재배정_충원_안함():
+    """단일흐름에선 한 명만 일하므로 동료 '실패'는 그 동료가 아니라 인프라(서브프로세스 크래시)다 →
+    '다른 사람 재배정·새 채용'을 권하지 않는다(같은 환경이라 똑같이 실패 — '백엔드 6명' 루프의 뿌리)."""
     g = FakeGuide()
     f = _flow(g)                                   # leader 11, member 12
 
     async def wake(to, b, k):
-        return "API Error: 529 overloaded"         # 무응답/일시오류 모의
+        return "API Error: 529 overloaded"         # 서브프로세스 크래시/일시오류 모의
 
     f.wake = wake
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
@@ -367,7 +368,8 @@ def test_무응답시_재배정_안내_독점아님():
     asyncio.run(t["set_goal"].handler({"purpose": "p", "goal": "g"}))
     r = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
     txt = r["content"][0]["text"]
-    assert "재배정" in txt and "recruit" in txt and "떠안지" in txt   # 독점 대신 분산 안내
+    assert "인프라" in txt and "새로 뽑지" in txt and "보고" in txt   # 인프라로 취급, 재배정·충원 안 권함
+    assert "recruit" not in txt and "재배정" not in txt              # 교체·충원을 권하지 않음
 
 
 def test_연속실패는_충원루프_차단():
@@ -386,9 +388,10 @@ def test_연속실패는_충원루프_차단():
     f.current.participated.add(12)
     asyncio.run(t["set_goal"].handler({"purpose": "p", "goal": "g"}))
     r1 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "1차"}))
-    assert "recruit" in r1["content"][0]["text"] and f.consec_fail == 1   # 1회: 재배정/충원 안내
+    assert "인프라" in r1["content"][0]["text"] and f.consec_fail == 1   # 1회: 인프라로 취급(교체·충원 안 권함)
+    assert "새로 뽑지" in r1["content"][0]["text"]
     r2 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "2차"}))
-    assert "더 채용" in r2["content"][0]["text"] and "시스템" in r2["content"][0]["text"]  # 2회+: 루프 차단
+    assert "환경" in r2["content"][0]["text"] and "새로 뽑" in r2["content"][0]["text"]  # 2회+: 환경 불안정 보고
     assert f.consec_fail == 2
     # consec_fail>=2 → recruit 자체가 '하드 차단'(안내가 아니라 거부) — 백엔드 6명 충원 구조적으로 불가
     rc = asyncio.run(t["recruit"].handler({"role": "백엔드", "reason": "충원"}))
