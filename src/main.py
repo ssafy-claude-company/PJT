@@ -187,6 +187,7 @@ async def run() -> None:
 
     # 부팅 복구: 응답이 안 달린 [Request](중단됐거나 연결 직전 도착)는 다시 처리한다 — 리스너가 흐름
     # 도중 죽어도 재시작 시 그 요청을 마저 완료한다([Response]가 달린 요청은 완료로 보고 건너뜀).
+    # ORGANT_SKIP_RECOVERY=1 이면 복구를 건너뛴다(깨끗한 슬레이트로 시작 — 이전 미응답 요청 재실행 안 함).
     try:
         recent = await guide.read_thread(cfg.channel_id, limit=30)
     except Exception:
@@ -198,6 +199,11 @@ async def run() -> None:
             pending = m                  # User가 올린 미처리 Request 후보(응답이 뒤따르면 아래에서 해제)
         elif isinstance(m, Response):
             pending = None
+    if os.environ.get("ORGANT_SKIP_RECOVERY"):
+        if pending is not None:
+            seen.add(str(pending.message_id))   # 재실행 안 하되, 이후 on_message 중복도 막게 seen 처리
+            log.info("부팅 복구 건너뜀(ORGANT_SKIP_RECOVERY) — 미응답 요청 재실행 안 함")
+        pending = None
     if pending is not None and str(pending.message_id) not in seen:
         seen.add(str(pending.message_id))
         if pending.to_id is None:
