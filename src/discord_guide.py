@@ -171,6 +171,38 @@ class DiscordGuide:
                 ok += 1
         return ok
 
+    # 새 봇 '원터치 초대'용 권한 — 워커가 스레드에 글 쓰고 반응/기록을 읽는 데 필요한 최소 집합
+    # (View+Send+Embed+History+Reactions+Send-in-Threads). 봇 생성만 사람이 하고 초대는 링크 한 번.
+    INVITE_PERMS = 1024 + 2048 + 16384 + 65536 + 64 + 274877906944  # = 274877992000
+
+    @staticmethod
+    def invite_url(app_id: int, perms: int = None) -> str:
+        """봇을 서버에 넣는 OAuth2 초대 URL(클릭 한 번이면 합류). app_id는 봇의 user.id(=application id)."""
+        p = DiscordGuide.INVITE_PERMS if perms is None else perms
+        return (f"https://discord.com/oauth2/authorize?client_id={int(app_id)}"
+                f"&scope=bot&permissions={p}")
+
+    async def not_in_guild(self, guild_id: int, user_ids) -> List[int]:
+        """user_ids 중 이 길드에 아직 없는(초대 안 된) 봇 id 목록 — '원터치 초대'를 띄울 대상."""
+        import discord
+        out: List[int] = []
+        try:
+            guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
+        except Exception:
+            return out
+        for uid in user_ids:
+            try:
+                m = guild.get_member(int(uid))
+                if m is None:
+                    m = await guild.fetch_member(int(uid))
+                if m is None:
+                    out.append(int(uid))
+            except discord.NotFound:
+                out.append(int(uid))
+            except Exception:
+                pass   # 권한/일시 오류는 '미초대'로 단정하지 않음
+        return out
+
     # --- Task = 채널 상태블록 + 스레드 ---
 
     async def open_task(self, channel_id: int, status: TaskStatus):

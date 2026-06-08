@@ -97,3 +97,12 @@ def test_send_response_보낸봇으로_reply():
     req = asyncio.run(thread.send("[Request]..."))
     asyncio.run(g.send_response(thread_id=500, sender_id=111, request_msg_id=req.id, body="완료"))
     assert any(m.content == "[Response]\nBody: 완료" for m in thread.sent)
+
+
+def test_invite_url_원터치_초대링크():
+    """봇 user.id(=application id)로 클릭 한 번에 합류하는 OAuth2 초대 URL을 만든다 — 새 봇 추가 자동화."""
+    url = DiscordGuide.invite_url(987654321)
+    assert url.startswith("https://discord.com/oauth2/authorize?")
+    assert "client_id=987654321" in url and "scope=bot" in url and "permissions=" in url
+    # 워커 권한(메시지/스레드/반응/기록)이 0이 아니어야 — 초대돼도 글 못 쓰는 일 방지
+    assert DiscordGuide.INVITE_PERMS > 0 and f"permissions={DiscordGuide.INVITE_PERMS}" in url

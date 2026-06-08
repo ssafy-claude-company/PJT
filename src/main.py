@@ -155,6 +155,17 @@ async def run() -> None:
         log.info("봇 닉네임(직군) 설정: %d/%d", n_ok, len(bot_info))
     except Exception:
         pass
+    # 원터치 초대: 토큰은 있는데 아직 '서버에 없는' 봇은 클릭 한 번이면 합류하는 초대 링크를 띄운다
+    # (봇 생성만 사람이 하고 초대는 링크 클릭으로 최소화). 이미 서버에 있으면 아무것도 안 띄움.
+    try:
+        miss = await guide.not_in_guild(channel.guild.id, list(organts))
+        if miss:
+            lines = "\n".join(f"• {bot_info.get(u, '?')}: {guide.invite_url(u)}" for u in miss)
+            log.warning("서버 미초대 봇 %d명 — 초대 링크 안내", len(miss))
+            await guide.post(cfg.channel_id, system_client.user.id,
+                             f"[원터치 초대 필요] 아래 봇이 서버에 없습니다. 각 링크 클릭 한 번으로 합류시키세요:\n{lines}")
+    except Exception:
+        pass
     sysm = Sys(guide, channel.guild.id, _make_builder(cfg, audit, bot_info), bot_info=bot_info,
                workspace=cfg.workspace_dir,
                projects_path=str(cfg.audit_log_path.parent / "projects.json"),
@@ -230,6 +241,51 @@ async def run() -> None:
         audit.record("user_request", to=pending.to_id, body=(pending.body or '')[:200])
         asyncio.create_task(sysm.route_channel_request(cfg.channel_id, pending))
 
+    # 핫리로드: 실행 중 .env를 주기적으로 다시 읽어 '새로 떨군 토큰'을 자동 연결·합류시킨다(재시작 불필요).
+    # 사람은 봇 생성+토큰을 .env에 넣기만 하면 되고, 연결·직군 닉네임·풀 합류·미초대 시 초대링크까지 자동.
+    async def _watch_new_tokens():
+        try:
+            from dotenv import load_dotenv
+        except Exception:
+            return
+        from .config import ROOT
+        known = set()
+        try:
+            known = {tok for tok, _ in load_roster()}   # 시작 시 이미 연결된 토큰
+        except Exception:
+            pass
+        while True:
+            await asyncio.sleep(25)
+            try:
+                load_dotenv(ROOT / ".env", override=True)   # .env 다시 읽기(새 ORGANT_BOT_N 반영)
+                for token, role in load_roster():
+                    if token in known:
+                        continue
+                    known.add(token)
+                    try:
+                        client, task = await _connect(token)   # 워커: message_content 불필요
+                    except Exception as e:
+                        log.error("핫리로드 연결 실패 role=%s: %s", role, e)
+                        continue
+                    uid = client.user.id
+                    organts[uid] = client
+                    bot_info[uid] = role
+                    sysm._roster_labels[uid] = role   # 흐름 시작 라벨 원복 대상에 포함(새 흐름에서 유지)
+                    guide.register_organt(uid, client)
+                    tasks.append(task)
+                    try:
+                        await guide.set_nick(channel.guild.id, uid, role)
+                    except Exception:
+                        pass
+                    if await guide.not_in_guild(channel.guild.id, [uid]):
+                        await guide.post(cfg.channel_id, system_client.user.id,
+                                         f"[원터치 초대] 새 봇 '{role}'을 서버에 추가하려면 클릭: "
+                                         f"{guide.invite_url(uid)}")
+                    log.info("핫리로드: %s(%s) 합류 — 현재 워커 %d명", role, uid, len(organts))
+            except Exception:
+                log.error("핫리로드 오류:\n%s", traceback.format_exc())
+
+    tasks.append(asyncio.create_task(_watch_new_tokens()))
     await asyncio.gather(*tasks)
 
 
