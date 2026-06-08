@@ -126,6 +126,7 @@ async def run() -> None:
         pass
 
     system_client, sys_task = await _connect(cfg.system_bot_token, message_content=True)
+    log.info("System 봇(관리자/라우터) 연결: %s (%s)", system_client.user, system_client.user.id)
     tasks = [sys_task]
     organts: Dict[int, object] = {}
     bot_info: Dict[int, str] = {}
@@ -141,6 +142,7 @@ async def run() -> None:
         organts[client.user.id] = client
         bot_info[client.user.id] = role_label
         tasks.append(task)
+        log.info("워커 연결: %s (%s) ← 직군 '%s'", client.user, client.user.id, role_label)
         if leader_id is None:        # 첫 '연결 성공' 봇이 기본 담당자(To 없을 때의 폴백)
             leader_id = client.user.id
     if leader_id is None:
