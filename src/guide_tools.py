@@ -143,6 +143,8 @@ class TaskRef:
     owner: int = 0                                   # 이 산출물의 단일 책임자(accountable)
     participated: set = field(default_factory=set)   # 이 Task 정의에 '실질 협의'로 참여한 동료(보낸/받은 쪽 모두)
     owner_incomplete: bool = False                   # owner가 '턴 한도'로 미완 반환 → 완료 차단(이어서 끝내야)
+    owner_delivered: bool = False                    # owner가 '검증된 실작업 산출물'을 위임 도중 실제로 내고 응답이 돌아왔나
+                                                     #   → 거짓이면 complete_task 거부(owner 미응답·착수전인데 리더가 대신 허위완료 차단)
     verified: bool = False                           # run으로 한 번이라도 실행됐나(실행 0회 완료 차단)
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
@@ -180,6 +182,8 @@ class Flow:
         self.pending_clarify = None    # 위임자에게 되묻기(확인요청 반환) 임시 보관
         self.leader_segment = 0        # 리더 턴 세그먼트 번호(시작=1, continue마다 +1) — 관측용
         self.req_results = {}          # (seg,from,to,kind,body)->응답: 같은 턴 병렬 중복요청 합치기용 캐시
+        self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로
+                                       #   일했나'를 wake 전후 스냅샷 차이로 판정(허위완료/독점 차단)
         self.log = None                # (event, **fields) 콜백 — SYS가 주입(flow.jsonl 영속)
 
     def start_root(self, root_id):
@@ -356,6 +360,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 if x in flow.current.team and x != flow.leader:
                     flow.current.participated.add(x)
         runs_before = flow.current.run_count if flow.current else 0
+        acts_before = flow.act_count   # 위임 도중 owner(단일흐름이라 깨운 동료만 활성)가 실제로 일했는지 측정
         try:
             result = await flow.wake(to, owner_body, kind)      # 동료 깨워 응답(중첩 베턴)
             if _looks_transient(result):                        # 일시 오류면 한 번 더(답으로 취급 X)
@@ -382,14 +387,26 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                       and "턴 한도 도달" in (result or ""))
         if kind == Kind.WORK and not was_clarify and flow.current:
             flow.current.owner_incomplete = incomplete
+        # owner가 '위임 도중 실제로 일했나' — 단일흐름이라 깨운 동료(+그 하위)만 활성이므로 wake 전후
+        # act_count(run/Write/Edit) 증가 = owner 작업. 거짓이면 owner는 깨어났지만 착수 전/계획만 하고
+        # 곧장 반환한 것(허위완료의 씨앗). 이걸로 '검증된 인도'와 '빈 응답'을 가른다.
+        owner_acted = flow.act_count > acts_before
+        is_owner_work = (kind == Kind.WORK and not was_clarify and not failed and not incomplete
+                         and flow.current is not None and to == flow.current.owner)
+        # owner가 Work를 받고도 실작업(run/Write) 0회로 곧장 반환 = 착수 전/계획만 = '인도 아님'.
+        premature = is_owner_work and not owner_acted
+        if is_owner_work and owner_acted and _is_substantive(result):
+            flow.current.owner_delivered = True   # 이 owner가 실작업+응답을 냈다 → complete_task 허용 근거
         try:
             await g.send_response(thread_id, to, req, result)
             await _react(g, thread_id, req, "⚠️" if failed else "✅")  # 상태=이모지(해소/실패)
-            _dbg(f"{tag} {'⚠실패' if failed else ('…미완' if incomplete else '✓응답')} len={len(result)}")
+            _dbg(f"{tag} {'⚠실패' if failed else ('…미완' if (incomplete or premature) else '✓응답')} len={len(result)}")
         finally:
-            # 프레임 close = 베턴 복귀(누수 방지). 정상이면 alive==to 라 그대로 닫힌다.
+            # 프레임 close = 베턴 복귀(누수 방지). 정상이면 alive==to 라 그대로 닫힌다. 미완·미착수(premature)는
+            # 'accept'로 안 쳐서 delivered로 기록 안 함 → 같은 owner 재위임이 Redo 한도에 안 걸리고 '실제 첫 인도'로 성립.
             try:
-                flow.comm.respond(to, "clarify" if was_clarify else ("incomplete" if incomplete else "accept"), result)
+                flow.comm.respond(to, "clarify" if was_clarify else
+                                  ("incomplete" if (incomplete or premature) else "accept"), result)
             except CommError:
                 # to의 중첩 하위요청이 응답 없이 끝나(크래시/이탈) 베턴이 to에 '굳은' 비정상 상황 →
                 # me_id(요청자)가 다시 alive 될 때까지 위 프레임을 강제 close. 흐름 교착(굳음) 방지.
@@ -404,6 +421,17 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             return _ok(f"[{to}] 응답 실패(무응답/일시오류). **직접 떠안지 마세요** — 같은 도메인의 다른 동료에게 "
                        f"재배정(request Work)하거나, 없으면 recruit로 풀에서 충원해 맡기세요(분산 유지). 같은 동료 "
                        f"재시도는 한 번만. ({result[:100]})")
+        # owner가 깨어났지만 '실작업 없이'(run/Write/Edit 0회) 곧장 반환 = 아직 착수 전/계획만. 리더가 대신
+        # 구현·완료하지 말 것(독점·허위완료의 정확한 진입점). 같은 owner에게 다시 맡겨 '검증된 산출물'을 받게
+        # 안내한다. 이 응답은 캐시하지 않는다 → 같은 턴에 재위임해도 합쳐지지 않고 실제로 다시 깨운다.
+        if premature:
+            _dbg(f"{tag} ⚠owner 미착수(실작업 0)")
+            if flow.log:
+                flow.log("owner_no_work", to=to, seg=flow.leader_segment)
+            return _ok(f"[{to} 응답] {result[:300]}\n\n[중요] {flow._info(to) or to}가 아직 산출물을 만들지 "
+                       f"않았습니다(run/파일작성 0회 — 착수 전이거나 계획만). **당신이 대신 구현하거나 이 Task를 "
+                       f"완료하지 마세요(독점·허위완료 금지).** 같은 owner에게 request(Work)로 다시 맡겨 'run으로 "
+                       f"검증한 실제 산출물'을 받은 뒤 진행하세요. 정말 끝까지 무응답이면 recruit/재배정으로.")
         # 위임 응답엔 owner가 '직접 돌린 실행 증거(시스템 캡처)'를 붙여 돌려준다 — 위임자가 말이 아니라
         # 증거로 '검증 후 수락'할 수 있게(반사적 재요청 대신). owner가 이번에 run을 돌렸을 때만.
         receipt = ""
@@ -607,6 +635,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 return _ok(f"완료 거부: 이 Task의 담당자가 '턴 한도'로 작업을 미완 반환했습니다 — 새 Task로 넘어가지 말고, "
                            f"같은 담당자에게 request(Work)로 '이어서 남은 부분을 마저 끝내라'고 재위임해 완성시킨 뒤 "
                            f"complete_task 하세요(이어가기는 횟수 제한 없음). 미완을 두고 다음으로 넘어가면 그 작업이 유실됩니다.")
+            # owner에게 Work를 위임해 놓고(소유자 지정됨) 그 owner가 '검증된 산출물+응답'을 아직 내지 않았는데
+            # 리더가 대신 완료하는 것을 막는다 — 이것이 사용자가 지적한 '허위 완료'(owner가 일하는 중/응답 전인데
+            # 완료 때리고 다음 Task 열기)의 정확한 차단점. owner가 실제로 일하고 응답이 돌아와야(owner_delivered)
+            # 완료 가능. (리더가 위임 없이 자기 도메인을 직접 한 Task는 owner==0이라 이 게이트를 건너뛴다.)
+            if flow.current.owner and not flow.current.owner_delivered:
+                return _ok(f"완료 거부: 이 Task는 owner({flow.current.status.owner or flow.current.owner})에게 "
+                           f"위임돼 있는데 그 owner가 아직 '검증된 산출물'을 응답으로 내지 않았습니다(착수 전·작업 중일 "
+                           f"수 있음). **owner가 일하는 중에 대신 완료하지 마세요(허위 완료 금지).** 같은 owner에게 "
+                           f"request(Work)로 맡겨 run 검증 증거가 붙은 완료 응답을 받은 뒤 complete_task 하세요. "
+                           f"끝내 무응답이면 recruit/재배정으로 다른 담당에게 맡기세요(리더가 대리 구현·완료 금지).")
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.

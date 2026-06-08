@@ -109,3 +109,50 @@ def test_flow없으면_게이트_미적용():
     a = FakeAudit()
     hook = make_pre_tool_use_hook(a, ALLOWED, actor=12)
     assert _run(hook, "Write", {"file_path": "x.txt"}) == {}
+
+
+class _FakeTask:
+    """Fix B용 최소 Task: owner와 status.owner(표시용)만."""
+    def __init__(self, owner, owner_label="프A"):
+        self.owner = owner
+        self.status = type("S", (), {"owner": owner_label})()
+
+
+class _FakeFlow2(_FakeFlow):
+    """current(owner 지정)·leader·act_count를 갖춘 흐름 — owner 도메인 대리구현 게이트 검증용."""
+    def __init__(self, comm, current=None, leader=11):
+        super().__init__(comm)
+        self.current = current
+        self.leader = leader
+        self.act_count = 0
+
+
+def test_리더는_위임된_owner도메인_대리구현_차단():
+    """이미 owner(12)에게 Work로 위임된 Task의 산출물을 리더(11)가 Write하면 거부 — 독점·허위완료 차단.
+    (사용자가 잡은 '리더가 프론트 파일을 직접 만들고 완료' 패턴의 차단점.)"""
+    a = FakeAudit()
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=_FakeTask(owner=12), leader=11)
+    hook = make_pre_tool_use_hook(a, ALLOWED, actor=11, flow=flow)
+    out = _run(hook, "Write", {"file_path": "public/app.js"})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "위임된 owner 도메인 대리구현"
+    assert flow.act_count == 0   # 거부됐으니 작업 집계 안 됨
+
+
+def test_owner본인_구현은_허용되고_act집계():
+    """owner(12) 본인이 자기 Task 산출물을 Write하는 건 허용되고 act_count가 +1 — '검증된 인도' 측정 신호."""
+    a = FakeAudit()
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK), (11, 12, Kind.WORK)),
+                      current=_FakeTask(owner=12), leader=11)
+    hook = make_pre_tool_use_hook(a, ALLOWED, actor=12, flow=flow)
+    assert _run(hook, "Write", {"file_path": "public/app.js"}) == {}
+    assert flow.act_count == 1
+
+
+def test_위임전_owner0_Task는_리더구현_허용():
+    """아직 위임 안 한(owner==0) Task에선 리더도 직접 구현 가능 — 리더도 한 직원(중앙집권 아님)."""
+    a = FakeAudit()
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=_FakeTask(owner=0), leader=11)
+    hook = make_pre_tool_use_hook(a, ALLOWED, actor=11, flow=flow)
+    assert _run(hook, "Write", {"file_path": "server.js"}) == {}
+    assert flow.act_count == 1

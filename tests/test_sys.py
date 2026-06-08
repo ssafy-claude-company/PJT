@@ -542,6 +542,7 @@ def test_재위임은_Redo로_바운드_정당한첫위임은_허용():
 
     async def wake(to, b, k):
         waked.append((to, b))
+        f.act_count += 1   # owner가 위임 도중 실제로 작업(run/Write)했다고 모의 → '검증된 인도'(허위완료 가드 통과)
         return "완료"
 
     f.wake = wake
@@ -592,6 +593,45 @@ def test_같은턴_병렬중복요청은_합쳐서_재호출안함():
     assert "재사용" in r2["content"][0]["text"] and "동료응답" in r2["content"][0]["text"]
 
 
+def test_owner_미착수면_허위완료_차단_실작업후_완료허용():
+    """사용자가 잡은 '허위 완료' 차단: owner에게 Work를 위임했는데 owner가 아무 실작업(run/Write) 없이
+    곧장 반환(착수 전/계획만, response 사실상 빈)하면 — ① request가 '대신 구현·완료 말라'고 안내하고
+    ② owner_delivered=False라 complete_task가 거부된다(owner 일하는 중/응답 전 리더 대리 허위완료 금지).
+    owner가 실제로 일하면(act_count↑) owner_delivered=True가 되어 완료가 허용된다. 미착수는 delivered로
+    기록 안 돼 재위임이 Redo 한도에 안 걸린다(실제 첫 인도 기회 보장)."""
+    g = FakeGuide()
+    f = _flow(g)
+    worked = {"on": False}
+
+    async def wake(to, b, k):
+        if worked["on"]:
+            f.act_count += 1                 # owner가 실제로 run/Write 함(훅이 집계하는 신호를 모의)
+            return "구현하고 run으로 검증 완료"
+        return "네, 곧 시작하겠습니다"          # 착수 전 — 실작업 0회
+
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"purpose": "프론트", "goal": "public/ 동작"}))
+    # 1) owner가 실작업 없이 반환 → '대신 하지 말라' 안내, owner_delivered=False, delivered 기록 안 됨
+    r = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "public/ 구현"}))
+    assert f.current.owner == 12 and f.current.owner_delivered is False
+    assert "대신 구현" in r["content"][0]["text"]
+    assert not f.comm.delivered_work(11, 12)        # 미착수 → delivered 아님(재위임은 첫 인도)
+    # 2) 이 상태로 complete 시도 → 거부(허위 완료 차단) — 리더가 verified를 채워도 owner 인도 전엔 못 닫음
+    f.current.verified = True
+    rc = asyncio.run(t["complete_task"].handler({"result": "리더가 대신 완료"}))
+    assert "완료 거부" in rc["content"][0]["text"] and f.current is not None
+    # 3) owner가 실제로 일하고 응답 → owner_delivered=True → 완료 허용
+    worked["on"] = True
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "public/ 구현"}))
+    assert f.current.owner_delivered is True
+    assert not any(ev[0] == "redo" for ev in f.comm.history)   # 첫 인도라 Redo 아님
+    rc2 = asyncio.run(t["complete_task"].handler({"result": "owner 검증 완료"}))
+    assert "마감" in rc2["content"][0]["text"] and f.current is None
+
+
 def test_미완owner_Task는_완료거부_이어가기는_Redo아님():
     """owner가 '턴 한도'로 미완 반환하면 그 Task는 완료 거부(허위완료→다음Task churn 차단). 같은 owner
     재위임은 '이어가기'라 Redo 아님(미완은 delivered로 안 침 → 횟수 제한 무관)."""
@@ -601,7 +641,10 @@ def test_미완owner_Task는_완료거부_이어가기는_Redo아님():
 
     async def wake(to, b, k):
         st["n"] += 1
-        return "작업 중 (⚠ 턴 한도 도달 — 작업이 미완일 수 있음)" if st["n"] == 1 else "완료"
+        if st["n"] == 1:
+            return "작업 중 (⚠ 턴 한도 도달 — 작업이 미완일 수 있음)"   # 1차: 턴 한도로 미완 반환
+        f.act_count += 1                                            # 2차(이어가기): owner가 실제로 마저 작업
+        return "완료"
 
     f.wake = wake
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
@@ -616,8 +659,9 @@ def test_미완owner_Task는_완료거부_이어가기는_Redo아님():
     asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "이어서"}))   # 이어가기(완료 반환)
     assert not any(ev[0] == "redo" for ev in f.comm.history)        # 이어가기는 Redo 아님
     assert f.current.owner_incomplete is False                      # 완료 반환 → 미완 해제
+    assert f.current.owner_delivered is True                        # 실작업 인도됨 → 완료 가능
     r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
-    assert "완료" in r2["content"][0]["text"]                        # 이제 완료 허용
+    assert "마감" in r2["content"][0]["text"] and f.current is None   # 이제 완료 마감 허용
 
 
 def test_되묻기후_재위임은_Redo아님():

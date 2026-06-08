@@ -79,6 +79,30 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                 return _deny("협의(Info) 단계에서는 구현(파일 작성)을 할 수 없습니다 — 제안은 "
                              "Response(말)로 하고, Goal 합의 후 Work로 위임받은 owner만 구현하세요.")
 
+        # 4) 이미 owner에게 Work로 위임된 Task의 산출물은 그 owner가 구현한다 — '리더'가 대신 Write/Edit하면
+        #    거부(전문가 도메인 대리구현=독점, 그리고 owner가 일하는 중 리더가 앞질러 만들고 허위완료하는 패턴
+        #    차단). owner가 늦거나 막히면 직접 떠안지 말고 request(Work) 재위임으로 기다리거나 recruit/재배정.
+        #    리더가 위임 없이 자기 도메인을 직접 하는 Task는 owner==0이라 막지 않는다(리더도 한 직원).
+        if (tool in ("Write", "Edit") and flow is not None and actor is not None
+                and getattr(flow, "current", None) is not None
+                and flow.current.owner and flow.current.owner != actor
+                and actor == getattr(flow, "leader", None)):
+            audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                         reason="위임된 owner 도메인 대리구현", tool_use_id=tool_use_id)
+            return _deny(
+                f"이 Task는 owner({flow.current.status.owner or flow.current.owner})에게 위임돼 있습니다 — "
+                f"그 전문가의 산출물을 리더가 대신 만들지 마세요(독점·허위완료 금지). owner에게 request(Work)로 "
+                f"맡겨 끝내게 하고(기다리세요), 끝내 무응답이면 recruit/재배정하세요. 직접 구현은 당신이 owner인 "
+                f"(위임하지 않은) Task에서만.")
+
+        # 작업공간을 실제로 바꾸는 도구(run/Write/Edit)는 act_count로 누계 — request 도구가 wake 전후 차이로
+        # 'owner가 위임 도중 실제로 일했나'를 판정해 허위완료/독점을 막는다. deny를 모두 통과한 뒤에만 집계.
+        if tool in ("Write", "Edit", "mcp__guide__run") and flow is not None:
+            try:
+                flow.act_count += 1
+            except Exception:
+                pass
+
         return {}
 
     return hook
