@@ -9,9 +9,9 @@
 - 봇당 토큰을 '한 번' 보여줄 때만 캡처합니다(놓치면 그 봇은 토큰 Reset 다시). 2FA가 켜져 있으면 Reset마다
   코드 입력이 필요해(봇당 1회) — 그땐 스크립트가 멈추고 당신이 브라우저에 입력 후 Enter.
 
-준비:
+준비(크로미움 다운로드 불필요 — PC에 설치된 크롬을 그대로 사용):
   pip install playwright
-  playwright install chromium
+  # (playwright install chromium 안 해도 됨. 크롬이 없으면 그때만 설치.)
 
 실행:
   python scripts/create_discord_bots.py 10                 # 봇 10개(슬롯 8번부터)
@@ -90,7 +90,11 @@ def main() -> None:
     created = []   # (name, token, app_id)
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)            # 헤드풀: 직접 로그인 보이게
+        try:                                                    # 설치된 '크롬'을 그대로 사용(크로미움 다운로드 불필요)
+            browser = pw.chromium.launch(headless=False, channel="chrome")
+        except Exception:                                       # 크롬이 없으면 번들 크로미움으로 폴백
+            print("크롬 실행 실패 — 번들 크로미움으로 시도(없으면: python -m playwright install chromium)")
+            browser = pw.chromium.launch(headless=False)
         ctx = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
         page = ctx.new_page()
         page.goto(PORTAL)
