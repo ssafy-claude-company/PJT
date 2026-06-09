@@ -202,14 +202,14 @@ async def run() -> None:
             if message.author.id in organts or message.author.id == system_client.user.id:
                 return
             ch = message.channel.id
-            is_project = ch in sysm.projects        # 등록된 프로젝트 채널이면 '개입'
+            is_project = ch in sysm.projects        # 등록된 프로젝트 채널(전용 워크스페이스 보유)
+            is_main = (ch == cfg.channel_id)
             # 도착 가시화(요청 미수신 진단): 봇이 본 모든 비-봇 메시지를 채널 정보와 함께 남긴다.
             log.info("메시지 도착: ch=%s (main=%s, project=%s) author=%s content=%r",
-                     ch, ch == cfg.channel_id, is_project, message.author.id, (message.content or "")[:80])
-            if ch != cfg.channel_id and not is_project:
-                log.info("  → 무시(감시 안 하는 채널). 메인=%s 프로젝트=%s",
-                         cfg.channel_id, list(sysm.projects))
-                return
+                     ch, is_main, is_project, message.author.id, (message.content or "")[:80])
+            # 모든 채널을 연다(봇이 들어가 있는 채널이면 어디서든) — 메인은 '[Request] To: @봇' 형식만, 그 외
+            # 채널(등록 프로젝트든 아니든)은 자유 텍스트도 '작업 요청'으로 받는다. 봇이 없는 채널은 on_message가
+            # 애초에 안 오므로, 사실상 '봇 초대된 채널 전부 활성'이다(채널마다 프로젝트처럼 대화).
             req = parse(
                 message_id=str(message.id),
                 author_id=message.author.id,
@@ -218,7 +218,7 @@ async def run() -> None:
                 content=message.content,
             )
             if not isinstance(req, Request):
-                if is_project and (message.content or "").strip():
+                if not is_main and (message.content or "").strip():
                     req = Request(to_id=None, kind=Kind.WORK, body=message.content.strip(),
                                   from_id=message.author.id, message_id=str(message.id))
                 else:
