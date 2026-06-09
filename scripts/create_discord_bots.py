@@ -146,18 +146,34 @@ def main() -> None:
                 browser = pw.chromium.connect_over_cdp(cdp)
                 ctx = browser.contexts[0] if browser.contexts else browser.new_context()
                 using_cdp = True
-                print(f"[연결] 디버그 크롬에 붙음({cdp}) — 로그인 세션 그대로 사용")
+                print(f"[연결] 디버그 크롬에 붙음({cdp}) — 당신의 '진짜 크롬'/로그인 그대로 사용")
             except Exception:
-                print(f"[알림] {cdp}에 붙을 디버그 크롬이 없음 → 저장 프로필로 크롬을 새로 띄웁니다.\n"
-                       f"       (당신이 '띄워둔 창'을 쓰고 싶으면: 먼저 start_chrome_debug.bat 실행해 그 창에서 로그인 후 이 스크립트 재실행)")
+                # CDP 실패 시 '조용히 자동화 브라우저로' 떨어지면 → 이상한 크롬·캡차 미통과 문제가 생긴다.
+                # 그래서 안 넘어가고, '진짜 크롬'에 붙도록 안내한 뒤 재시도 기회를 준다(캡차엔 이게 정답).
+                print("\n[중요] 디버그 크롬(포트 9222)에 못 붙었습니다.")
+                print("  ⚠ 캡차는 '자동화로 띄운 브라우저'에선 풀어도 통과가 거부됩니다(봇 탐지). 당신의 '진짜 크롬'에 붙이세요:")
+                print("    1) start_chrome_debug.bat 더블클릭(또는 cmd에서 실행) → 뜬 크롬 창에서 디스코드 로그인")
+                print("    2) 여기로 돌아와 Enter")
+                if input("  Enter=디버그 크롬에 재연결 / s+Enter=그냥 자동화 브라우저로 진행(캡차 막힐 수 있음) ▶ ").strip().lower() != "s":
+                    try:
+                        browser = pw.chromium.connect_over_cdp(cdp)
+                        ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+                        using_cdp = True
+                        print(f"[연결] 디버그 크롬에 붙음({cdp}) — 진짜 크롬 사용")
+                    except Exception:
+                        print("  여전히 못 붙음 → 자동화 브라우저로 진행합니다(캡차가 막히면 위 방법으로 다시 시도).")
         if ctx is None:
+            # 자동화 배너(--enable-automation)·봇 탐지 신호를 줄여 캡차 통과율을 높인다. 그래도 '진짜 크롬'(CDP)이 최선.
+            launch_kw = dict(headless=False,
+                             args=["--start-maximized", "--disable-blink-features=AutomationControlled"],
+                             ignore_default_args=["--enable-automation"])
             try:                                                # 설치된 '크롬'을 저장 프로필로 실행
-                ctx = pw.chromium.launch_persistent_context(
-                    profile, headless=False, channel="chrome", args=["--start-maximized"])
+                ctx = pw.chromium.launch_persistent_context(profile, channel="chrome", **launch_kw)
             except Exception:                                   # 크롬 없으면 번들 크로미움
                 print("크롬 실행 실패 — 번들 크로미움 시도(없으면: python -m playwright install chromium)")
-                ctx = pw.chromium.launch_persistent_context(profile, headless=False)
-            print(f"[실행] 크롬 실행 — 저장 프로필: {profile} (처음 한 번만 로그인하면 다음부턴 유지)")
+                ctx = pw.chromium.launch_persistent_context(profile, **launch_kw)
+            print(f"[실행] 자동화 크롬 실행 — 저장 프로필: {profile}\n"
+                  f"       (캡차가 안 넘어가면: start_chrome_debug.bat로 '진짜 크롬'을 띄워 로그인 후 재실행하세요)")
         try:
             ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin="https://discord.com")
         except Exception:
