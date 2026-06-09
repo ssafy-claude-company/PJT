@@ -209,6 +209,25 @@ def test_예비담당자_Task전_자기직군_확정():
     assert "진행 중인 Task가 없습니다" in r2["content"][0]["text"] and f.bot_info[12] == "백엔드"
 
 
+def test_PM혼자_Task_차단():
+    """프로젝트에 동료가 있는데 리더 혼자만 멤버로 Task를 열면 거부 — 'PM 혼자 Task'(팀 버리고 단독작업·독식)
+    차단. members로 동료를 넣으면 통과. 동료가 없는 1인 프로젝트는 솔로 허용(거짓양성 없음)."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "백엔드", 12: "프론트엔드"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    r = asyncio.run(t["create_task"].handler({"members": "11"}))          # 동료 있는데 리더만 → 거부
+    assert "단독 Task 거부" in r["content"][0]["text"] and f.current is None
+    asyncio.run(t["create_task"].handler({"members": "12"}))              # 동료 넣으면 통과
+    assert f.current is not None and set(f.current.team) == {11, 12}
+    # 동료 없는 1인 프로젝트는 솔로 허용
+    f1 = Flow(g, channel_id=501, guild_id=1, leader_id=11, bot_info={11: "백엔드"})
+    f1.start_root("root")
+    t1 = {x.name: x for x in make_guide_tools(f1, 11, "leader")}
+    asyncio.run(t1["create_task"].handler({"members": ""}))
+    assert f1.current is not None
+
+
 def test_개입_Task는_전원소집_안함():
     """개입(intervention) 흐름의 create_task도 담당자가 부른 담당만 모인다 — members로 고른 동료만(작은 수정에
     10명 소집 방지). 어느 흐름이든 팀은 자동 전원이 아니라 담당자가 동적 선정한다."""
