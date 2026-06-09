@@ -26,22 +26,57 @@ User  ↔  SMS(Discord)  ↔  SYS  ↔  Organt(들)
    닫히고, 모든 요청이 닫히면 흐름이 시작점(User)으로 복귀하며 종료된다.
 5. 리더의 최종 반환값이 `[Response]`로 User에게 게시된다(= 보고).
 
-## 실행
+## 환경 설정
 
-`.env`(또는 환경변수)에 봇 토큰·채널을 설정한다 (`.env.example` 참고):
+**사전 준비**
+- Python 3.11+
+- **Claude 인증** — Organt(LLM)는 Claude Agent SDK(번들 Claude Code CLI)로 호출됩니다.
+  `ANTHROPIC_API_KEY` 환경변수 또는 `claude` CLI 로그인(구독)이 있어야 동작합니다.
+- Discord 봇 토큰(System 봇 + 워커들) — 봇은 대상 서버에 미리 초대돼 있어야 합니다.
 
+**설치**
 ```bash
-SYSTEM_BOT=...            # System 봇(관리자) 토큰
-CHANNEL_ID=...            # User 입력을 받을 채널 ID
-# Organt 로스터: "토큰_환경변수명:역할" 쉼표 구분, 첫 항목이 리더
-ORGANT_ROSTER=TEST_BOT_1:담당자,TEST_OBT_2:프론트엔드,TEST_OBT_3:디자인
+python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -r requirements-dev.txt
 ```
+
+**`.env` 작성** — `.env.example`를 복사해 채웁니다.
+
+| 변수 | 필수 | 설명 |
+|------|:--:|------|
+| `SYSTEM_BOT` | ✅ | System 봇(관리자) 토큰 — 채널 감시·상태블록 게시·라우팅 |
+| `CHANNEL_ID` | ✅ | User `[Request]`를 받을 Discord 채널 ID |
+| `ORGANT_ROSTER` | ✅ | `토큰환경변수명:직군`을 `;`로 나열. **직군엔 도메인만**(백엔드/프론트엔드/디자이너/QA/예비) — '담당자'는 라벨에 박지 않음(담당자는 그 흐름의 To 수신자). 첫 항목이 기본 담당자 |
+| `ORGANT_BOT_2…N` | ✅ | 로스터가 참조하는 워커 토큰들(빈 슬롯은 자동 제외) |
+| `ORGANT_MODEL` | | 비우면 SDK 기본(Opus). `opus`/`sonnet`/`haiku` |
+| `ORGANT_WORKSPACE` | | Organt 작업공간 경로(기본 `../organt_workspace`, repo 밖에 격리) |
+| `ORGANT_SKIP_RECOVERY` | | `1`이면 시작 시 이전 미응답 자동 재실행 안 함(수동 테스트용) |
+| `DEPLOY_NAME` | | `deploy` 시 고정 서비스명(엉뚱한 새 서비스로 배포 방지) |
+| `GH_PAT`·`GH_USER`·`RENDER_KEY`·`RENDER_OWNER` | | `deploy` 도구를 쓸 때만(GitHub push + Render). **gitignore된 .env에만**, 커밋 금지 |
+
+로스터 예:
+```
+ORGANT_ROSTER=ORGANT_BOT_2:백엔드; ORGANT_BOT_3:프론트엔드; ORGANT_BOT_4:디자이너; ORGANT_BOT_5:QA; ORGANT_BOT_6:예비
+ORGANT_BOT_2=...     # 각 토큰
+```
+
+> 워커 봇 토큰 대량 생성: `scripts/create_discord_bots.py` (로컬 PC에서 실행 — 클라우드에선 불가).
+
+## 실행
 
 ```bash
 python -m src.config     # 설정 헬스체크(토큰 값은 출력 안 함)
 python -m src.main       # SYS 가동 → #채널에서 User [Request] 대기
 pytest -q                # 단위 테스트
 ```
+
+죽어도 자동 재시작하려면 while-true 래퍼로 감쌉니다:
+```bash
+while true; do python -m src.main; echo "재시작…"; sleep 3; done
+```
+
+**사용** — 디스코드 채널에서 `[Request] To: @담당 …` 형식으로 보내면 그 담당(To)이 흐름을 엽니다
+(그냥 말 걸면 로스터 첫 항목이 기본 담당자로 받음). 리더의 최종 반환이 `[Response]`로 게시됩니다.
 
 ## 모듈
 
