@@ -215,20 +215,34 @@ def _list_app_ids(page) -> list:
     return ids
 
 
-def _harvest(ctx, start_idx):
-    """[반자동화] 사람이 미리 만들어 둔 앱들의 '토큰만' 수확한다 — Reset/Copy엔 캡차가 없어 자동화 가능.
-    이미 수확한 app id는 harvested.txt에 적어 두 번 리셋하지 않는다(가동 중 봇 토큰 보호)."""
+def _harvest(ctx, start_idx, baseline=False):
+    """[반자동화] 사람이 미리 만든 앱들의 '토큰만' 수확한다 — Reset/Copy엔 캡차가 없어 자동화 가능.
+    ⚠ 토큰 Reset은 '이미 가동 중인 봇' 토큰도 무효화한다. 그래서 harvested.txt='건드리지 않을 app id'
+    목록을 두고, baseline으로 기존 앱을 먼저 등록한 뒤 '새로 만든 앱만' 수확한다."""
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
     page.goto(PORTAL)
-    print("\n[수확 모드] 이 크롬이 디스코드에 로그인돼 있어야 합니다(앱은 미리 손으로 만들어 두세요).")
+    print("\n[수확 모드] 이 크롬이 디스코드에 로그인돼 있어야 합니다.")
     input("    'Applications' 목록이 보이면 Enter ▶ ")
     done_path = Path("harvested.txt")
     already = set(done_path.read_text(encoding="utf-8").split()) if done_path.exists() else set()
     ids = _list_app_ids(page)
+    if baseline:   # 기존 앱 전부를 '보호 목록'에 등록 — 이후 수확이 이들을 건드리지 않음(가동 중 봇 토큰 보호)
+        with done_path.open("w", encoding="utf-8") as f:
+            for i in ids:
+                f.write(i + "\n")
+        print(f"    기존 앱 {len(ids)}개를 보호 목록(harvested.txt)에 등록했습니다 — 수확이 이들은 건드리지 않음.")
+        print("    이제 새 앱을 손으로 만든 뒤:  python create_discord_bots.py harvest 11")
+        return []
     new_ids = [i for i in ids if i not in already]
-    print(f"    앱 {len(ids)}개 발견 · 이미 수확 {len(already)}개 · 새로 수확 {len(new_ids)}개")
+    print(f"    앱 {len(ids)}개 발견 · 보호(기등록) {len(already)}개 · 수확 대상 {len(new_ids)}개")
+    if not already:
+        print("    ⚠ 보호 목록이 비어 있습니다 — 가동 중인 봇이 섞여 있으면 그 토큰이 깨집니다!")
+        print("       권장: 먼저 'python create_discord_bots.py harvest baseline'로 기존 앱 보호 후 새 앱만 생성·수확.")
     if not new_ids:
         print("    수확할 새 앱이 없습니다(이미 다 했거나 목록이 안 보임 — 로그인 확인).")
+        return []
+    if input(f"    {len(new_ids)}개 앱의 토큰을 Reset+수확합니다. 새로 만든 앱만 맞나요? 계속하려면 y ▶ ").strip().lower() != "y":
+        print("    취소했습니다.")
         return []
     harvested = []
     for n, app_id in enumerate(new_ids):
@@ -254,14 +268,18 @@ def main() -> None:
         sys.exit(1)
 
     # 반자동화 '수확' 모드: 사람이 앱을 손으로 만들어 두면(캡차) 스크립트가 토큰만 긁는다.
-    #   python create_discord_bots.py harvest [.env시작슬롯]
+    #   ① 먼저 기존 앱 보호:  python create_discord_bots.py harvest baseline
+    #   ② 새 앱 손으로 생성 후: python create_discord_bots.py harvest 11   (11 = .env 시작 슬롯)
     if len(sys.argv) > 1 and sys.argv[1].lower() == "harvest":
-        start_idx = int(sys.argv[2]) if len(sys.argv) > 2 else 11
+        sub = sys.argv[2] if len(sys.argv) > 2 else ""
+        baseline = sub.lower() == "baseline"
+        start_idx = int(sub) if sub.isdigit() else 11
         with sync_playwright() as pw:
             ctx, browser, using_cdp = _open_context(pw)
-            created = _harvest(ctx, start_idx)
+            created = _harvest(ctx, start_idx, baseline=baseline)
             _close_ctx(ctx, browser, using_cdp)
-        _write_outputs(created, start_idx)
+        if not baseline:
+            _write_outputs(created, start_idx)
         return
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 5
