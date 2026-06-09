@@ -228,6 +228,23 @@ def test_PM혼자_Task_차단():
     assert f1.current is not None
 
 
+def test_중복직군_대체채용_차단():
+    """이미 그 직군 동료가 흐름에 있으면 같은 직군 새 채용을 거부 — '무응답이라 대체 투입'(백엔드 6명) churn의
+    구조적 차단. 팀에 없는 '새 직군'은 허용. (라이브 트레이스에서 프론트·디자이너를 무응답이라 대체 채용하던 패턴.)"""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "백엔드", 12: "프론트엔드", 13: "예비", 14: "예비"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))   # 팀: 백엔드(11)+프론트(12)
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    r = asyncio.run(t["recruit"].handler({"role": "프론트엔드", "reason": "프론트 무응답 대체"}))   # 이미 있는 직군
+    assert "채용 거부" in r["content"][0]["text"] and "이미" in r["content"][0]["text"]
+    assert f.bot_info[13] == "예비"                                          # 대체 채용 안 됨
+    r2 = asyncio.run(t["recruit"].handler({"role": "게임 기획자", "reason": "기획 필요"}))   # 팀에 없는 새 직군
+    assert "직군으로 채용" in r2["content"][0]["text"]                        # 허용
+
+
 def test_개입_Task는_전원소집_안함():
     """개입(intervention) 흐름의 create_task도 담당자가 부른 담당만 모인다 — members로 고른 동료만(작은 수정에
     10명 소집 방지). 어느 흐름이든 팀은 자동 전원이 아니라 담당자가 동적 선정한다."""

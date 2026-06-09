@@ -534,6 +534,18 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             return _ok(f"채용 거부: {flow._info(mid) or mid}는 '예비'(직군 미배정)입니다 — role='직군명'을 함께 "
                        f"지정해 어떤 직군으로 채용할지 정하세요(예: recruit(member='{mid}', role='게임 기획자')). "
                        f"직군 없이는 합류·위임 불가(말로만 배정 금지 — 직군이 실제로 부여돼야 일을 맡길 수 있음).")
+        # 중복 직군/대체 채용 차단(구조 — '백엔드 6명' 루프의 뿌리): 이미 이 흐름 팀에 같은 직군 동료가 있으면
+        # 새로 뽑지 않는다. 단일흐름은 사람을 늘려도 처리량이 안 늘고, 무응답은 인프라 문제라 '대체 투입'해도
+        # 같은 환경에서 똑같이 실패한다(라이브 트레이스에서 프론트·디자이너를 무응답이라 대체 채용하던 churn).
+        # → 그 직군이 필요하면 '이미 있는 그 동료'에게 다시 요청하고, 끝내 무응답이면 사용자에게 보고. 새 직군만 채용.
+        if role_name and getattr(flow, "current", None) is not None:
+            dup = [m for m in flow.current.team
+                   if m != mid and not _is_spare(flow, m) and (flow._info(m) or "") == role_name]
+            if dup:
+                return _ok(f"채용 거부: 이미 '{role_name}' 직군 동료({flow._names(dup)})가 이 흐름에 있습니다 — "
+                           f"단일흐름은 사람을 더 뽑아도 처리량이 안 늘고, 무응답은 인프라 문제라 대체 투입해도 같이 "
+                           f"실패합니다('백엔드 6명' 루프). 그 동료에게 request로 다시 맡기거나, 계속 무응답이면 "
+                           f"사용자에게 '환경 불안정'을 보고하세요. recruit은 '로스터에 없는 새 직군'이 필요할 때만.")
         hired = ""
         if role_name:
             cur = flow._info(mid)
