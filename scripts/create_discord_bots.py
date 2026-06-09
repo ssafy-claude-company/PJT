@@ -80,10 +80,10 @@ def _wait_app_page(page, timeout_ms: int = 12000) -> bool:
 
 
 def _grab_token(page, app_id: str = "") -> str:
-    """Bot 페이지에서 'Reset Token' → 확인 → (2FA면 멈춤) → **Reset 직후 화면에 뜬 토큰을 DOM에서 정규식으로
-    직접 읽는다**(Copy 버튼·클립보드 권한에 의존 안 함 = 1순위). 실패 시 Copy→클립보드(2순위), 그래도 안 되면
-    사람이 직접 붙여넣기(최후). **어느 단계가 실패해도 예외를 위로 던지지 않는다** — 루프가 멋대로 다음 봇으로
-    넘어가지 않고 마지막 입력에서 멈춰 사람이 처리할 수 있게."""
+    """Bot 페이지에서 토큰을 읽는다. ① 토큰이 이미 화면에 평문으로 보이면(포털 기본 표시) DOM 정규식으로 바로
+    긁고(Reset 불필요), ② 없으면 '토큰 초기화/Reset Token'(한·영 정규식)으로 드러낸 뒤 다시 긁고, ③ '복사/Copy'
+    →클립보드, ④ 최후엔 사람이 직접. **버튼 이름을 한국어/영어 모두 매칭**(한국어 포털 대응)하고, 어느 단계가
+    실패해도 예외를 위로 안 던진다(루프가 멋대로 다음 봇으로 안 넘어가게)."""
     # 봇 페이지로 '직접 이동'(사이드바 'Bot' 링크 클릭에 의존하지 않음 — UI 변동/다국어에 강함).
     try:
         if app_id:
@@ -92,52 +92,57 @@ def _grab_token(page, app_id: str = "") -> str:
             page.get_by_role("link", name="Bot").click(timeout=15000)
     except Exception:
         pass
-    # Reset Token (+ 확인 모달). 실패해도 안 던지고 폴백으로 간다.
-    try:
-        page.get_by_role("button", name="Reset Token").click(timeout=15000)
-        try:
-            page.get_by_role("button", name="Yes, do it!").click(timeout=5000)
-        except Exception:
-            pass
-    except Exception:
-        pass
-    # 2FA 코드 입력이 뜨면 사람이 입력해야 한다(봇당 1회).
-    try:
-        if page.get_by_text("Enter your 2FA").is_visible(timeout=3000):
-            input("      ↳ 브라우저에 2FA 코드 입력 후 Enter ▶ ")
-            try:
-                page.get_by_role("button", name="Yes, do it!").click(timeout=5000)
-            except Exception:
-                pass
-    except Exception:
-        pass
-    # 토큰 읽기 ① [1순위·가장 강건] Reset 직후 화면에 평문으로 뜬 토큰을 DOM에서 정규식으로 직접 읽는다.
-    #   'Copy' 버튼 이름이나 클립보드 권한(CDP에서 자주 막힘)에 의존하지 않는다. 디스코드 토큰=base64url
-    #   3토막('aaa.bbb.ccc'). input/textarea value와 화면 텍스트를 모두 뒤져 그 패턴을 집는다.
+    # 디스코드 토큰 = base64url 3토막(aaa.bbb.ccc). 화면 텍스트·input value에서 그 패턴을 집는다.
     token_re = r"[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}"
-    present_js = ("() => { const re=/" + token_re + "/;"
-                  " return re.test(document.body.innerText||'') ||"
-                  " [...document.querySelectorAll('input,textarea')].some(e=>re.test(e.value||'')); }")
     extract_js = ("() => { const re=/" + token_re + "/;"
                   " for (const el of document.querySelectorAll('input,textarea')) {"
                   "   const m=(el.value||'').match(re); if (m) return m[0]; }"
                   " const m=(document.body.innerText||'').match(re); return m ? m[0] : ''; }")
+
+    def _scrape():
+        try:
+            return (page.evaluate(extract_js) or "").strip()
+        except Exception:
+            return ""
+
+    # ① 토큰이 이미 화면에 평문으로 보이면 바로 긁는다(포털 기본 표시) — Reset 불필요. 렌더 지연 대비 재시도.
+    for _ in range(6):
+        tok = _scrape()
+        if tok.count(".") >= 2:
+            return tok
+        page.wait_for_timeout(500)
+
+    # ② 안 보이면 '토큰 초기화/Reset Token'으로 드러낸다 — **한·영 버튼 정규식 매칭**(한국어 포털 대응) +
+    #    확인 모달 + 2FA(있으면 사람이 입력). 그 뒤 다시 긁는다.
     try:
-        page.wait_for_function(present_js, timeout=8000)   # Reset 후 토큰이 렌더될 때까지 대기
+        page.get_by_role("button", name=re.compile(r"Reset Token|토큰 초기화")).first.click(timeout=10000)
+        try:
+            page.get_by_role("button", name=re.compile(r"Yes, do it!|네, 확인|확인|초기화")).first.click(timeout=5000)
+        except Exception:
+            pass
     except Exception:
         pass
     try:
-        tok = page.evaluate(extract_js)
-        if tok and tok.count(".") >= 2:
-            return tok.strip()
+        if page.get_by_text(re.compile(r"Enter your 2FA|2단계 인증|인증 코드|2FA")).first.is_visible(timeout=3000):
+            input("      ↳ 브라우저에 2FA 코드 입력 후 Enter ▶ ")
+            try:
+                page.get_by_role("button", name=re.compile(r"Yes, do it!|확인|초기화")).first.click(timeout=5000)
+            except Exception:
+                pass
     except Exception:
         pass
-    # ② [2순위] Copy 버튼 → 클립보드(권한 되면).
+    for _ in range(8):
+        tok = _scrape()
+        if tok.count(".") >= 2:
+            return tok
+        page.wait_for_timeout(500)
+
+    # ③ '복사/Copy' → 클립보드(권한 되면).
     try:
-        page.get_by_role("button", name="Copy").first.click(timeout=5000)
-        tok = page.evaluate("() => navigator.clipboard.readText()")
-        if tok and tok.count(".") >= 2:
-            return tok.strip()
+        page.get_by_role("button", name=re.compile(r"Copy|복사")).first.click(timeout=5000)
+        tok = (page.evaluate("() => navigator.clipboard.readText()") or "").strip()
+        if tok.count(".") >= 2:
+            return tok
     except Exception:
         pass
     # 진단 덤프(자동 추출 실패 시): '무엇이 있었는지'를 **토큰 값 없이** 저장 — 셀렉터/원인 진단용(공유 가능).
