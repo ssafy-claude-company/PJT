@@ -199,6 +199,8 @@ class Flow:
         self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로
                                        #   일했나'를 wake 전후 스냅샷 차이로 판정(허위완료/독점 차단)
         self.consec_fail = 0           # 연속 '응답 실패(무응답/타임아웃)' 횟수 — 시스템 일시불안정 판별(충원 루프 차단)
+        self.failed_roles = set()      # '지금 무응답/실패 상태인 직군' — 그 직군 '대체 채용'만 막는다(같은 인프라=
+                                       #   같은 크래시). 응답이 오면 풀린다. 무응답과 무관한 '증원'은 허용(중요 직군 2명 OK).
         self.log = None                # (event, **fields) 콜백 — SYS가 주입(flow.jsonl 영속)
 
     def start_root(self, root_id):
@@ -447,6 +449,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 충원하면 '같은 환경'에서 똑같이 크래시한다(이게 '백엔드 6명' 루프의 뿌리). 그래서 실패엔
             # '재배정·채용'을 절대 권하지 않는다 — 같은 동료 1회 재시도(블립 회복용) 또는 사용자 보고만.
             flow.consec_fail = getattr(flow, "consec_fail", 0) + 1
+            _role_of_to = (flow._info(to) or "").strip()      # 이 직군이 '지금 실패 상태' — 대체 채용만 막는다
+            if _role_of_to and not _role_of_to.startswith(_SPARE_LABEL):
+                flow.failed_roles.add(_role_of_to)
             if flow.log:
                 flow.log("req_failed", to=to, consec=flow.consec_fail, seg=flow.leader_segment)
             if flow.consec_fail >= 2:
@@ -458,6 +463,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                        f"오류(서브프로세스 크래시)**입니다 — **다른 사람으로 바꾸거나 새로 뽑지 마세요(같은 환경이라 똑같이 "
                        f"실패).** 같은 동료에게 한 번만 다시 요청해보고(블립이면 회복), 또 실패하면 사용자에게 보고하고 멈추세요.")
         flow.consec_fail = 0   # 정상 응답 → 연속 실패 카운터 리셋(일시 블립 회복)
+        flow.failed_roles.discard((flow._info(to) or "").strip())   # 이 직군이 응답함 → '실패 상태' 해제(대체 채용 다시 허용)
         # owner가 깨어났지만 '실작업 없이'(run/Write/Edit 0회) 곧장 반환 = 아직 착수 전/계획만. 리더가 대신
         # 구현·완료하지 말 것(독점·허위완료의 정확한 진입점). 같은 owner에게 다시 맡겨 '검증된 산출물'을 받게
         # 안내한다. 이 응답은 캐시하지 않는다 → 같은 턴에 재위임해도 합쳐지지 않고 실제로 다시 깨운다.
@@ -534,18 +540,20 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             return _ok(f"채용 거부: {flow._info(mid) or mid}는 '예비'(직군 미배정)입니다 — role='직군명'을 함께 "
                        f"지정해 어떤 직군으로 채용할지 정하세요(예: recruit(member='{mid}', role='게임 기획자')). "
                        f"직군 없이는 합류·위임 불가(말로만 배정 금지 — 직군이 실제로 부여돼야 일을 맡길 수 있음).")
-        # 중복 직군/대체 채용 차단(구조 — '백엔드 6명' 루프의 뿌리): 이미 이 흐름 팀에 같은 직군 동료가 있으면
-        # 새로 뽑지 않는다. 단일흐름은 사람을 늘려도 처리량이 안 늘고, 무응답은 인프라 문제라 '대체 투입'해도
-        # 같은 환경에서 똑같이 실패한다(라이브 트레이스에서 프론트·디자이너를 무응답이라 대체 채용하던 churn).
-        # → 그 직군이 필요하면 '이미 있는 그 동료'에게 다시 요청하고, 끝내 무응답이면 사용자에게 보고. 새 직군만 채용.
-        if role_name and getattr(flow, "current", None) is not None:
-            dup = [m for m in flow.current.team
-                   if m != mid and not _is_spare(flow, m) and (flow._info(m) or "") == role_name]
-            if dup:
-                return _ok(f"채용 거부: 이미 '{role_name}' 직군 동료({flow._names(dup)})가 이 흐름에 있습니다 — "
-                           f"단일흐름은 사람을 더 뽑아도 처리량이 안 늘고, 무응답은 인프라 문제라 대체 투입해도 같이 "
-                           f"실패합니다('백엔드 6명' 루프). 그 동료에게 request로 다시 맡기거나, 계속 무응답이면 "
-                           f"사용자에게 '환경 불안정'을 보고하세요. recruit은 '로스터에 없는 새 직군'이 필요할 때만.")
+        # '대체 채용'만 차단(구조 — '백엔드 6명' 루프의 정확한 뿌리): 그 직군이 '지금 무응답/실패 상태'일 때
+        # 같은 직군을 새로 뽑는 건 막는다. 단일흐름에서 실패=그 직군 동료의 인프라 크래시인데, 같은 환경에 새
+        # 사람을 넣어도 똑같이 크래시하기 때문이다(라이브 트레이스의 프론트·디자이너 대체 채용 churn). →
+        # 그 동료에게 다시 요청하거나 사용자에게 '환경 불안정' 보고. **무응답과 무관한 '증원'(중요 직군 2명 등)은
+        # 허용** — 그 직군이 실패 상태가 아니면(failed_roles에 없으면) 같은 직군이라도 뽑을 수 있다.
+        if role_name and role_name in getattr(flow, "failed_roles", set()):
+            existing = [m for m in (flow.current.team if getattr(flow, "current", None) else [])
+                        if (flow._info(m) or "") == role_name and not _is_spare(flow, m)]
+            return _ok(f"채용 거부(대체 채용): '{role_name}' 직군이 지금 **무응답/실패 상태**입니다"
+                       f"{' (' + ', '.join(flow._names(existing)) + ')' if existing else ''} — 단일흐름에서 이 실패는 그 직군 "
+                       f"동료의 **인프라 크래시**라, 같은 직군을 새로 뽑아도 같은 환경에서 똑같이 실패합니다('백엔드 6명' "
+                       f"루프). 그 동료에게 잠시 뒤 다시 request하거나(블립이면 회복), 계속 안 되면 사용자에게 '환경 "
+                       f"불안정으로 일시 중단'을 보고하세요. (이 직군이 응답을 한 번이라도 주면 다시 채용 가능 — "
+                       f"무응답과 무관한 '증원'은 막지 않습니다.)")
         hired = ""
         if role_name:
             cur = flow._info(mid)

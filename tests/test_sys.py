@@ -228,9 +228,9 @@ def test_PM혼자_Task_차단():
     assert f1.current is not None
 
 
-def test_중복직군_대체채용_차단():
-    """이미 그 직군 동료가 흐름에 있으면 같은 직군 새 채용을 거부 — '무응답이라 대체 투입'(백엔드 6명) churn의
-    구조적 차단. 팀에 없는 '새 직군'은 허용. (라이브 트레이스에서 프론트·디자이너를 무응답이라 대체 채용하던 패턴.)"""
+def test_실패직군만_대체채용_차단_증원은_허용():
+    """'지금 무응답/실패 상태인 직군'의 대체 채용만 막는다('백엔드 6명' 루프의 뿌리 — 같은 인프라=같은 크래시).
+    실패와 무관한 '증원'(중요 직군 2명 등)은 허용한다 — 사용자 지적: 중요해서 2명 뽑는 정당한 경우를 막으면 안 됨."""
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
              bot_info={11: "백엔드", 12: "프론트엔드", 13: "예비", 14: "예비"})
@@ -238,11 +238,17 @@ def test_중복직군_대체채용_차단():
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))   # 팀: 백엔드(11)+프론트(12)
     asyncio.run(t["create_task"].handler({"members": "12"}))
-    r = asyncio.run(t["recruit"].handler({"role": "프론트엔드", "reason": "프론트 무응답 대체"}))   # 이미 있는 직군
-    assert "채용 거부" in r["content"][0]["text"] and "이미" in r["content"][0]["text"]
-    assert f.bot_info[13] == "예비"                                          # 대체 채용 안 됨
-    r2 = asyncio.run(t["recruit"].handler({"role": "게임 기획자", "reason": "기획 필요"}))   # 팀에 없는 새 직군
-    assert "직군으로 채용" in r2["content"][0]["text"]                        # 허용
+    # 증원(실패 아님): 백엔드가 중요해 1명 더 → 허용(failed_roles 비어있음). 같은 직군이어도 OK.
+    r_add = asyncio.run(t["recruit"].handler({"role": "백엔드", "reason": "백엔드 과중 — 분담"}))
+    assert "직군으로 채용" in r_add["content"][0]["text"]
+    # 프론트엔드가 '실패 상태' → 같은 직군 '대체 채용' 시도 → 거부
+    f.failed_roles.add("프론트엔드")
+    r_rep = asyncio.run(t["recruit"].handler({"role": "프론트엔드", "reason": "프론트 무응답 대체"}))
+    assert "대체 채용" in r_rep["content"][0]["text"] and "프론트엔드" in r_rep["content"][0]["text"]
+    # 그 직군이 응답하면(실패 상태 해제) 다시 채용 가능
+    f.failed_roles.discard("프론트엔드")
+    r_ok = asyncio.run(t["recruit"].handler({"role": "프론트엔드", "reason": "증원"}))
+    assert "직군으로 채용" in r_ok["content"][0]["text"]
 
 
 def test_개입_Task는_전원소집_안함():
