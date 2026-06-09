@@ -140,6 +140,27 @@ def _grab_token(page, app_id: str = "") -> str:
             return tok.strip()
     except Exception:
         pass
+    # 진단 덤프(자동 추출 실패 시): '무엇이 있었는지'를 **토큰 값 없이** 저장 — 셀렉터/원인 진단용(공유 가능).
+    #   token_debug.txt = url·토큰표시여부·버튼라벨·input종류 (토큰 문자열은 안 적음). token_debug.png = 스크린샷.
+    try:
+        info = page.evaluate(
+            "() => { const re=/" + token_re + "/;"
+            " const labels=[...document.querySelectorAll('button,[role=button],a')]"
+            "   .map(b=>(b.innerText||b.getAttribute('aria-label')||'').trim()).filter(Boolean).slice(0,50);"
+            " const inputs=[...document.querySelectorAll('input,textarea')].map(e=>e.type||'text');"
+            " const vis = re.test(document.body.innerText||'') ||"
+            "   [...document.querySelectorAll('input,textarea')].some(e=>re.test(e.value||''));"
+            " return {url: location.href, tokenVisible: vis, buttons: labels, inputs}; }")
+        Path("token_debug.txt").write_text(
+            f"url: {info.get('url')}\ntokenVisible(토큰이 화면에 떠 있나): {info.get('tokenVisible')}\n"
+            f"inputs: {info.get('inputs')}\nbuttons: {info.get('buttons')}\n", encoding="utf-8")
+        try:
+            page.screenshot(path="token_debug.png")
+        except Exception:
+            pass
+        print("      ↳ 진단 저장: token_debug.txt / token_debug.png (토큰 값은 안 적힘 — 이 두 개를 공유해 주세요)")
+    except Exception:
+        pass
     # ③ [최후] 사람이 직접. **여기서 멈추므로 '멋대로 다음 봇으로' 넘어가지 않는다.**
     return input("      ↳ 토큰 자동 읽기 실패 — 브라우저 Bot 페이지에서 토큰을 복사해 붙여넣고 Enter "
                  "(이 봇은 건너뛰려면 그냥 Enter) ▶ ").strip()
