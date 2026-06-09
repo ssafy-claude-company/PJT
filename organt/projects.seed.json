@@ -1,0 +1,21 @@
+{
+  "n": 2,
+  "projects": {
+    "1513463020649578508": {
+      "id": "P-001",
+      "name": "온라인 난투전 웹 게임 (LoL 스타일)",
+      "channel": 1513463020649578508,
+      "workspace": "/home/user/organt_workspace",
+      "leader": 1511280878091898900,
+      "summary": ""
+    },
+    "1513804695896850542": {
+      "id": "P-002",
+      "name": "2인 협동 웹 게임",
+      "channel": 1513804695896850542,
+      "workspace": "/home/user/organt_workspace",
+      "leader": 1510929285370875925,
+      "summary": ""
+    }
+  }
+}

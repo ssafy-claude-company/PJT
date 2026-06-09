@@ -17,6 +17,14 @@ if [ -z "${ORGANT_ROSTER:-}" ]; then
   for i in $(seq 8 100); do R="$R;ORGANT_BOT_$i:예비"; done
   export ORGANT_ROSTER="$R;TEST_BOT_1:예비"
 fi
+# 프로젝트 레지스트리 복원: logs/projects.json은 gitignore(/logs/*)라 컨테이너 리클레임(재클론) 때 사라진다.
+# 커밋된 시드(organt/projects.seed.json)가 있는데 레지스트리가 없으면(=reclaim으로 유실) 시드에서 복원 →
+# 등록된 프로젝트 채널이 reclaim을 넘어 살아남는다('채널 사라짐' 방지). 레지스트리가 이미 있으면(런타임이
+# 최신) 건드리지 않는다.
+if [ -f "$HERE/organt/projects.seed.json" ] && [ ! -f "$HERE/logs/projects.json" ]; then
+  mkdir -p "$HERE/logs" && cp "$HERE/organt/projects.seed.json" "$HERE/logs/projects.json"
+  echo "[restore] logs/projects.json 없음 → 시드에서 복원(프로젝트 등록 유지)"
+fi
 while true; do
   echo "===== [$(date +%H:%M:%S)] 리스너 시작 ====="
   python -m src.main
