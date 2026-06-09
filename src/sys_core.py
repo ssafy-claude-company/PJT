@@ -42,6 +42,9 @@ class Sys:
         self.workspace = workspace             # run 툴 cwd(작업공간 경로)
         self.session_dir = session_dir         # organt_state_*.json 위치(새 요청마다 세션 초기화)
         self.max_continue = max_continue       # 턴 한도로 미완 시 같은 세션으로 이어가는 최대 횟수
+        # 워커 턴 안전 타임아웃(초): 서브프로세스가 '행'(무응답·무크래시)이면 단일흐름 전체가 영구 정지하므로
+        # 한도 넘으면 포기하고 '인프라 실패'로 반환해 리더가 보고·진행하게 한다(리더 턴은 흐름 전체라 제외).
+        self.turn_timeout = int(os.environ.get("ORGANT_TURN_TIMEOUT", "480"))   # 기본 8분
         self.active_flow: Optional[Flow] = None
         self.queue = []                        # 진행 중 들어온 명령(순차 처리 대기)
         self.flow_log = []
@@ -334,10 +337,23 @@ class Sys:
                 # (없으면 유저 채널)에 가시화. guide에 typing 없으면(테스트 등) 그냥 건너뜀.
                 ch = (flow.current.thread_id if flow.current else None) or flow.user_channel
                 tcm = getattr(self.guide, "typing", None)
-                if tcm is not None:
-                    async with tcm(ch, organt_id):
-                        return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader))
-                return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader))
+
+                async def _do():
+                    if tcm is not None:
+                        async with tcm(ch, organt_id):
+                            return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader))
+                    return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader))
+
+                # 리더 턴은 '흐름 전체'(중첩 워커 포함)를 품으므로 타임아웃 안 건다 — 워커 타임아웃이 행을 끊는다.
+                # 워커(비-리더) 턴은 turn_timeout 초과 시 포기하고 '인프라 실패'로 반환(재시도·충원 금지 경로로
+                # 라우팅). asyncio.wait_for가 행 코루틴을 취소 → ClaudeSDKClient __aexit__가 서브프로세스 정리.
+                if role == "leader":
+                    return await _do()
+                return await asyncio.wait_for(_do(), timeout=self.turn_timeout)
+            except asyncio.TimeoutError:
+                self._log("agent_timeout", organt=organt_id, role=role, sec=self.turn_timeout)
+                return (f"API Error: timeout — 동료({organt_id}) 서브프로세스가 {self.turn_timeout}s 무응답(행). "
+                        f"단일흐름이라 인프라 문제로 간주(크래시와 동일) — 대체 채용 말고 잠시 뒤 재요청하거나 보고.")
             except Exception as e:
                 last = f"(에이전트 {organt_id} 처리 실패: {e})"
                 self._log("agent_revive", organt=organt_id, attempt=attempt + 1, err=str(e)[:100])

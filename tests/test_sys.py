@@ -251,6 +251,32 @@ def test_실패직군만_대체채용_차단_증원은_허용():
     assert "직군으로 채용" in r_ok["content"][0]["text"]
 
 
+def test_워커_턴_타임아웃은_인프라실패로(monkeypatch):
+    """워커(비-리더) 턴이 행(무응답)이면 turn_timeout 후 'API Error: timeout'(인프라 실패)로 반환 — 단일흐름
+    영구정지 차단(관측: 24분 좀비). 리더 턴은 흐름 전체를 품으므로 타임아웃 안 함(정상 반환 그대로)."""
+    monkeypatch.setattr("src.sys_core.build_guide_server", lambda *a, **k: object())
+
+    class _Hang:
+        async def handle(self, prompt):
+            await asyncio.sleep(5)      # 서브프로세스 행 흉내
+            return "done"
+
+    class _Quick:
+        async def handle(self, prompt):
+            return "리더 결과"
+
+    g = FakeGuide()
+    f = Flow(g, channel_id=1, guild_id=1, leader_id=11, bot_info={11: "백엔드", 12: "프론트엔드"})
+    f.start_root("root")
+    s = Sys(g, guild_id=1, organt_builder=lambda oid, srv, role, flow=None: _Hang(),
+            bot_info={11: "백엔드", 12: "프론트엔드"})
+    s.turn_timeout = 0.2
+    out = asyncio.run(s.run_turn(f, 12, "b", Kind.INFO, "member"))      # 워커 행 → 타임아웃
+    assert out.lower().startswith("api error") and "timeout" in out.lower()
+    s.organt_builder = lambda oid, srv, role, flow=None: _Quick()       # 리더는 정상 반환
+    assert asyncio.run(s.run_turn(f, 11, "b", Kind.WORK, "leader")) == "리더 결과"
+
+
 def test_개입_Task는_전원소집_안함():
     """개입(intervention) 흐름의 create_task도 담당자가 부른 담당만 모인다 — members로 고른 동료만(작은 수정에
     10명 소집 방지). 어느 흐름이든 팀은 자동 전원이 아니라 담당자가 동적 선정한다."""
