@@ -50,13 +50,16 @@ _MAX_API_RETRY = 3   # 일시적 API 오류(과부하 등) 재시도 횟수
 
 def _is_transient_api_error(text: str) -> bool:
     """응답이 일시적 오류(429/5xx/529 과부하·rate limit, 또는 SDK 서브프로세스 사망=SIGTERM/143·
-    파이프 끊김·메시지리더 크래시)로 보이는지 — 같은 세션으로 resume 재시도 대상."""
+    파이프 끊김·메시지리더 크래시·**제어 스트림 닫힘(Stream closed)**)로 보이는지 — resume 재시도 대상.
+    빈 응답('')도 '서브프로세스가 발화 없이 조용히 종료'한 신호라 재시도 대상으로 본다(호출부에서 처리)."""
     t = (text or "").strip().lower()
     if not t.startswith("api error"):
         return False
     return any(s in t for s in ("429", "500", "502", "503", "529", "overload", "rate", "timeout",
                                 "command failed", "exit code", "sigterm", "143", "137",
-                                "broken pipe", "message reader", "connection"))
+                                "broken pipe", "message reader", "connection",
+                                "stream closed", "stream is closed", "stream", "closed",
+                                "process exited", "cancel", "abort", "disconnect"))
 
 
 def _strip_decoration(text: str) -> str:
@@ -158,7 +161,10 @@ class Organt:
                 final_text, captured_sid = f"API Error: {e}", None
             if captured_sid:
                 self._save_session_id(captured_sid)
-            if not _is_transient_api_error(final_text):
+            # 정상 응답(비어있지 않고 일시오류도 아님)이면 종료. **빈 응답('')은 서브프로세스가 발화 없이
+            # 조용히 죽은 신호**이므로(이게 동료가 '무응답'으로 보여 리더가 충원·재처리로 churn하던 원인)
+            # 일시오류와 똑같이 resume 재시도한다. 끝내 비면 그대로 반환(무한루프 없음 — 최대 _MAX_API_RETRY).
+            if final_text.strip() and not _is_transient_api_error(final_text):
                 break
             if attempt < _MAX_API_RETRY - 1:
                 await asyncio.sleep(2 * (attempt + 1))   # 2s, 4s 백오프

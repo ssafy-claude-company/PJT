@@ -49,8 +49,30 @@ def test_organt_기본옵션_인격_CLAUDEmd():
 def test_일시적_API오류_판별():
     assert _is_transient_api_error("API Error: 529 Overloaded. ...") is True
     assert _is_transient_api_error("API Error: 429 rate_limit") is True
+    assert _is_transient_api_error("API Error: Stream closed") is True          # 제어 스트림 닫힘 = 일시(재시도)
+    assert _is_transient_api_error("API Error: process exited") is True
     assert _is_transient_api_error("API Error: 400 invalid request") is False   # 영구 오류는 재시도 안 함
     assert _is_transient_api_error("백엔드 완성했습니다") is False               # 정상 응답
+
+
+def test_빈응답_무응답은_재시도(monkeypatch):
+    """서브프로세스가 발화 없이 조용히 죽어 빈 응답('')이 오면 handle이 resume 재시도 → 다음 시도에 응답이
+    오면 그걸 반환한다. (동료가 '무응답'으로 보여 리더가 충원·재처리로 churn하던 silent-failure 경로 차단.)"""
+    import asyncio
+    o = Organt(_cfg())
+    calls = {"n": 0}
+
+    async def fake_run_once(prompt):
+        calls["n"] += 1
+        return ("", None) if calls["n"] == 1 else ("서버 구현 완료", None)  # 1차 빈 응답 → 2차 성공
+
+    async def _no_sleep(*a, **k):
+        return None
+
+    monkeypatch.setattr(o, "_run_once", fake_run_once)
+    monkeypatch.setattr("src.organt.asyncio.sleep", _no_sleep)   # 백오프 대기 제거(빠른 테스트)
+    out = asyncio.run(o.handle("서버 만들어줘"))
+    assert out == "서버 구현 완료" and calls["n"] == 2           # 빈 응답 후 재시도해 성공
 
 
 def test_보고_장식수평선_제거():
