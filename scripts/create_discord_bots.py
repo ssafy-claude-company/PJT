@@ -80,9 +80,10 @@ def _wait_app_page(page, timeout_ms: int = 12000) -> bool:
 
 
 def _grab_token(page, app_id: str = "") -> str:
-    """Bot 페이지에서 'Reset Token' → 확인 → (2FA면 멈춤) → Copy로 토큰을 읽는다.
-    **어느 단계가 실패해도 예외를 위로 던지지 않는다** — 그래야 루프가 멋대로 '다음 봇'으로 넘어가지(=재시작
-    처럼 보이는) 않고, 마지막에 '직접 붙여넣기'에서 멈춰 사람이 처리할 수 있다. UI가 바뀌면 셀렉터만 고치면 됨."""
+    """Bot 페이지에서 'Reset Token' → 확인 → (2FA면 멈춤) → **Reset 직후 화면에 뜬 토큰을 DOM에서 정규식으로
+    직접 읽는다**(Copy 버튼·클립보드 권한에 의존 안 함 = 1순위). 실패 시 Copy→클립보드(2순위), 그래도 안 되면
+    사람이 직접 붙여넣기(최후). **어느 단계가 실패해도 예외를 위로 던지지 않는다** — 루프가 멋대로 다음 봇으로
+    넘어가지 않고 마지막 입력에서 멈춰 사람이 처리할 수 있게."""
     # 봇 페이지로 '직접 이동'(사이드바 'Bot' 링크 클릭에 의존하지 않음 — UI 변동/다국어에 강함).
     try:
         if app_id:
@@ -110,15 +111,36 @@ def _grab_token(page, app_id: str = "") -> str:
                 pass
     except Exception:
         pass
-    # Copy 버튼 → 클립보드에서 토큰 읽기(컨텍스트에 clipboard 권한 부여돼 있어야 함).
+    # 토큰 읽기 ① [1순위·가장 강건] Reset 직후 화면에 평문으로 뜬 토큰을 DOM에서 정규식으로 직접 읽는다.
+    #   'Copy' 버튼 이름이나 클립보드 권한(CDP에서 자주 막힘)에 의존하지 않는다. 디스코드 토큰=base64url
+    #   3토막('aaa.bbb.ccc'). input/textarea value와 화면 텍스트를 모두 뒤져 그 패턴을 집는다.
+    token_re = r"[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}"
+    present_js = ("() => { const re=/" + token_re + "/;"
+                  " return re.test(document.body.innerText||'') ||"
+                  " [...document.querySelectorAll('input,textarea')].some(e=>re.test(e.value||'')); }")
+    extract_js = ("() => { const re=/" + token_re + "/;"
+                  " for (const el of document.querySelectorAll('input,textarea')) {"
+                  "   const m=(el.value||'').match(re); if (m) return m[0]; }"
+                  " const m=(document.body.innerText||'').match(re); return m ? m[0] : ''; }")
     try:
-        page.get_by_role("button", name="Copy").first.click(timeout=8000)
-        tok = page.evaluate("() => navigator.clipboard.readText()")
-        if tok and tok.count(".") >= 2:      # 디스코드 토큰은 'A.B.C' 꼴
+        page.wait_for_function(present_js, timeout=8000)   # Reset 후 토큰이 렌더될 때까지 대기
+    except Exception:
+        pass
+    try:
+        tok = page.evaluate(extract_js)
+        if tok and tok.count(".") >= 2:
             return tok.strip()
     except Exception:
         pass
-    # 폴백: 자동 읽기 실패 → 사람이 직접. **여기서 멈추므로 '멋대로 다음 봇으로' 넘어가지 않는다.**
+    # ② [2순위] Copy 버튼 → 클립보드(권한 되면).
+    try:
+        page.get_by_role("button", name="Copy").first.click(timeout=5000)
+        tok = page.evaluate("() => navigator.clipboard.readText()")
+        if tok and tok.count(".") >= 2:
+            return tok.strip()
+    except Exception:
+        pass
+    # ③ [최후] 사람이 직접. **여기서 멈추므로 '멋대로 다음 봇으로' 넘어가지 않는다.**
     return input("      ↳ 토큰 자동 읽기 실패 — 브라우저 Bot 페이지에서 토큰을 복사해 붙여넣고 Enter "
                  "(이 봇은 건너뛰려면 그냥 Enter) ▶ ").strip()
 
