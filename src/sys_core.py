@@ -240,7 +240,9 @@ class Sys:
                 f"recruit(role='직군명')으로 '예비' 인력을 그 직군으로 채용**해 맡기세요(직군은 미리 박힌 게 아니라 "
                 f"필요에 따라 런타임에 채용하는 것). **'예비'에게는 말로 '너는 X 담당이야' 하고 일을 시킬 수 없습니다 — "
                 f"반드시 recruit(role='직군')로 직군을 실제 부여해야 위임이 됩니다(말로만 배정은 구조적으로 거부). "
-                f"한 사람에게 직군을 2개 줘도 됩니다(recruit를 두 번 — 겸직).** 각 Task는 "
+                f"직군은 **1봇 1직업** — 한 사람에게 직군 2개(겸직)는 줄 수 없습니다. 다른 직군이 필요하면 또 다른 "
+                f"'예비'를 그 직군으로 새로 뽑으세요. 한 번 직군을 받은 봇은 그 직업을 계속 유지하니(직업 고정·기억), "
+                f"이미 그 직군을 가진 동료가 있으면 새로 뽑지 말고 그 동료를 쓰세요(직업군 재사용).** 각 Task는 "
                 f"create_task(purpose=…, members=…)로 **Purpose(문제)만 갖고** 여세요 — **Goal·owner를 미리 정하지 말 것.** "
                 f"Goal은 Task 안에서 동료와 request(Info)로 합의해 **set_goal로 확정**하고, owner는 **그 일을 Work로 받는 "
                 f"동료가 됩니다**(수신=소유). **request 전에 create_task로 Task를 먼저 여세요.** 프로젝트 팀원은 request하면 "
@@ -391,6 +393,9 @@ class Sys:
         lead = proj["leader"] if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
         flow.register_project = lambda ch, name: self._register_project(ch, name, flow.workspace, flow.leader)
+        # '기억'(직업 고정): 예비가 recruit로 직군을 받으면 그 직업을 다음 흐름에도 유지하도록 로스터 라벨에 반영
+        # — 흐름 시작 때 _roster_labels로 원복되므로, 여기에 기록해야 채용한 직업이 지속된다(1봇 1직업의 연속성).
+        flow.persist_role = lambda mid, role: self._roster_labels.__setitem__(int(mid), role)
         body = user_text
         if proj:                                     # 기존 프로젝트 개입 — 맥락 유지(재생성 X)
             flow.project_channel = int(channel_id)   # 기존 채널 재사용 → create_project는 no-op

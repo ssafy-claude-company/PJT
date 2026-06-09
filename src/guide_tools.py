@@ -483,7 +483,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
     @tool("recruit",
           "인원이 부족하거나 '새 직군'이 필요하면 채용한다. role=맡길 직군(예: 게임 기획자, UX 디자이너, "
           "사운드 — '예비' 인력을 이 직군으로 신규 채용). member=특정 동료 id/역할명(비우고 role만 주면 예비에서 "
-          "자동 선발). reason=사유. 로스터에 없는 직군도 이렇게 런타임에 채용해 쓴다.",
+          "자동 선발). reason=사유. 로스터에 없는 직군도 이렇게 런타임에 채용해 쓴다. **1봇 1직업(겸직 불가)** — "
+          "이미 직군이 있는 봇에는 다른 직군을 줄 수 없으니, 필요하면 또 다른 예비를 그 직군으로 뽑는다.",
           {"member": str, "role": str, "reason": str})
     async def recruit(args):
         if flow.current is None:
@@ -516,13 +517,23 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if role_name:
             cur = flow._info(mid)
             if _is_spare(flow, mid) or not cur:
-                flow.bot_info[mid] = role_name                    # 예비/무직 → 직군 배정
+                flow.bot_info[mid] = role_name                    # 예비/무직 → 그 직군으로 (1봇 1직업)
                 hired = f" — '{role_name}' 직군으로 채용"
-            elif role_name not in cur:
-                flow.bot_info[mid] = f"{cur}/{role_name}"          # 이미 직군 있음 → 직군 추가(겸직 가능)
-                hired = f" — '{role_name}' 직군 추가(겸직)"
+                # '기억'(직업 고정): 한 번 직군을 받은 예비는 다음 흐름에도 그 직업을 유지한다(매 흐름 '예비'로
+                # 원복되지 않음) — 직업군을 누적·재사용하기 위함. best-effort(없으면 이번 흐름에만 적용).
+                if getattr(flow, "persist_role", None):
+                    try:
+                        flow.persist_role(mid, role_name)
+                    except Exception:
+                        pass
+            elif cur != role_name:
+                # 이미 다른 직군 보유 → **1봇 1직업**: 겸직 불가. 그 직군이 필요하면 '예비'를 새로 그 직군으로 뽑는다.
+                return _ok(f"채용 거부: {cur}(id {mid})는 이미 '{cur}' 직군입니다 — **1봇 1직업**이라 다른 직군"
+                           f"('{role_name}')을 겸할 수 없습니다(겸직 폐지). '{role_name}'이 필요하면 "
+                           f"recruit(role='{role_name}')로 '예비' 인력을 그 직군으로 새로 뽑으세요.")
+            # cur == role_name(이미 그 직군)이면 라벨 변경 없이 그대로 합류.
             flow.current.status.group = _group_of(flow, flow.current.team)
-            # 이름은 그대로 두고 '직군'을 Discord 역할(권한)로 부여 — 한 봇이 직군 여럿 가능(best-effort).
+            # 이름은 그대로 두고 '직군'을 Discord 역할(권한)로 부여(1봇 1직업) — best-effort.
             fn = getattr(g, "assign_job_role", None)
             if fn and getattr(flow, "guild_id", None):
                 try:

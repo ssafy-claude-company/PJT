@@ -150,14 +150,16 @@ def test_recruit로_부족직군_풀인력_합류():
 
 
 def test_예비인력_새직군_런타임채용_말로만배정차단():
-    """'예비'(직군 미배정)는 첫 '전원 기획'에 안 들어가고, recruit(role=…)로 '실제' 직군이 부여돼야 한다 —
-    role 없이 예비 채용/위임은 거부(말로만 배정 차단). 한 사람에게 직군 2개(겸직)도 가능."""
+    """'예비'(직군 미배정)는 기본 팀에 안 들어가고, recruit(role=…)로 '실제' 직군이 부여돼야 한다 — role 없이
+    예비 채용/위임은 거부(말로만 배정 차단). **1봇 1직업: 이미 직군 있는 봇에 다른 직군(겸직)은 거부**된다."""
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
              bot_info={11: "백엔드", 12: "프론트엔드", 13: "예비", 14: "예비"})
     f.start_root("root")
+    persisted = {}
+    f.persist_role = lambda mid, role: persisted.__setitem__(mid, role)   # '기억'(직업 고정) 배선 검증용
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_task"].handler({"members": ""}))      # 첫 Task = 전원 기획
+    asyncio.run(t["create_task"].handler({"members": ""}))      # 담당자가 안 좁히면 프로젝트팀(예비 제외)
     assert set(f.current.team) == {11, 12} and 13 not in f.current.team   # 예비는 제외
     # role 없이 예비 채용 시도 → 거부, 팀에 안 들어옴(말로만 배정 차단)
     rno = asyncio.run(t["recruit"].handler({"member": "13"}))
@@ -168,13 +170,24 @@ def test_예비인력_새직군_런타임채용_말로만배정차단():
     assert "직군으로 채용" in r["content"][0]["text"] and "게임 기획자" in r["content"][0]["text"]
     hired = next(i for i in (13, 14) if f.bot_info[i] == "게임 기획자")
     assert hired in f.current.team and f.bot_info[hired] == "게임 기획자"
-    # 겸직: 같은 사람에게 직군 하나 더 → 'A/B'(직군 2개)
-    asyncio.run(t["recruit"].handler({"member": str(hired), "role": "레벨 디자이너"}))
-    assert "게임 기획자" in f.bot_info[hired] and "레벨 디자이너" in f.bot_info[hired]
+    assert persisted.get(hired) == "게임 기획자"   # 채용한 직업이 '기억'(로스터 라벨)에 반영됨 → 다음 흐름 유지
+    # 1봇 1직업: 이미 직군('게임 기획자') 있는 봇에 다른 직군 추가 → 거부(겸직 폐지), 직군 그대로
+    r2 = asyncio.run(t["recruit"].handler({"member": str(hired), "role": "레벨 디자이너"}))
+    assert "거부" in r2["content"][0]["text"] and "1봇 1직업" in r2["content"][0]["text"]
+    assert f.bot_info[hired] == "게임 기획자"
     # 남은 예비를 'UX 디자이너'로, 그 뒤 예비 소진 → 채용 불가 안내
     asyncio.run(t["recruit"].handler({"role": "UX 디자이너", "reason": "UX"}))
     r3 = asyncio.run(t["recruit"].handler({"role": "사운드", "reason": "x"}))
     assert "못 찾음" in r3["content"][0]["text"]
+
+
+def test_채용직업_기억_다음흐름_유지():
+    """recruit로 부여한 직군은 _roster_labels에 기록돼, 새 흐름 시작 시 reset 후에도 유지된다 — '직업 고정·기억'
+    (예비가 한 번 직업을 받으면 매 흐름 예비로 원복되지 않고 그 직업군을 누적·재사용)."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "백엔드", 13: "예비"})
+    s._roster_labels.__setitem__(13, "게임 기획자")   # handle_user_input이 거는 persist_role과 동일 동작
+    s.bot_info.clear(); s.bot_info.update(s._roster_labels)   # 새 흐름 reset 경로
+    assert s.bot_info[13] == "게임 기획자" and s.bot_info[11] == "백엔드"   # 예비→게임기획자 유지
 
 
 def test_개입_Task는_전원소집_안함():
