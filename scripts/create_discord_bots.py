@@ -86,8 +86,7 @@ def _grab_token(page, app_id: str = "") -> str:
     # 봇 페이지로 '직접 이동'(사이드바 'Bot' 링크 클릭에 의존하지 않음 — UI 변동/다국어에 강함).
     try:
         if app_id:
-            page.goto(f"{PORTAL}/{app_id}/bot")
-            page.wait_for_load_state("networkidle", timeout=15000)
+            page.goto(f"{PORTAL}/{app_id}/bot", wait_until="domcontentloaded")  # networkidle은 SPA에서 안 옴
         else:
             page.get_by_role("link", name="Bot").click(timeout=15000)
     except Exception:
@@ -199,9 +198,14 @@ def _write_outputs(created, start_idx):
 
 
 def _list_app_ids(page) -> list:
-    """포털 Applications 목록에서 내 앱들의 application id를 뽑는다(생성과 무관 — 캡차 없음)."""
-    page.goto(PORTAL)
-    page.wait_for_load_state("networkidle", timeout=20000)
+    """포털 Applications 목록에서 내 앱들의 application id를 뽑는다(생성과 무관 — 캡차 없음).
+    디스코드 포털은 SPA라 'networkidle'이 거의 안 와서(상시 연결) 그걸로 기다리면 타임아웃 →
+    앱 링크가 뜰 때까지만 기다린다(안 떠도 진행)."""
+    page.goto(PORTAL, wait_until="domcontentloaded")
+    try:
+        page.wait_for_selector("a[href*='/applications/']", timeout=15000)
+    except Exception:
+        pass
     try:
         hrefs = page.eval_on_selector_all(
             "a[href*='/applications/']", "els => els.map(e => e.getAttribute('href'))")
@@ -312,8 +316,7 @@ def main() -> None:
                 if not _wait_app_page(page, timeout_ms=12000):
                     input(f"      ↳ '{name}' 생성 확인(봇/사람 캡차 등)이 떴으면 브라우저에서 처리한 뒤 Enter ▶ ")
                     _wait_app_page(page, timeout_ms=120000)
-                page.wait_for_load_state("networkidle", timeout=20000)
-                app_id = _read_app_id(page)
+                app_id = _read_app_id(page)   # _wait_app_page가 이미 앱 페이지(URL) 확인 — networkidle 불필요
                 token = _grab_token(page, app_id)
                 created.append((name, token, app_id))
                 print(f"    ({i + 1}/{count}) {name}  {'✓' if token else '⚠ 토큰 미수집(건너뜀)'}")
