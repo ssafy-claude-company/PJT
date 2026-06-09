@@ -72,15 +72,27 @@ def _wait_app_page(page, timeout_ms: int = 12000) -> bool:
         return False
 
 
-def _grab_token(page) -> str:
-    """Bot 페이지에서 'Reset Token' → 확인 → (2FA면 멈춤) → Copy 버튼으로 클립보드 복사해 토큰을 읽는다.
-    UI가 바뀌면 이 함수의 셀렉터만 고치면 된다. 자동 읽기 실패 시 직접 붙여넣기로 폴백."""
-    from playwright.sync_api import TimeoutError as PWTimeout
-    page.get_by_role("link", name="Bot").click(timeout=20000)        # 좌측 사이드바 'Bot'
-    page.get_by_role("button", name="Reset Token").click(timeout=15000)
+def _grab_token(page, app_id: str = "") -> str:
+    """Bot 페이지에서 'Reset Token' → 확인 → (2FA면 멈춤) → Copy로 토큰을 읽는다.
+    **어느 단계가 실패해도 예외를 위로 던지지 않는다** — 그래야 루프가 멋대로 '다음 봇'으로 넘어가지(=재시작
+    처럼 보이는) 않고, 마지막에 '직접 붙여넣기'에서 멈춰 사람이 처리할 수 있다. UI가 바뀌면 셀렉터만 고치면 됨."""
+    # 봇 페이지로 '직접 이동'(사이드바 'Bot' 링크 클릭에 의존하지 않음 — UI 변동/다국어에 강함).
     try:
-        page.get_by_role("button", name="Yes, do it!").click(timeout=5000)  # 확인 모달
-    except PWTimeout:
+        if app_id:
+            page.goto(f"{PORTAL}/{app_id}/bot")
+            page.wait_for_load_state("networkidle", timeout=15000)
+        else:
+            page.get_by_role("link", name="Bot").click(timeout=15000)
+    except Exception:
+        pass
+    # Reset Token (+ 확인 모달). 실패해도 안 던지고 폴백으로 간다.
+    try:
+        page.get_by_role("button", name="Reset Token").click(timeout=15000)
+        try:
+            page.get_by_role("button", name="Yes, do it!").click(timeout=5000)
+        except Exception:
+            pass
+    except Exception:
         pass
     # 2FA 코드 입력이 뜨면 사람이 입력해야 한다(봇당 1회).
     try:
@@ -88,7 +100,7 @@ def _grab_token(page) -> str:
             input("      ↳ 브라우저에 2FA 코드 입력 후 Enter ▶ ")
             try:
                 page.get_by_role("button", name="Yes, do it!").click(timeout=5000)
-            except PWTimeout:
+            except Exception:
                 pass
     except Exception:
         pass
@@ -100,8 +112,9 @@ def _grab_token(page) -> str:
             return tok.strip()
     except Exception:
         pass
-    # 폴백: 자동 읽기 실패 → 사람이 브라우저에서 토큰 복사해 붙여넣기.
-    return input("      ↳ 토큰 자동 읽기 실패. 브라우저에서 토큰을 복사해 붙여넣고 Enter ▶ ").strip()
+    # 폴백: 자동 읽기 실패 → 사람이 직접. **여기서 멈추므로 '멋대로 다음 봇으로' 넘어가지 않는다.**
+    return input("      ↳ 토큰 자동 읽기 실패 — 브라우저 Bot 페이지에서 토큰을 복사해 붙여넣고 Enter "
+                 "(이 봇은 건너뛰려면 그냥 Enter) ▶ ").strip()
 
 
 def main() -> None:
@@ -174,16 +187,19 @@ def main() -> None:
                     _wait_app_page(page, timeout_ms=120000)
                 page.wait_for_load_state("networkidle", timeout=20000)
                 app_id = _read_app_id(page)
-                token = _grab_token(page)
+                token = _grab_token(page, app_id)
                 created.append((name, token, app_id))
-                print(f"    ({i + 1}/{count}) {name}  ✓")
+                print(f"    ({i + 1}/{count}) {name}  {'✓' if token else '⚠ 토큰 미수집(건너뜀)'}")
             except Exception as e:
                 try:
                     page.screenshot(path=f"error_{i}.png")
                 except Exception:
                     pass
-                print(f"    ({i + 1}/{count}) {name}  ✗ 실패: {type(e).__name__}: {str(e)[:120]}\n"
-                      f"        (error_{i}.png 스크린샷 확인 — 포털 UI가 바뀌었으면 _grab_token 셀렉터 조정)")
+                print(f"    ({i + 1}/{count}) {name}  ✗ 실패: {type(e).__name__}: {str(e)[:160]}\n"
+                      f"        (error_{i}.png 스크린샷 확인 — 포털 UI가 바뀌었으면 셀렉터 조정 필요)")
+                # **멋대로 다음 봇으로 넘어가지 않도록 여기서 멈춘다** — 사람이 화면(캡차/UI변동/로그인)을 보고 결정.
+                if input("      ↳ Enter=다음 봇 계속 / s+Enter=중단하고 지금까지 저장 ▶ ").strip().lower() == "s":
+                    break
         try:
             if using_cdp and browser is not None:
                 browser.close()      # CDP: 연결만 끊김(당신 크롬 창은 유지)
