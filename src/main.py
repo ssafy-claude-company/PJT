@@ -162,6 +162,21 @@ async def run() -> None:
     guide = DiscordGuide(system_client, organts)
     channel = (system_client.get_channel(cfg.channel_id)
                or await system_client.fetch_channel(cfg.channel_id))
+    # 직업 기억 복원(Discord 역할 = 영속 진실원): 이전 실행에서 '예비'가 recruit로 받은 직군(예: 게임 기획자)은
+    # Discord 역할로 남아 있다(서버에 영속 — 컨테이너 재시작/리클레임으로 디스크가 사라져도 견딤). 시작 시 '예비'
+    # 봇의 커스텀 역할을 읽어 그 직군을 되살린다 → '게임 기획자'로 매번 다른 봇이 뽑히던 churn 차단(1봇 1직군).
+    # (디스크 jobs.json은 Sys가 추가로 덮어쓴다 — 둘 다 영속 경로; 디스크가 우선, 없으면 Discord 역할로 유추.)
+    try:
+        spare_ids = [u for u in organts if str(bot_info.get(u, "")).startswith("예비")]
+        recovered = await guide.get_member_jobs(channel.guild.id, spare_ids) if spare_ids else {}
+        for uid, job in (recovered or {}).items():
+            if uid in bot_info and job and not str(job).startswith("예비"):
+                bot_info[uid] = job
+        if recovered:
+            log.info("직업 기억 복원(Discord 역할) %d명: %s", len(recovered),
+                     {u: bot_info[u] for u in recovered if u in bot_info})
+    except Exception:
+        log.warning("직업 기억 복원(Discord 역할) 실패 — 건너뜀", exc_info=True)
     # 이름은 '사람 이름'(닉네임, 고정 정체성), 직군은 'Discord 역할(권한)'로 부여한다 — 한 봇이 직군을
     # 여러 개 가질 수 있고, 직군이 바뀌어도 이름은 안 바뀐다(사용자 요청). 둘 다 best-effort.
     names = assign_korean_names(list(organts))
@@ -186,7 +201,9 @@ async def run() -> None:
     sysm = Sys(guide, channel.guild.id, _make_builder(cfg, audit, bot_info), bot_info=bot_info,
                workspace=cfg.workspace_dir,
                projects_path=str(cfg.audit_log_path.parent / "projects.json"),
-               session_dir=str(cfg.audit_log_path.parent))
+               session_dir=str(cfg.audit_log_path.parent),
+               jobs_path=str(cfg.audit_log_path.parent / "jobs.json"))
+    sysm._save_jobs()   # Discord 역할에서 복원한 직군을 디스크 jobs.json에도 캐시(다음 시작은 디스크 빠른 경로)
 
     print(f"SYS 가동 — 리더={bot_info[leader_id]}({leader_id}), 팀={list(bot_info.values())}")
     print(f"#{channel.name} 에서 User 입력 대기 중 — 그냥 말 걸어도 됩니다(Ctrl+C 종료)")

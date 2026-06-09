@@ -835,6 +835,47 @@ def test_개입_미완Task_영속과_되살리기_담당자가_이어감(tmp_pat
     assert s.projects[901].get("open_task") is None                         # 완료 → 비움
 
 
+def test_직업기억_디스크영속_재시작에도_직군유지(tmp_path):
+    """[근본] recruit로 예비가 받은 직군(게임 기획자)을 jobs.json에 영속 → 프로세스 재시작(새 Sys) 뒤에도
+    '예비'로 원복되지 않고 그 직군 유지. (매번 다른 봇이 게임 기획자로 뽑히던 churn의 디스크 차원 해결)"""
+    import json
+    jp = tmp_path / "jobs.json"
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "백엔드", 12: "예비"},
+            workspace="/ws", session_dir=str(tmp_path), jobs_path=str(jp))
+    s._persist_job(12, "게임 기획자")                       # recruit가 부르는 콜백(예비→직군)
+    assert jp.exists() and json.load(open(jp, encoding="utf-8"))["jobs"]["12"] == "게임 기획자"
+    # '재시작' 시뮬: 같은 jobs_path로 새 Sys — roster는 12를 '예비'로 주지만 디스크에서 직군 복원
+    s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "백엔드", 12: "예비"},
+             workspace="/ws", session_dir=str(tmp_path), jobs_path=str(jp))
+    assert s2.bot_info[12] == "게임 기획자"                  # 예비로 원복 안 됨
+    assert s2._roster_labels[12] == "게임 기획자"            # 흐름 시작 원복 라벨에도 반영(지속)
+
+
+def test_개입_리더재지정_To로_담당자_이양(tmp_path):
+    """[사용자 요청] 개입 시 [Request] To로 현 리더와 다른 봇을 명시하면 그 봇이 그 프로젝트의 새 담당자가
+    된다(게임 프로젝트인데 백엔드가 담당자로 고정되던 문제 — 기획자 등으로 이양). 같은 리더면 변화 없음."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "백엔드", 12: "게임 기획자"},
+            workspace="/ws", session_dir=str(tmp_path),
+            projects_path=str(tmp_path / "projects.json"))
+    s.projects[900] = {"id": "P-001", "name": "게임", "channel": 900,
+                       "workspace": "/ws", "leader": 11, "summary": ""}
+    captured = {}
+
+    async def fake_rt(flow, oid, body, kind, role):
+        captured["leader"] = flow.leader
+        return "done"
+    s.run_turn = fake_rt
+    asyncio.run(s.handle_user_input(900, 12, "이건 기획자 너가 담당해", root_id=None))   # To=12(현 리더 11과 다름)
+    assert s.projects[900]["leader"] == 12                       # 레지스트리 담당자 이양
+    assert captured["leader"] == 12                              # 이번 흐름도 12가 담당
+    assert any(e["event"] == "leader_reassigned" for e in s.flow_log)
+    # 같은 담당자(현 리더=12)로 다시 개입 → 재지정 이벤트 없음(불필요한 변경 안 함)
+    s.flow_log.clear()
+    asyncio.run(s.handle_user_input(900, 12, "이어서", root_id=None))
+    assert not any(e["event"] == "leader_reassigned" for e in s.flow_log)
+
+
 def test_위임자에게_되묻기는_확인요청반환_에러아님():
     """직속 위임자에게 Info로 되물으면 '재진입 불가' 에러 대신 확인요청을 위임자에게 반환(협업 가능)."""
     g = FakeGuide()

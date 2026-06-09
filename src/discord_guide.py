@@ -200,6 +200,26 @@ class DiscordGuide:
                 ok += 1
         return ok
 
+    async def get_member_jobs(self, guild_id: int, user_ids) -> Dict[int, str]:
+        """각 봇의 현재 Discord 역할 중 '커스텀 직군 역할'(@everyone·봇 통합 역할 제외)을 찾아 id→직군명.
+        직군은 assign_job_role이 '직군 이름'으로 만든 역할이고, Discord 역할은 서버에 영속되므로 컨테이너
+        재시작/리클레임(디스크 jobs.json까지 사라져도)을 넘어 '직업'을 복원하는 진실원이 된다(사용자 요청:
+        '권한 자체로도 유추'). 1봇 1직군이라 여러 개면 첫 번째만 돌려준다(best-effort — 실패는 건너뜀)."""
+        out: Dict[int, str] = {}
+        try:
+            guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
+        except Exception:
+            return out
+        for uid in user_ids:
+            try:
+                m = guild.get_member(int(uid)) or await guild.fetch_member(int(uid))
+                jobs = [r.name for r in m.roles if not r.is_default() and not getattr(r, "managed", False)]
+                if jobs:
+                    out[int(uid)] = jobs[0]
+            except Exception:
+                continue
+        return out
+
     # 새 봇 '원터치 초대'용 권한 — 워커가 스레드에 글 쓰고 반응/기록을 읽는 데 필요한 최소 집합
     # (View+Send+Embed+History+Reactions+Send-in-Threads). 봇 생성만 사람이 하고 초대는 링크 한 번.
     INVITE_PERMS = 1024 + 2048 + 16384 + 65536 + 64 + 274877906944  # = 274877992000

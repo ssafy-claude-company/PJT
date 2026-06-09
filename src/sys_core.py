@@ -30,7 +30,8 @@ _CONTINUE_BODY = (
 
 class Sys:
     def __init__(self, guide, guild_id, organt_builder, bot_info: Optional[Dict[int, str]] = None,
-                 workspace=None, projects_path=None, session_dir=None, max_continue=6):
+                 workspace=None, projects_path=None, session_dir=None, max_continue=6,
+                 jobs_path=None):
         self.guide = guide
         self.guild_id = guild_id
         self.organt_builder = organt_builder   # (organt_id, guide_server, role) -> Organt
@@ -38,6 +39,11 @@ class Sys:
         # 로스터 원본 라벨(직군). recruit(role=…)로 '예비'를 런타임 직군으로 채용하면 bot_info가 바뀌므로,
         # 새 흐름 시작 때 이걸로 원복한다(예비는 다음 흐름에서 다른 직군으로 다시 채용 가능).
         self._roster_labels = dict(self.bot_info)
+        # '직업 기억' 디스크 영속: recruit한 직군(예: 게임 기획자)을 jobs.json에 저장해, 프로세스 재시작
+        # 뒤에도 '예비'로 원복되지 않게 한다(매번 다른 봇이 그 직군으로 뽑히던 문제의 근본 해결; 1봇 1직군).
+        # Discord 역할(권한)도 또 다른 영속 진실원이라, main이 시작 때 역할에서 복원해 bot_info에 미리 반영한다.
+        self.jobs_path = jobs_path
+        self._load_jobs()
         self._origin_request = ""   # 이번 흐름의 '사용자 원문 요청'(담당자 paraphrase 아닌 원문) — 모든 프롬프트에 주입
         self.workspace = workspace             # run 툴 cwd(작업공간 경로)
         self.session_dir = session_dir         # organt_state_*.json 위치(새 요청마다 세션 초기화)
@@ -85,6 +91,42 @@ class Sys:
             os.replace(tmp, self.projects_path)
         except Exception:
             pass
+
+    def _load_jobs(self):
+        """디스크(jobs.json)에 영속된 '직업 기억'(예비→채용 직군)을 roster 라벨·현재 라벨에 덮어쓴다 —
+        프로세스 재시작 뒤에도 채용했던 직군(예: 게임 기획자)이 '예비'로 원복되지 않게(1봇 1직군 유지)."""
+        if not self.jobs_path or not os.path.exists(self.jobs_path):
+            return
+        try:
+            data = json.load(open(self.jobs_path, encoding="utf-8"))
+            for k, v in (data.get("jobs") or {}).items():
+                kid = int(k)
+                self._roster_labels[kid] = v
+                if kid in self.bot_info:
+                    self.bot_info[kid] = v
+        except Exception:
+            pass
+
+    def _save_jobs(self):
+        """현재 '직업 기억'(예비가 아닌 라벨)을 jobs.json에 원자적 저장 — 재시작 넘어 직군 유지."""
+        if not self.jobs_path:
+            return
+        try:
+            jobs = {str(k): v for k, v in self._roster_labels.items()
+                    if v and not str(v).startswith("예비")}
+            tmp = f"{self.jobs_path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"jobs": jobs}, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.jobs_path)
+        except Exception:
+            pass
+
+    def _persist_job(self, mid, role):
+        """recruit가 예비를 직군으로 채용/자기직군 확정할 때 호출 — 메모리(_roster_labels)+디스크(jobs.json) 갱신."""
+        self._roster_labels[int(mid)] = role
+        self._save_jobs()
 
     def _register_project(self, channel_id, name, workspace, leader) -> str:
         """프로젝트를 1급 엔티티로 등록 → 식별번호 P-XXX 부여. 같은 채널이나 같은 이름이 이미
@@ -496,12 +538,19 @@ class Sys:
         self.bot_info.clear()
         self.bot_info.update(self._roster_labels)
         self._origin_request = (user_text or "").strip()   # 원문 보존 — 담당자가 요약·해석하기 전 '사용자가 실제로 한 말'
+        # 리더 재지정(사용자 요청): 개입 시 [Request] To로 현 리더와 '다른' 봇을 명시하면 그 봇을 이 프로젝트의
+        # 새 담당자로 갱신한다 — 게임 프로젝트인데 '백엔드'가 담당자로 고정되던 문제 해소(기획자 등으로 담당 이양
+        # 가능). 평문 개입은 main이 to_id를 현 리더로 채우므로, leader_id != proj.leader면 '명시적 지정'으로 본다.
+        if proj and leader_id and leader_id != proj.get("leader") and leader_id in self.bot_info:
+            self._log("leader_reassigned", project=proj["id"], old=proj.get("leader"), new=leader_id)
+            proj["leader"] = leader_id
+            self._save_projects()
         lead = proj["leader"] if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
         flow.register_project = lambda ch, name: self._register_project(ch, name, flow.workspace, flow.leader)
         # '기억'(직업 고정): 예비가 recruit로 직군을 받으면 그 직업을 다음 흐름에도 유지하도록 로스터 라벨에 반영
         # — 흐름 시작 때 _roster_labels로 원복되므로, 여기에 기록해야 채용한 직업이 지속된다(1봇 1직업의 연속성).
-        flow.persist_role = lambda mid, role: self._roster_labels.__setitem__(int(mid), role)
+        flow.persist_role = self._persist_job   # 채용한 직군을 메모리+디스크(jobs.json)에 영속(재시작에도 유지)
         body = user_text
         if proj:                                     # 기존 프로젝트 개입 — 맥락 유지(재생성 X)
             flow.project_channel = int(channel_id)   # 기존 채널 재사용 → create_project는 no-op
