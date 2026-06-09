@@ -60,15 +60,15 @@ def _read_app_id(page) -> str:
 def _wait_app_page(page, timeout_ms: int = 12000) -> bool:
     """앱이 실제로 만들어져 'General Information' 페이지(URL에 숫자 application id)로 넘어갔는지 기다린다.
     True=넘어감(확인 통과 또는 없음), False=시간초과 — 보통 '봇/사람 확인(캡차)'이 막고 있는 상태다.
-    이 신호로 '캡차 없으면 빠르게 통과, 있으면 멈춰서 사람이 처리'를 구분한다."""
-    from playwright.sync_api import TimeoutError as PWTimeout
+    이 신호로 '캡차 없으면 빠르게 통과, 있으면 멈춰서 사람이 처리'를 구분한다. 절대 예외를 던지지 않는다
+    (시간초과든 다른 오류든 False) — 그래야 캡차가 항상 '대기 프롬프트'로 잡히고 루프가 멋대로 안 넘어간다."""
     try:
         page.wait_for_url(
             lambda url: "/applications/" in url
             and url.split("/applications/")[1].split("/")[0].strip().isdigit(),
             timeout=timeout_ms)
         return True
-    except PWTimeout:
+    except Exception:
         return False
 
 
