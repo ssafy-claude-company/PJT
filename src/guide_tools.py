@@ -174,7 +174,10 @@ class Flow:
         self.pool = list((bot_info or {}).keys()) or [leader_id]   # 채용 가능 전체(로스터)
         if leader_id not in self.pool:
             self.pool.insert(0, leader_id)
-        self.project_team: List[int] = list(self.pool)             # 기본=풀 전체(리더가 좁힐 수 있음)
+        # 기본 프로젝트 팀 = 직군 보유자(예비 제외) — 예비는 '채용 대기'라 기본 팀에 안 넣는다(recruit로만 합류).
+        # 리더는 예비여도 포함. 담당자가 create_project/create_task로 더 좁히거나 recruit로 직군을 채운다.
+        self.project_team: List[int] = [m for m in self.pool if m == leader_id
+                                        or not str((bot_info or {}).get(m, "")).startswith("예비")]
         self.project_channel: Optional[int] = None
         self.tasks: List[TaskRef] = []
         self.current: Optional[TaskRef] = None
@@ -623,8 +626,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         @tool("create_task",
               "Task '빈 껍데기'를 연다 — **Purpose도 비운 채 멤버만 배정**한다(리더가 할 일을 미리 못 박음 = 중앙집권 "
               "방지). 이후 **배정된 팀이 모여(request Info) Purpose(풀 문제)·Goal(성공기준)을 함께 정해 set_goal로 "
-              "확정**한다. Owner는 그 일을 Work로 받은 동료가 된다(선배정 금지). members=이 Task를 함께 정하고 수행할 "
-              "동료(비우면 프로젝트팀 전체).",
+              "확정**한다. Owner는 그 일을 Work로 받은 동료가 된다(선배정 금지). **members=이 일에 필요한 직군 동료를 "
+              "당신이 직접 고른다**(자동 전원 소집 아님 — 직군 고정 방지). 비우면 프로젝트팀(예비 제외) 기본, 모자란 "
+              "직군은 recruit(role=)로 채운다.",
               {"members": str})
         async def create_task(args):
             if flow.current is not None and flow.current.status.status != "완료":
@@ -635,19 +639,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             tid = flow.next_task_id()
             pool = flow.project_team or flow.pool
             picked = _resolve_members(args.get("members", ""), flow, pool)
-            # 첫 Task = '전원 기획 회의': 채용 풀 '전체'를 강제로 멤버에 넣는다(리더가 프로젝트팀을 좁혀
-            # 일부를 빼두거나, 좁은 1인 Task로 후퇴하는 걸 차단 — 정의는 놀던 인력까지 모두 모여서). 풀 전원을
-            # 프로젝트 팀에도 반영해 이후 구현 Task에서도 쓸 수 있게 한다. 구현 Task는 owner 중심으로 좁혀도 됨.
-            # 새 프로젝트의 첫 Task만 '전원 기획'으로 강제한다. 기존 프로젝트 '개입(수정)'은 타깃 작업이므로
-            # 전원 소집하지 않고 리더가 고장난 도메인 담당만 부른다(작은 수정에 10명 소집 방지).
-            is_first = not flow.tasks and not getattr(flow, "intervention", None)
-            if is_first:
-                # 직군이 정해진 동료 전원 강제(놀던 인력 포함). '예비'(직군 미배정)는 제외 — 필요할 때
-                # recruit(role=…)로 그 직군을 채용해 합류시킨다(전원 기획엔 실제 직군 보유자만).
-                base = [m for m in flow.pool if m != flow.leader and not _is_spare(flow, m)]
-                flow.project_team = _uniq([flow.leader] + base)         # 프로젝트 팀에도 반영
-            else:
-                base = picked if picked else [m for m in flow.project_team if m != flow.leader]
+            # 팀은 담당자(리더)가 '일에 맞게' 동적으로 고른다 — 자동 전원 소집 아님(직군 고정·놀던 인력까지
+            # 무조건 소집 방지). members=로 필요한 직군 동료만 지정하면 그들로, 비우면 프로젝트팀(예비 제외)을
+            # 기본으로 한다. 모자란 직군은 recruit(role=)로 채워 합류시킨다. set_goal은 '담당자가 고른 이 팀
+            # 전원'의 협의로 통과 → 팀 구성·규모는 담당자가 이 일에 맞게 결정한다(중앙이 고정 X, 전원 강제 X).
+            base = picked if picked else [m for m in flow.project_team
+                                          if m != flow.leader and not _is_spare(flow, m)]
             team = _uniq([flow.leader] + base)
             # Purpose·Goal·Owner 모두 비워둔다 — 빈 껍데기. Purpose·Goal은 배정된 팀이 모여 set_goal로 정하고,
             # Owner는 Work-request 수신으로 떠오른다(리더가 할 일·목표·담당을 미리 박던 중앙집권 제거).
@@ -661,8 +658,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.tasks.append(ref)
             flow.current = ref
             flow.comm.reset_task_tracking()   # 새 산출물 단위 → '완료/Redo' 추적 초기화(Redo는 같은 Task 안에서만)
-            tag0 = "전원 기획 회의(모두 모여 정의)" if is_first else "빈 껍데기"
-            return _ok(f"task={tid} ({tag0}) thread={thread_id} 팀={flow._names(team)} — 배정된 팀 **전원**에게 "
+            return _ok(f"task={tid} (빈 껍데기·담당자가 팀 선정) thread={thread_id} 팀={flow._names(team)} — 이 팀은 "
+                       f"당신이 고른 구성입니다(직군이 부족하면 recruit(role=)로 더하세요). 배정된 팀 **전원**에게 "
                        f"request(Info)로 'Purpose(풀 문제)·Goal(성공기준)·각자 도메인 할 일'을 물어 함께 정한 뒤 "
                        f"set_goal로 확정하세요(전원 협의 전엔 set_goal 거부됨). 그 다음 일을 맡길 동료에게 Work로 위임.")
         tools.append(create_task)

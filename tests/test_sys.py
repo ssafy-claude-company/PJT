@@ -135,23 +135,17 @@ def test_run_백그라운드_프로세스_그룹째_정리():
     assert not _running(pid), f"백그라운드 자식(pid={pid})이 정리되지 않고 누수됨"
 
 
-def test_recruit로_좁힌Task에_풀인력_합류():
-    """첫 Task(전원) 완료 후, 좁힌 두번째 구현 Task에 recruit로 풀 인력을 합류시킬 수 있다.
-    (첫 Task가 풀 전원을 강제하므로 '팀 밖 거부'는 더는 없고, 좁힌 Task에 인력 추가가 recruit의 역할.)"""
+def test_recruit로_부족직군_풀인력_합류():
+    """담당자가 고른 팀에 없던 풀 인력도 recruit로 현재 Task에 합류시킬 수 있다(동적 충원) — 직군 보유자
+    (예비 아님)는 역할명만으로 합류한다('말로만 배정 차단'은 예비에만 적용)."""
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "A", 13: "B"})
     f.start_root("root")
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))   # 리더가 좁혀도
-    asyncio.run(t["create_task"].handler({"members": "12"}))                # 첫 Task → 풀 전원 강제
-    assert set(f.current.team) == {11, 12, 13}
-    f.current.participated.update({12, 13})
-    asyncio.run(t["set_goal"].handler({"purpose": "p", "goal": "g"}))
-    f.current.verified = True
-    asyncio.run(t["complete_task"].handler({"result": "ok"}))
-    asyncio.run(t["create_task"].handler({"members": "12"}))                # 두번째 → 좁힘(11,12)
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))   # 담당자가 팀을 12로 좁힘
+    asyncio.run(t["create_task"].handler({"members": "12"}))                # 13은 팀 밖
     assert set(f.current.team) == {11, 12} and 13 not in f.current.team
-    asyncio.run(t["recruit"].handler({"member": "B", "reason": "부족"}))     # 역할명으로 합류
+    asyncio.run(t["recruit"].handler({"member": "B", "reason": "부족"}))     # 역할명 'B'로 풀에서 합류
     assert 13 in f.current.team
 
 
@@ -184,8 +178,8 @@ def test_예비인력_새직군_런타임채용_말로만배정차단():
 
 
 def test_개입_Task는_전원소집_안함():
-    """개입(intervention) 흐름의 create_task는 '전원 기획' 강제를 안 한다 — 리더가 부른 담당만 모임(작은 수정에
-    10명 소집 방지). 새 프로젝트 첫 Task만 전원 강제."""
+    """개입(intervention) 흐름의 create_task도 담당자가 부른 담당만 모인다 — members로 고른 동료만(작은 수정에
+    10명 소집 방지). 어느 흐름이든 팀은 자동 전원이 아니라 담당자가 동적 선정한다."""
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
              bot_info={11: "백엔드", 12: "프론트엔드", 13: "디자이너", 14: "QA"})
@@ -234,6 +228,19 @@ def test_원문요청_프롬프트주입_탈중앙():
     assert "캐릭터 10개로 늘리고 이펙트 구분해줘" in p_lead                               # 리더도 원문 그대로
     s._origin_request = ""
     assert "사용자 원문 요청" not in s._prompt("x", Kind.INFO, "member", 12, leader_id=11)
+
+
+def test_예비_담당자는_자기직군_먼저채용_지시받음():
+    """'예비'(직군 미배정) 봇이 담당자(To)로 호명되면, 프롬프트가 '먼저 recruit로 자기 직군을 부여해 한 직원으로
+    참여하라'고 지시한다(사용자: 자길 예비로 두지 말고 프로젝트의 일원으로 참여). 또 팀은 자동 전원이 아니라
+    담당자가 동적으로 짜라고 안내한다. 직군 보유 담당자에겐 '예비 먼저 채용' 지시가 안 나온다."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "예비", 12: "프론트엔드"})
+    p_spare = s._prompt("x", Kind.WORK, "leader", 11, leader_id=11)
+    assert "예비" in p_spare and "recruit(member=11" in p_spare and "자기 직군" in p_spare
+    assert "팀은 당신이 동적으로 짠다" in p_spare           # 동적 팀 구성 안내는 담당자 프롬프트에 항상
+    s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "백엔드", 12: "프론트엔드"})
+    p_norm = s2._prompt("x", Kind.WORK, "leader", 11, leader_id=11)
+    assert "자기 직군부터 정하라" not in p_norm and "팀은 당신이 동적으로 짠다" in p_norm
 
 
 def test_owner는_work수신자_goal합의후():
@@ -292,22 +299,22 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     assert "거부" in r3["content"][0]["text"]                      # Task별로 다시 합의해야 함
 
 
-def test_첫Task는_전원_기획회의_강제():
-    """첫 Task(기획·정의)는 리더가 일부만 지정해도 프로젝트 팀 '전원'이 멤버가 된다(모두 모여 정의,
-    놀던 인력 포함). 구현 Task(2번째~)는 리더가 owner 중심으로 좁혀도 된다."""
+def test_Task팀은_담당자가_동적선정():
+    """팀은 자동 전원 소집이 아니라 담당자가 일에 맞게 고른다(직군 고정 해결) — create_task(members)로 좁히거나,
+    비우면 프로젝트팀(예비 제외) 기본. 빠져 있던 인력을 강제로 끌어오지 않는다(첫 Task도 마찬가지)."""
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백", 13: "프", 14: "디"})
     f.start_root("root")
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))   # 리더가 프로젝트팀을 12만으로 좁혀도
-    asyncio.run(t["create_task"].handler({"members": "12"}))      # 첫 Task에 12만 지정해도
-    assert set(f.current.team) == {11, 12, 13, 14}               # → 채용 풀 전원 강제(빠졌던 13,14도 합류)
-    f.current.participated.update({12, 13, 14})
-    asyncio.run(t["set_goal"].handler({"purpose": "분담", "goal": "계획 확정"}))
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))  # 담당자가 팀을 12,13으로 구성
+    asyncio.run(t["create_task"].handler({"members": "12"}))      # 이 Task엔 12만 지정 → 12만(전원 강제 아님)
+    assert set(f.current.team) == {11, 12} and 14 not in f.current.team
+    f.current.participated.update({12})
+    asyncio.run(t["set_goal"].handler({"purpose": "서버", "goal": "동작"}))
     f.current.verified = True
     asyncio.run(t["complete_task"].handler({"result": "ok"}))
-    asyncio.run(t["create_task"].handler({"members": "13"}))      # 2번째 Task는 좁힘 허용
-    assert set(f.current.team) == {11, 13}
+    asyncio.run(t["create_task"].handler({"members": ""}))        # 비우면 프로젝트팀(11,12,13) 기본 — 14는 안 부름
+    assert set(f.current.team) == {11, 12, 13} and 14 not in f.current.team
 
 
 def test_create_task_빈껍데기_purpose는_팀이_set_goal로():
