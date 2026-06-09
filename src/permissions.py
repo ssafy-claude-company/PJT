@@ -133,6 +133,36 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                     "동료가 무응답이면 그건 인프라 문제니 사용자에게 보고하세요(혼자 떠안지 말 것).")
             cur.leader_writes = getattr(cur, "leader_writes", 0) + 1   # 통과한 리더 직접작성 집계
 
+        # 7) 개입 독식 차단('Task 개입' 강제): 개입 흐름에서 리더가 run으로 혼자 재현·수정·검증을 다 하는 걸
+        #    막는다(사용자가 본 '자기 혼자 다 함'). #5·#6은 Write/Edit만 잡아 run 솔로 thrash는 통과됐다. 개입은
+        #    create_task→팀이 Goal→owner에게 Work 위임 구조로 가야 한다. (a) Task도 안 열고 run하면 즉시 차단,
+        #    (b) Task는 열었어도 위임(Work) 0인 채 run을 3회 넘게 반복하면 차단 → owner에게 위임 강제. 위임이
+        #    한 번이라도 일어나면(검증 단계) 풀어준다(리더의 최종 검증 run 허용).
+        if (tool == "mcp__guide__run" and flow is not None and actor is not None
+                and actor == getattr(flow, "leader", None)
+                and getattr(flow, "intervention", None)):
+            others = [m for m in (getattr(flow, "project_team", None) or [])
+                      if m != flow.leader and not str((flow._info(m) or "")).startswith("예비")]
+            if others:
+                cur = getattr(flow, "current", None)
+                if cur is None:
+                    audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                                 reason="개입 Task 미개설 단독 실행", tool_use_id=tool_use_id)
+                    return _deny(
+                        "개입 단독 실행 차단: 먼저 create_task로 'Task 개입'을 여세요 — 혼자 run으로 재현·수정하지 "
+                        "말고, 문제 도메인 동료를 members로 넣어 Task를 만들고 팀과 Goal을 합의한 뒤 그 owner에게 "
+                        "request(Work)로 맡기세요(그 owner가 재현·수정·run 검증). 당신은 조율·통합·최종 검증만.")
+                delegated = sum(getattr(t, "work_delegated", 0) for t in getattr(flow, "tasks", []))
+                flow.leader_runs = getattr(flow, "leader_runs", 0) + 1
+                if delegated == 0 and flow.leader_runs > 3:
+                    audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                                 reason="개입 위임없이 단독 run 독식", tool_use_id=tool_use_id)
+                    return _deny(
+                        "개입 단독 실행 차단(독식): 도메인 동료가 있는데 Work 위임을 한 번도 안 하고 혼자 run으로 "
+                        "재현·수정·검증을 다 하고 있습니다(사용자가 지적한 '리더 혼자 다 함'). 문제 도메인 owner에게 "
+                        "request(Work)로 맡기세요 — 그 owner가 직접 재현·수정·run 검증합니다. 당신은 조율·통합·최종 "
+                        "검증만(혼자 다 하지 말 것). 동료 무응답이면 인프라 문제이니 사용자에게 보고.")
+
         # 작업공간을 실제로 바꾸는 도구(run/Write/Edit)는 act_count로 누계 — request 도구가 wake 전후 차이로
         # 'owner가 위임 도중 실제로 일했나'를 판정해 허위완료/독점을 막는다. deny를 모두 통과한 뒤에만 집계.
         if tool in ("Write", "Edit", "mcp__guide__run") and flow is not None:

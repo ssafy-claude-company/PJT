@@ -202,3 +202,36 @@ def test_개입아닌_새작업은_목표게이트_미적용():
     flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=_FakeTask(owner=0, goal=""), leader=11)
     # intervention 미설정 → 개입 게이트 통과(owner0이라 대리구현 게이트도 통과)
     assert _run(make_pre_tool_use_hook(a, ALLOWED, actor=11, flow=flow), "Write", {"file_path": "a.js"}) == {}
+
+
+def test_개입_리더_단독run_독식_차단():
+    """[근본] 개입에서 리더가 'Task도 안 열고' 또는 '위임 없이 run만 반복'하면 차단 — 사용자가 본 '리더가
+    혼자 다 함'(Task 개입 아님). create_task+위임 후엔 풀린다(리더의 최종 검증 run 허용)."""
+    a = FakeAudit()
+    run_allowed = ALLOWED + ["mcp__guide__run"]              # 리더는 실제로 run 권한 보유(FLOW_TOOLS)
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=None, leader=11)
+    flow.intervention = {"id": "P-001"}
+    flow.project_team = [11, 12, 13]                          # 리더 11 + 도메인 동료 12·13
+    flow.tasks = []
+    flow._info = lambda i: {11: "백엔드", 12: "프론트엔드", 13: "VFX 아티스트"}.get(i, "")
+    hook = make_pre_tool_use_hook(a, run_allowed, actor=11, flow=flow)
+    # (a) Task 없이 run → 즉시 차단(먼저 create_task로 'Task 개입' 열라)
+    out = _run(hook, "mcp__guide__run", {"command": "node server.js"})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "개입 Task 미개설 단독 실행"
+    # (b) Task는 열었지만 위임 0 → 초기 run 3회는 허용(재현용), 4회째 독식 차단
+    task = _FakeTask(owner=0, goal="g"); task.work_delegated = 0
+    flow.current = task; flow.tasks = [task]
+    for _ in range(3):
+        assert _run(hook, "mcp__guide__run", {"command": "ls"}) == {}
+    out = _run(hook, "mcp__guide__run", {"command": "ls"})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "개입 위임없이 단독 run 독식"
+    # (c) owner에게 위임(work_delegated>=1)하면 다시 허용 — 리더의 최종 검증 run
+    task.work_delegated = 1
+    assert _run(hook, "mcp__guide__run", {"command": "curl localhost:3000"}) == {}
+    # (d) 개입이 아니면(일반 흐름) 이 run 게이트는 적용 안 됨
+    f2 = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=None, leader=11)
+    f2.project_team = [11, 12]; f2.tasks = []; f2._info = lambda i: "백엔드"
+    assert _run(make_pre_tool_use_hook(FakeAudit(), run_allowed, actor=11, flow=f2),
+                "mcp__guide__run", {"command": "ls"}) == {}
