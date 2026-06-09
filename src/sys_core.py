@@ -45,6 +45,10 @@ class Sys:
         # 워커 턴 안전 타임아웃(초): 서브프로세스가 '행'(무응답·무크래시)이면 단일흐름 전체가 영구 정지하므로
         # 한도 넘으면 포기하고 '인프라 실패'로 반환해 리더가 보고·진행하게 한다(리더 턴은 흐름 전체라 제외).
         self.turn_timeout = int(os.environ.get("ORGANT_TURN_TIMEOUT", "480"))   # 기본 8분
+        # 흐름 '무진행(행)' 워치독: 요청·파일작성·실행 등 어떤 진행도 이 시간(초) 동안 없으면 흐름이 행으로
+        # 멈춘 것(리더 서브프로세스 행 포함 — 리더 턴엔 타임아웃이 없어 생기는 구멍)으로 보고 자동 중단·보고한다.
+        # 워커 타임아웃(turn_timeout=8분)보다 넉넉히 커야 워커 1회 행→복구를 '무진행'으로 오인하지 않는다.
+        self.idle_timeout = int(os.environ.get("ORGANT_IDLE_TIMEOUT", "720"))   # 기본 12분(>8분 워커 타임아웃)
         self.active_flow: Optional[Flow] = None
         self.queue = []                        # 진행 중 들어온 명령(순차 처리 대기)
         self.flow_log = []
@@ -325,9 +329,32 @@ class Sys:
             f"지적하고 되물으세요. 파일은 작업공간에 상대경로로 만드세요. 끝나면 결과(또는 답)를 간결히 반환하세요."
         )
 
+    async def _await_with_idle_watchdog(self, task, flow):
+        """task(리더 실행)를 기다리되, flow.last_activity가 idle_timeout 동안 안 바뀌면(=흐름 전체 무진행=행)
+        task를 취소한다(→ CancelledError). 요청·파일작성·실행 등 진행이 일어나는 한 아무리 길어도 안 끊는다
+        — 고정 타임아웃이 아니라 '무진행' 기준이라, 오래 걸리는 정상 빌드는 보호하고 멈춘 것만 해소한다.
+        (리더 턴엔 turn_timeout이 없어 생기던 '리더 행' 구멍을 메운다.)"""
+        poll = max(1, min(20, self.idle_timeout))
+
+        async def _wd():
+            while not task.done():
+                await asyncio.sleep(poll)
+                idle = time.monotonic() - getattr(flow, "last_activity", time.monotonic())
+                if idle > self.idle_timeout and not task.done():
+                    self._log("flow_idle_abort", idle=int(idle), timeout=self.idle_timeout)
+                    task.cancel()
+                    return
+
+        wd = asyncio.create_task(_wd())
+        try:
+            return await task
+        finally:
+            wd.cancel()
+
     async def run_turn(self, flow: Flow, organt_id, body, kind, role) -> str:
         # 에이전트가 죽으면(SDK 메시지리더 크래시·서브프로세스 SIGTERM 등) 같은 세션으로 되살려 재시도.
         # State는 organt_id별 파일에 영속되므로 새 인스턴스가 세션을 이어간다(전체 워크플로우 보호).
+        flow.last_activity = time.monotonic()   # 진행 신호(턴 시작) — 무진행 워치독 갱신
         last = ""
         for attempt in range(3):
             server = build_guide_server(flow, organt_id, role)
@@ -439,7 +466,9 @@ class Sys:
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")
         flow.log = self._log                       # 관측: req_sent 등을 flow.jsonl로 영속
         self.active_flow = flow
-        try:
+        flow.last_activity = time.monotonic()
+
+        async def _run_leader():
             flow.leader_segment = 1
             result = await self.run_turn(flow, lead, body, Kind.WORK, "leader")
             # 구조적 연속 실행: 턴 한도로 작업이 끊겼으면(진행 중 Task가 남았거나 '턴 한도' 표시)
@@ -465,6 +494,17 @@ class Sys:
                 self._log("continue_incomplete",
                           task=(flow.current.task_id if flow.current else None), attempt=cont)
                 result = await self.run_turn(flow, lead, _CONTINUE_BODY, Kind.WORK, "leader")
+            return result
+
+        leader_task = asyncio.create_task(_run_leader())
+        try:
+            # 무진행(행) 워치독: idle_timeout 동안 진행이 0이면 리더 턴 취소(리더-행 구멍 메움). 진행 중이면 무제한.
+            result = await self._await_with_idle_watchdog(leader_task, flow)
+        except asyncio.CancelledError:
+            result = (f"(흐름 자동 중단: 약 {self.idle_timeout // 60}분간 아무 진행(요청·파일작성·실행)이 없어 '행'으로 "
+                      f"판단했습니다 — 리더/동료 서브프로세스가 멈춘 듯합니다(환경 불안정). 지금까지 산출물은 작업공간에 "
+                      f"남아 있습니다. 다시 시도하거나 반복되면 잠시 뒤 재요청하세요.)")
+            self._log("flow_idle_aborted")
         except Exception as e:                     # 리더가 죽어도 흐름은 닫고 보고한다
             result = f"(리더 처리 중 오류: {e})"
         # 배포 강제: 배포 가능한 산출물인데 deploy를 안 불렀으면 리더에게 '배포만' 한 번 더(누락 방지).

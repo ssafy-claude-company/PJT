@@ -272,6 +272,46 @@ def test_워커_턴_타임아웃은_인프라실패로(monkeypatch):
     assert asyncio.run(s.run_turn(f, 11, "b", Kind.WORK, "leader")) == "리더 결과"
 
 
+def test_무진행_워치독_행은취소_진행중은보호():
+    """흐름 워치독: last_activity가 idle_timeout 동안 안 바뀌면(무진행=행) 리더 task를 취소(리더-행 구멍 메움).
+    진행 중(last_activity 갱신)이면 idle_timeout보다 오래 걸려도 안 끊는다 — 고정 타임아웃이 아니라 무진행 기준."""
+    import time as _t
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"})
+    s.idle_timeout = 0.5
+
+    class _F:
+        pass
+
+    # (1) 행: last_activity 과거 고정 → 무진행 → 취소됨
+    fhang = _F(); fhang.last_activity = _t.monotonic() - 100
+
+    async def _hang():
+        await asyncio.sleep(10); return "done"
+
+    async def _run_hang():
+        return await s._await_with_idle_watchdog(asyncio.create_task(_hang()), fhang)
+
+    cancelled = False
+    try:
+        asyncio.run(_run_hang())
+    except asyncio.CancelledError:
+        cancelled = True
+    assert cancelled
+
+    # (2) 진행 중: last_activity 계속 갱신 → timeout(0.5s)보다 오래(1.5s) 걸려도 완료
+    fact = _F(); fact.last_activity = _t.monotonic()
+
+    async def _active():
+        for _ in range(15):
+            await asyncio.sleep(0.1); fact.last_activity = _t.monotonic()
+        return "ok"
+
+    async def _run_active():
+        return await s._await_with_idle_watchdog(asyncio.create_task(_active()), fact)
+
+    assert asyncio.run(_run_active()) == "ok"
+
+
 def test_개입_Task는_전원소집_안함():
     """개입(intervention) 흐름의 create_task도 담당자가 부른 담당만 모인다 — members로 고른 동료만(작은 수정에
     10명 소집 방지). 어느 흐름이든 팀은 자동 전원이 아니라 담당자가 동적 선정한다."""

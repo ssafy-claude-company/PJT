@@ -3,6 +3,7 @@
 Step 2 증명의 '권한 밖 툴 호출 시 훅이 차단하고 거부 사유가 로그에 남는다'를 담당한다.
 """
 import os
+import time
 
 
 def organt_allowed_tools(extra_tool_names=()):
@@ -50,6 +51,13 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
         data = input_data if isinstance(input_data, dict) else {}
         tool = data.get("tool_name")
         tool_input = data.get("tool_input") or {}
+
+        # 진행 신호: 어떤 도구 호출이든 흐름의 '무진행 워치독' 시계를 갱신(행 오판 방지).
+        if flow is not None:
+            try:
+                flow.last_activity = time.monotonic()
+            except Exception:
+                pass
 
         # 1) 허용 도구만 통과
         if tool not in allowed_set:
