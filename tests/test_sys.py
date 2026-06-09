@@ -780,6 +780,61 @@ def test_개입은_세션유지_위임기억보존(tmp_path):
     assert "이어지는 작업" in captured["body"]                      # 본문이 '이어가기'를 지시
 
 
+def test_개입_미완Task_영속과_되살리기_담당자가_이어감(tmp_path):
+    """[근본] 흐름이 미완 Task를 남기고 끝나면 프로젝트에 스냅샷 영속 → 다음 개입에서 같은 블록·스레드·owner·
+    팀으로 되살려 flow.current로 재부착한다(사용자가 Task명 안 불러도 '더 진행해'가 그 Task를 이어감 —
+    담당자가 판단). 되살린 직후 검증 누계는 0(verified=False)이라 완료 전 run 재검증을 강제. 완료로 마감하면
+    open_task는 비워진다."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드"},
+            workspace="/ws", session_dir=str(tmp_path),
+            projects_path=str(tmp_path / "projects.json"))
+    s.projects[901] = {"id": "P-002", "name": "게임", "channel": 901,
+                       "workspace": "/ws", "leader": 11, "summary": ""}
+
+    # 1) 흐름이 미완 Task를 만들고(완료 안 함) 끝남 → open_task 영속
+    async def fake_make_task(flow, oid, body, kind, role):
+        t = _tools(flow, 11, "leader")
+        await t["create_task"].handler({"members": "12"})       # 진행 Task 생성, 미완 채로 둠
+        flow.current.status.goal = "스킬 3종 동작"
+        flow.current.owner = 12
+        flow.current.status.owner = "백엔드"
+        return "스킬1까지 구현, 나머지 미완"
+    s.run_turn = fake_make_task
+    asyncio.run(s.handle_user_input(901, 11, "스킬 추가해", root_id=None))
+    snap = s.projects[901].get("open_task")
+    assert snap and snap["owner"] == 12 and snap["goal"] == "스킬 3종 동작"   # 미완 Task 영속됨
+    saved_tid = snap["task_id"]
+
+    # 2) 다음 개입 '더 진행해' → 같은 Task로 되살아나 flow.current에 재부착(담당자가 이어감)
+    captured = {}
+
+    async def fake_resume(flow, oid, body, kind, role):
+        if "task" not in captured and flow.current is not None:   # 첫 호출(개입 본문)만 캡처(이어가기 프롬프트로 덮어쓰기 방지)
+            captured.update(task=flow.current.task_id, owner=flow.current.owner,
+                            team=list(flow.current.team), block=flow.current.block_id,
+                            verified=flow.current.verified, body=body)
+        return "이어서 마무리"
+    s.run_turn = fake_resume
+    asyncio.run(s.handle_user_input(901, 11, "더 진행해", root_id=None))
+    assert captured["task"] == saved_tid and captured["owner"] == 12        # 같은 Task·owner 재부착
+    assert 11 in captured["team"] and 12 in captured["team"]                # 팀도 그대로(일부만 부르지 않음)
+    assert captured["verified"] is False                                    # 검증 초기화 → 완료 전 재검증 강제
+    assert "진행 중이던 Task 복원됨" in captured["body"] and saved_tid in captured["body"]
+    assert any(e["event"] == "open_task_restored" for e in s.flow_log)
+
+    # 3) 되살린 Task를 완료로 마감 → open_task 비워짐
+    async def fake_complete(flow, oid, body, kind, role):
+        flow.current.verified = True
+        flow.current.owner = 0                                   # 리더 직접 완료(owner_delivered 게이트 우회)
+        t = _tools(flow, 11, "leader")
+        await t["complete_task"].handler({"result": "스킬 3종 완성"})
+        return "완료"
+    s.run_turn = fake_complete
+    asyncio.run(s.handle_user_input(901, 11, "마저 끝내", root_id=None))
+    assert s.projects[901].get("open_task") is None                         # 완료 → 비움
+
+
 def test_위임자에게_되묻기는_확인요청반환_에러아님():
     """직속 위임자에게 Info로 되물으면 '재진입 불가' 에러 대신 확인요청을 위임자에게 반환(협업 가능)."""
     g = FakeGuide()

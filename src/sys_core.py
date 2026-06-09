@@ -15,8 +15,8 @@ import time
 from typing import Dict, Optional
 
 from .communication import CommError
-from .guide_tools import Flow, build_guide_server
-from .protocol import Kind, Request, format_response
+from .guide_tools import Flow, TaskRef, build_guide_server
+from .protocol import Kind, Request, TaskStatus, format_response
 
 # 턴 한도로 작업이 끊겼을 때 같은 세션으로 이어가게 하는 지시(구조적 연속 실행).
 _CONTINUE_BODY = (
@@ -107,6 +107,57 @@ class Sys:
                              "workspace": workspace, "leader": leader, "summary": ""}
         self._save_projects()
         return pid
+
+    def _task_snapshot(self, flow, ref) -> dict:
+        """미완 Task를 다음 개입에서 '되살릴' 수 있도록 최소 스냅샷으로 직렬화한다(상태블록·스레드·담당자·
+        팀·목표). 검증 누계(verified/run_count/owner_delivered 등)는 저장하지 않는다 — 되살릴 때 0에서
+        다시 시작해 '완료'엔 새 run 증거를 다시 요구하기 위함(되살린 직후 허위완료 방지)."""
+        return {
+            "task_id": ref.task_id,
+            "thread_id": ref.thread_id,
+            "block_id": ref.block_id,
+            "purpose": ref.status.purpose or "",
+            "goal": ref.status.goal or "",
+            "owner": int(ref.owner or 0),
+            "owner_name": ref.status.owner or "",
+            "team": [int(x) for x in ref.team],
+            "result_so_far": (ref.status.result or "")[:500],
+        }
+
+    async def _restore_open_task(self, flow, proj) -> Optional[dict]:
+        """프로젝트에 저장된 미완 Task가 있으면 이번 흐름에 그대로 되살린다 — 같은 상태블록·스레드·담당자
+        (owner)·팀을 재부착해 '이어가기'가 사용자가 Task명을 부르지 않아도 그 Task를 잇게 한다(담당자가
+        판단해 이어감). 검증 누계는 0에서 시작(verified=False 등) → 완료 전 run 재검증을 강제. 되살린
+        스냅샷을 반환(없으면 None)."""
+        snap = proj.get("open_task")
+        if not snap:
+            return None
+        team = [int(x) for x in snap.get("team", []) if int(x) in flow.pool]
+        if flow.leader not in team:
+            team = [flow.leader] + team
+        group = [(f"<@{i}>", flow._info(i)) for i in team]
+        status = TaskStatus(task_id=snap["task_id"], purpose=snap.get("purpose", ""),
+                            status="진행", goal=snap.get("goal", ""),
+                            owner=snap.get("owner_name", ""), group=group)
+        ref = TaskRef(task_id=snap["task_id"], thread_id=snap["thread_id"],
+                      block_id=snap["block_id"], status=status, team=team,
+                      owner=int(snap.get("owner") or 0))
+        flow.tasks.append(ref)
+        flow.current = ref
+        # 되살린 팀을 프로젝트 팀에도 반영(다시 일부만 부르지 않게) + 중복 제거(리더 우선).
+        seen = []
+        for x in [flow.leader] + team:
+            if x not in seen:
+                seen.append(x)
+        flow.project_team = seen
+        flow.comm.reset_task_tracking()
+        try:
+            await flow.refresh(ref)   # 상태블록을 '진행'으로 재활성(블록이 남아 있으면)
+        except Exception:
+            pass
+        self._log("open_task_restored", project=proj.get("id"), task=snap["task_id"],
+                  owner=int(snap.get("owner") or 0))
+        return snap
 
     def _log(self, event, **f):
         rec = {"event": event, "ts": time.time(), **f}
@@ -456,9 +507,28 @@ class Sys:
             flow.project_channel = int(channel_id)   # 기존 채널 재사용 → create_project는 no-op
             flow.workspace = proj["workspace"]
             flow.project_id, flow.intervention = proj["id"], proj
+            # 미완 Task 되살리기: 저장된 '진행 중' Task가 있으면 같은 블록·스레드·owner로 재부착(flow.current).
+            # → 사용자가 Task명을 부르지 않아도 담당자가 '그 일'을 이어가게 한다(사용자 요청 반영).
+            resumed = await self._restore_open_task(flow, proj)
+            resume_note = ""
+            if resumed:
+                resume_note = (
+                    f"[진행 중이던 Task 복원됨 — '더 진행해'의 대상일 가능성이 큼] 이 프로젝트엔 아직 끝나지 않은 "
+                    f"Task가 남아 있어 **상태블록·스레드·담당자(owner)를 그대로 되살렸습니다** — 사용자가 Task명을 "
+                    f"일일이 부르지 않아도 '진행 중인 그 일'을 가리키는 것이니, 당신이 판단해 이어가세요:\n"
+                    f"  · Task {resumed['task_id']} / Owner: {resumed.get('owner_name') or '(미정)'} / "
+                    f"팀: {flow._names(flow.current.team) if flow.current else ''}\n"
+                    f"  · Purpose: {resumed.get('purpose') or '(미정)'}\n"
+                    f"  · Goal: {resumed.get('goal') or '(미정)'}\n"
+                    f"  · 지금까지(직전 보고): {(resumed.get('result_so_far') or '(기록 없음)')[:200]}\n"
+                    f"→ 사용자의 요청이 이 Task의 연장이면(대개 그렇습니다) **새 Task를 또 열지 말고 이 Task를 이어서** "
+                    f"끝내세요: 남은 부분을 owner에게 request(Work)로 맡기고(이미 정해진 팀·owner 존중 — 가로채 혼자 "
+                    f"마무리 금지), run으로 검증한 뒤 complete_task로 **이 블록**을 마감하세요. 만약 사용자가 **명백히 "
+                    f"다른 새 작업**을 원한 거면, 이 Task를 먼저 적절히 마무리(complete_task)한 뒤 새 Task를 여세요(당신 판단).\n\n")
             body = (
                 f"[프로젝트 {proj['id']} 개입 — 기존 산출물 수정] 이미 작업공간·산출물이 있습니다. create_project 다시 만들지 마세요.\n"
                 f"사용자가 보고한 요청/증상: {user_text}\n\n"
+                f"{resume_note}"
                 f"[이어지는 작업 — 처음부터 다시 짜지 말 것(중요)] 당신은 이 프로젝트에서 일한 **이전 세션 맥락을 그대로 "
                 f"이어갑니다**. 직전에 진행 중이던 Task·목표·위임(누가 누구에게 무엇을 맡겼는지)·owner·팀 구성이 있었다면 "
                 f"**그 상태를 이어받아 계속**하세요 — 팀을 처음부터 다시 짜거나 일부만 다시 부르지 말고(이미 정해진 팀·"
@@ -532,16 +602,22 @@ class Sys:
         flow.done, flow.final = True, result
         # 안전망: 리더가 complete_task로 명시적으로 닫지 않은 현재 Task는 '중단'으로 표시한다
         # (허위 완료 금지 — owner가 실제로 안 끝냈을 수 있으므로 '완료'로 둔갑시키지 않음).
+        # 동시에, 그 미완 Task를 프로젝트 레지스트리에 스냅샷으로 남겨 '다음 개입'에서 같은 Task로
+        # 되살릴 수 있게 한다(사용자가 Task명 안 불러도 '더 진행해'가 그 Task를 잇게 — 근본 구조).
+        open_task_snap = None
         if flow.current is not None:
             flow.current.status.status = "중단"
             flow.current.status.result = (result or "")[:500]
             await flow.refresh(flow.current)
+            open_task_snap = self._task_snapshot(flow, flow.current)
             flow.current = None
-        # 프로젝트 요약 갱신(다음 개입 때 맥락으로 제공)
+        # 프로젝트 요약 + 미완 Task 영속 갱신(다음 개입 때 맥락·이어가기 대상으로 제공).
+        # current가 None(=complete_task로 마감했거나 Task 자체가 없었음)이면 open_task를 비운다(완료 처리).
         if flow.project_channel:
             p = self.projects.get(int(flow.project_channel))
             if p:
                 p["summary"] = (result or "")[:300]
+                p["open_task"] = open_task_snap
                 self._save_projects()
         self._log("flow_done", project=flow.project_channel is not None,
                   tasks=len(flow.tasks), comm_done=flow.comm.done)
