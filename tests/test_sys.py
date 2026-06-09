@@ -190,6 +190,25 @@ def test_채용직업_기억_다음흐름_유지():
     assert s.bot_info[13] == "게임 기획자" and s.bot_info[11] == "백엔드"   # 예비→게임기획자 유지
 
 
+def test_예비담당자_Task전_자기직군_확정():
+    """'예비' 담당자는 Task를 열기 전에 recruit(member=자신, role=…)로 자기 직군부터 정할 수 있다 — 이래야
+    '예비'인 채로 프로젝트/Task를 열어 화면에 '예비'로 박히지 않는다(사용자가 본 '담당자가 예비로 들어옴' 차단).
+    단 '다른 사람' 채용은 종전대로 Task가 먼저 있어야 한다(자기직군만 Task 전 허용)."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "예비", 12: "백엔드"})
+    f.start_root("root")
+    persisted = {}
+    f.persist_role = lambda mid, role: persisted.__setitem__(mid, role)
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    # Task 없음 + 자기 자신 + role → 자기 직군 확정(허용)
+    r = asyncio.run(t["recruit"].handler({"member": "11", "role": "게임 기획자"}))
+    assert "자기 직군 확정" in r["content"][0]["text"]
+    assert f.bot_info[11] == "게임 기획자" and persisted.get(11) == "게임 기획자"   # 기억에도 반영
+    # Task 없이 '다른 사람' 채용은 여전히 거부(Task 먼저)
+    r2 = asyncio.run(t["recruit"].handler({"member": "12", "role": "QA"}))
+    assert "진행 중인 Task가 없습니다" in r2["content"][0]["text"] and f.bot_info[12] == "백엔드"
+
+
 def test_개입_Task는_전원소집_안함():
     """개입(intervention) 흐름의 create_task도 담당자가 부른 담당만 모인다 — members로 고른 동료만(작은 수정에
     10명 소집 방지). 어느 흐름이든 팀은 자동 전원이 아니라 담당자가 동적 선정한다."""

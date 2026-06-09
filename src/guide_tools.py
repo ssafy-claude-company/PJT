@@ -487,8 +487,31 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
           "이미 직군이 있는 봇에는 다른 직군을 줄 수 없으니, 필요하면 또 다른 예비를 그 직군으로 뽑는다.",
           {"member": str, "role": str, "reason": str})
     async def recruit(args):
+        role_name = (args.get("role") or "").strip()
+        spec = (args.get("member") or "").strip()
         if flow.current is None:
-            return _ok("오류: 진행 중인 Task가 없습니다. 먼저 create_task로 Task를 여세요.")
+            # [예비 담당자 '자기 직군 우선'] Task 열기 전에 담당자가 자기 직군부터 정하는 건 허용한다 — 자기
+            # 자신 + role 지정일 때만. 이래야 '예비'인 채로 create_project/create_task를 열어 화면(상태블록·동료
+            # 프롬프트)에 '예비'로 박히는 걸 막는다(사용자가 본 '담당자가 예비로 들어옴'의 직접 원인). 다른 사람
+            # 채용 등은 종전대로 Task가 먼저 있어야 한다.
+            self_pick = _resolve_members(spec, flow, flow.pool) if spec else []
+            if role_name and ((not spec) or (self_pick and self_pick[0] == me_id)):
+                flow.bot_info[me_id] = role_name
+                if getattr(flow, "persist_role", None):
+                    try:
+                        flow.persist_role(me_id, role_name)
+                    except Exception:
+                        pass
+                fn = getattr(g, "assign_job_role", None)
+                if fn and getattr(flow, "guild_id", None):
+                    try:
+                        await fn(flow.guild_id, me_id, role_name)
+                    except Exception:
+                        pass
+                return _ok(f"자기 직군 확정: 당신(id {me_id})을 '{role_name}'(으)로 배정했습니다 — 이제 '예비'가 "
+                           f"아니라 한 직원으로 참여합니다. 이어서 create_project → create_task로 팀을 꾸려 시작하세요.")
+            return _ok("오류: 진행 중인 Task가 없습니다. 먼저 create_task로 Task를 여세요. (단 '예비' 담당자가 자기 "
+                       "직군을 정하는 recruit(member=자신, role=…)는 Task 전에도 됩니다 — 자기 직군부터 정하세요.)")
         # 충원 루프 하드 차단: 최근 요청이 연속 2회+ 실패(시스템 일시불안정)면 채용을 막는다 — 지금 새로
         # 뽑아도 같은 불안정으로 똑같이 실패한다('백엔드 6명' 사태의 구조적 차단; 안내가 아니라 거부).
         # 기존 동료에게 다시 요청해 한 명이라도 응답이 오면 consec_fail이 리셋돼 다시 채용 가능.
@@ -496,8 +519,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             return _ok(f"채용 보류: 최근 요청이 연속 {flow.consec_fail}회 무응답/실패 — 시스템 일시 불안정입니다. "
                        f"지금 새로 뽑아도 같이 실패하니 채용을 막습니다(무한 충원 루프 방지). 기존 동료에게 잠시 뒤 "
                        f"다시 요청해 한 명이라도 응답이 오면 그때 충원하거나, 계속 안 되면 사용자에게 보고하고 멈추세요.")
-        role_name = (args.get("role") or "").strip()
-        spec = (args.get("member") or "").strip()
         cand = _resolve_members(spec, flow, flow.pool) if spec else []
         if not cand:
             # member 미지정(또는 못 찾음): 직군 채용이면 '예비' 인력에서 자동 선발(아직 프로젝트팀에 없는 예비)
