@@ -753,6 +753,33 @@ def test_새요청마다_세션초기화_앵커링차단(tmp_path):
     assert any(e["event"] == "reset_sessions" for e in s.flow_log)
 
 
+def test_개입은_세션유지_위임기억보존(tmp_path):
+    """[근본] 등록된 프로젝트 '개입(이어서/수정)'에선 세션을 지우지 않는다 — 리더·동료가 진행 중이던 팀·위임·
+    owner 기억(resume용 session_id)을 잃고 처음부터 다시 계획하는 걸 막는다(=리더가 직전 위임을 무시하고
+    팀을 일부만 다시 불러 혼자 마무리하던 행동의 근본 차단). 새 요청에만 reset, 개입엔 keep."""
+    sd = tmp_path
+    (sd / "organt_state_11.json").write_text('{"session_id": "S11"}')
+    (sd / "organt_state_12.json").write_text('{"session_id": "S12"}')
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"},
+            workspace="/ws", session_dir=str(sd))
+    s.projects[900] = {"id": "P-001", "name": "게임", "channel": 900,
+                       "workspace": "/ws", "leader": 11, "summary": ""}
+
+    captured = {}
+
+    async def fake_rt(flow, oid, body, kind, role):
+        captured["body"] = body
+        return "done"
+
+    s.run_turn = fake_rt
+    asyncio.run(s.handle_user_input(900, 11, "이어서 진행해", root_id=None))   # 등록 채널 개입
+    assert {p.name for p in sd.glob("organt_state_*.json")} == {
+        "organt_state_11.json", "organt_state_12.json"}            # 세션 보존(기억 유지)
+    assert not any(e["event"] == "reset_sessions" for e in s.flow_log)   # 개입엔 reset 안 함
+    assert any(e["event"] == "intervention_keep_sessions" for e in s.flow_log)
+    assert "이어지는 작업" in captured["body"]                      # 본문이 '이어가기'를 지시
+
+
 def test_위임자에게_되묻기는_확인요청반환_에러아님():
     """직속 위임자에게 Info로 되물으면 '재진입 불가' 에러 대신 확인요청을 위임자에게 반환(협업 가능)."""
     g = FakeGuide()

@@ -207,9 +207,9 @@ async def run() -> None:
             # 도착 가시화(요청 미수신 진단): 봇이 본 모든 비-봇 메시지를 채널 정보와 함께 남긴다.
             log.info("메시지 도착: ch=%s (main=%s, project=%s) author=%s content=%r",
                      ch, is_main, is_project, message.author.id, (message.content or "")[:80])
-            # 모든 채널을 연다(봇이 들어가 있는 채널이면 어디서든) — 메인은 '[Request] To: @봇' 형식만, 그 외
-            # 채널(등록 프로젝트든 아니든)은 자유 텍스트도 '작업 요청'으로 받는다. 봇이 없는 채널은 on_message가
-            # 애초에 안 오므로, 사실상 '봇 초대된 채널 전부 활성'이다(채널마다 프로젝트처럼 대화).
+            # 모든 채널을 연다(봇이 들어가 있는 채널이면 어디서든). 시작 조건: 메인·임의 채널은 '[Request] To: @봇'
+            # 형식만, 등록된 '프로젝트 채널'은 평문도 '개입(이어서/수정)'으로 받는다(그 채널은 그 프로젝트 전용이라
+            # 거기서 말하는 건 곧 그 프로젝트를 진행하는 것). 봇이 없는 채널은 on_message가 애초에 안 온다.
             req = parse(
                 message_id=str(message.id),
                 author_id=message.author.id,
@@ -217,13 +217,16 @@ async def run() -> None:
                 reply_to_id=(message.reference.message_id if message.reference else None),
                 content=message.content,
             )
+            # 등록된 '프로젝트 채널'에선 평문도 '개입(이어서/수정)'으로 받는다(그 채널 = 그 프로젝트 전용 작업공간 —
+            # 자연스러운 진행). 그 외(메인·임의 채널)는 '[Request] To: @봇' 형식만 흐름을 시작한다 — 봇이 들어가 있는
+            # 아무 채널의 잡담이 작업을 트리거하지 않게(안전). 평문 트리거를 '등록 프로젝트 채널'로만 한정한 게 핵심.
             if not isinstance(req, Request):
-                if not is_main and (message.content or "").strip():
+                if is_project and (message.content or "").strip():
                     req = Request(to_id=None, kind=Kind.WORK, body=message.content.strip(),
                                   from_id=message.author.id, message_id=str(message.id))
                 else:
-                    log.info("  → 무시(메인 채널은 '[Request] To: @봇' 형식만 시작). 받은 형식이 아님.")
-                    return                   # 메인 채널은 구조적 [Request]만 시작
+                    log.info("  → 무시(메인·임의 채널은 '[Request] To: @봇' 형식만; 평문 개입은 등록 프로젝트 채널에서만). 받은 형식이 아님.")
+                    return
             if str(message.id) in seen:      # 같은 메시지 두 번 처리 금지(세션 내 재전달 가드)
                 return
             seen.add(str(message.id))

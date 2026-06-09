@@ -430,12 +430,21 @@ class Sys:
             self._log("queued", text=user_text[:80], depth=len(self.queue))
             return {"mode": "queued", "queued": len(self.queue)}
 
-        self._reset_sessions()   # 새 요청 → 세션 초기화(이전 '이미 했다' 앵커링 차단)
+        proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'(이어지는 작업)
+        # 세션 초기화는 '새 최상위 요청'에만 한다 — 기존 프로젝트 '개입(이어서/수정)'에선 건너뛴다.
+        # [근본] 개입은 진행 중이던 팀·위임·owner를 '이어가야' 하는데, 세션을 지우면 리더와 동료가 그 기억을
+        # 통째로 잃고(resume할 session_id가 사라짐) 처음부터 다시 계획한다 — 이게 사용자가 본 '리더가 직전
+        # 위임(예: 장도현→김민준)을 무시하고, 팀을 일부만 다시 부르고, 혼자 검토·마무리하던' 행동의 근본 원인이다.
+        # 개입 본문엔 새 요청/증상이 명시되므로 '이미 했다' 앵커링도 생기지 않는다(앵커링 방지 목적은 새 요청에만
+        # 유효). 컨테이너 리클레임으로 세션 파일이 이미 사라졌으면 어차피 새로 시작하니 무해하다(그건 별개 유실).
+        if not proj:
+            self._reset_sessions()   # 새 요청 → 세션 초기화(이전 '이미 했다' 앵커링 차단)
+        else:
+            self._log("intervention_keep_sessions", project=proj["id"])
         # 이전 흐름의 런타임 채용(예비→직군) 라벨 원복 — dict는 그대로 두고 내용만 갱신(빌더 클로저가 참조 중).
         self.bot_info.clear()
         self.bot_info.update(self._roster_labels)
         self._origin_request = (user_text or "").strip()   # 원문 보존 — 담당자가 요약·해석하기 전 '사용자가 실제로 한 말'
-        proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'
         lead = proj["leader"] if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
         flow.register_project = lambda ch, name: self._register_project(ch, name, flow.workspace, flow.leader)
@@ -450,7 +459,14 @@ class Sys:
             body = (
                 f"[프로젝트 {proj['id']} 개입 — 기존 산출물 수정] 이미 작업공간·산출물이 있습니다. create_project 다시 만들지 마세요.\n"
                 f"사용자가 보고한 요청/증상: {user_text}\n\n"
-                f"[개입도 정식 절차로 — 즉흥·독단 수정 금지] **당신 개인 견해로 곧장 파일을 고치지 마세요.** 아래 순서를 지키세요:\n"
+                f"[이어지는 작업 — 처음부터 다시 짜지 말 것(중요)] 당신은 이 프로젝트에서 일한 **이전 세션 맥락을 그대로 "
+                f"이어갑니다**. 직전에 진행 중이던 Task·목표·위임(누가 누구에게 무엇을 맡겼는지)·owner·팀 구성이 있었다면 "
+                f"**그 상태를 이어받아 계속**하세요 — 팀을 처음부터 다시 짜거나 일부만 다시 부르지 말고(이미 정해진 팀·"
+                f"owner를 존중), **이미 누군가에게 위임해 둔 일을 당신이 가로채 혼자 검토·마무리하지 마세요**(그 owner가 "
+                f"끝내게 하고, 끝내 무응답이면 사용자에게 보고). 기억이 비어 있을 때(예: 환경 재시작으로 맥락 유실)만 "
+                f"작업공간을 Read/run으로 확인해 현재 상태를 복원한 뒤 이어가세요.\n\n"
+                f"[개입도 정식 절차로 — 즉흥·독단 수정 금지] **당신 개인 견해로 곧장 파일을 고치지 마세요.** 아래 순서를 지키세요"
+                f"(단, 위처럼 '이미 진행 중이던 작업을 이어가는 것'이면 그 흐름을 이어 진행하면 됩니다 — 새 증상·새 요청일 때 아래 절차):\n"
                 f"① 재현/확인: run으로 보고된 증상을 실제로 재현하고 관련 코드를 Read로 확인해 '진짜 원인'을 파악(스펙·추측에서 "
                 f"유추 금지). ② Task 개설 + 목표 확정: create_task(members=고장난 부분의 도메인 담당자)로 수정 Task를 열고, "
                 f"**재현된 사실과 사용자의 보고에 근거해** set_goal로 Purpose(무엇이 잘못됐나)·Goal(무엇이 되면 '고쳐짐'인가 — "
