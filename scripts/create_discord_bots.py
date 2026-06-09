@@ -8,6 +8,9 @@
 - **이 클라우드 샌드박스에선 못 돌립니다**(브라우저·로그인 필요) — 반드시 로컬에서 실행하세요.
 - 봇당 토큰을 '한 번' 보여줄 때만 캡처합니다(놓치면 그 봇은 토큰 Reset 다시). 2FA가 켜져 있으면 Reset마다
   코드 입력이 필요해(봇당 1회) — 그땐 스크립트가 멈추고 당신이 브라우저에 입력 후 Enter.
+- **앱 생성(Create) 직후 '봇/사람 확인(캡차)'이 뜨면 바로 넘기지 않고 멈춰서 기다립니다** — 브라우저에서
+  그 확인을 처리한 뒤 Enter를 누르면 계속됩니다(캡차가 없으면 멈추지 않고 빠르게 통과). 대량 생성 시
+  디스코드가 중간부터 캡차를 띄우는 경우가 많은데, 그때 봇을 실패시키지 않고 당신이 통과시킬 수 있습니다.
 
 준비(크로미움 다운로드 불필요 — PC에 설치된 크롬을 그대로 사용):
   pip install playwright
@@ -52,6 +55,21 @@ def _read_app_id(page) -> str:
         return page.url.split("/applications/")[1].split("/")[0].strip()
     except Exception:
         return ""
+
+
+def _wait_app_page(page, timeout_ms: int = 12000) -> bool:
+    """앱이 실제로 만들어져 'General Information' 페이지(URL에 숫자 application id)로 넘어갔는지 기다린다.
+    True=넘어감(확인 통과 또는 없음), False=시간초과 — 보통 '봇/사람 확인(캡차)'이 막고 있는 상태다.
+    이 신호로 '캡차 없으면 빠르게 통과, 있으면 멈춰서 사람이 처리'를 구분한다."""
+    from playwright.sync_api import TimeoutError as PWTimeout
+    try:
+        page.wait_for_url(
+            lambda url: "/applications/" in url
+            and url.split("/applications/")[1].split("/")[0].strip().isdigit(),
+            timeout=timeout_ms)
+        return True
+    except PWTimeout:
+        return False
 
 
 def _grab_token(page) -> str:
@@ -147,6 +165,13 @@ def main() -> None:
                 except Exception:
                     pass
                 page.get_by_role("button", name="Create").click(timeout=10000)
+                # 'Create' 직후 디스코드가 '봇/사람 확인(캡차)'을 띄울 수 있다 — 바로 넘기지 않고 앱 페이지
+                # (URL에 application id)로 넘어갈 때까지 기다린다. 빨리 넘어가면(캡차 없음) 그대로 진행하고,
+                # 일정 시간 안 넘어가면(=확인이 막고 있음) **멈춰서** 당신이 브라우저에서 그 확인을 처리한 뒤
+                # Enter → 처리되면 앱 페이지로 넘어갈 때까지 더 기다렸다가 계속. (빠른 생성 유지 + 캡차는 대기)
+                if not _wait_app_page(page, timeout_ms=12000):
+                    input(f"      ↳ '{name}' 생성 확인(봇/사람 캡차 등)이 떴으면 브라우저에서 처리한 뒤 Enter ▶ ")
+                    _wait_app_page(page, timeout_ms=120000)
                 page.wait_for_load_state("networkidle", timeout=20000)
                 app_id = _read_app_id(page)
                 token = _grab_token(page)
