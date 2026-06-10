@@ -547,6 +547,22 @@ class Sys:
         finally:
             wd.cancel()
 
+    async def _drain_inflight(self, flow) -> str:
+        """완주 중인 위임(detach 포함)이 있으면 끝까지 기다리고, 도착한 위임 결과를 이어가기 리더에게
+        전달할 본문으로 돌려준다(없으면 ''). CLI가 도구 호출을 포기해도 deliver 태스크는 계속 돌므로
+        — 일하는 owner를 자르지 않고 결과를 회수하는 게 단일활성·작업 보존의 핵심이다."""
+        tasks = [t for t in getattr(flow, "inflight_tasks", ()) if not t.done()]
+        if tasks:
+            self._log("await_inflight_delegation", n=len(tasks))
+            await asyncio.gather(*tasks, return_exceptions=True)
+        res = getattr(flow, "detached_results", None)
+        if res:
+            out = ("\n\n[도착한 위임 결과 — 직전에 보냈던 위임이 완료돼 응답이 도착했습니다. 처음부터 "
+                   "다시 시키지 말고 이 결과를 검증/이어가세요]\n" + "\n".join(res[-3:]))
+            del res[:]
+            return out
+        return ""
+
     async def _run_until_silent(self, coro_factory, flow) -> str:
         """coro를 실행하되, '도구 활동(flow.last_activity)이 turn_timeout 동안 한 번도 갱신되지 않은'
         경우(=진짜 행)에만 취소하고 TimeoutError를 낸다. 도구가 하나라도 돌면 시계가 갱신되어 무한정
@@ -749,9 +765,12 @@ class Sys:
             cont = 0
             while ((flow.current is not None or "턴 한도 도달" in (result or ""))
                    and cont < self.max_continue):
-                # 위임 도중 리더 턴이 끝나면(턴 한도) 깨우던 동료가 취소되며 베턴이 그 동료에 굳는다.
-                # 그대로 리더를 다시 띄우면 '두 흐름'처럼 모든 요청이 '활성=동료'로 거부된다 →
-                # 먼저 베턴을 리더로 강제 복구(고아 프레임 escalate-drain)한 뒤 이어간다.
+                # [단일활성 복원] 리더 턴이 끝났는데 위임이 아직 '완주 중'이면(CLI가 도구 호출을 포기해
+                # detach됐거나, 턴 한도로 끊겼지만 deliver 태스크는 살아 있음) — 그 위임을 죽이지 않고
+                # **끝까지 기다린다**. 일하는 owner를 드레인으로 자르던 것(작업 유실·재위임 churn·'오유진
+                # 2회 호출')의 근본 교정. 완주가 프레임을 닫으므로 대개 베턴도 자연 복귀한다.
+                drained = await self._drain_inflight(flow)
+                # 그래도 베턴이 굳어 있으면(진짜 고아 프레임) 강제 복구(escalate-drain)한 뒤 이어간다.
                 if flow.comm.alive != lead and not flow.comm.done:
                     guard = 0
                     while (flow.comm.alive != lead and not flow.comm.done
@@ -766,7 +785,12 @@ class Sys:
                 flow.leader_segment = cont + 1
                 self._log("continue_incomplete",
                           task=(flow.current.task_id if flow.current else None), attempt=cont)
-                result = await self.run_turn(flow, lead, _CONTINUE_BODY, Kind.WORK, "leader")
+                result = await self.run_turn(flow, lead, _CONTINUE_BODY + drained, Kind.WORK, "leader")
+            # 이어가기 한도 소진/마감 후에도 완주 중인 위임이 있으면 그 결과까지 받아 보고에 붙인다
+            # (작업 유실 방지 — 마지막 위임이 마감 직전에 끝나는 경우).
+            drained = await self._drain_inflight(flow)
+            if drained:
+                result = (result or "") + drained
             return result
 
         leader_task = asyncio.create_task(_run_leader())
@@ -774,6 +798,9 @@ class Sys:
             # 무진행(행) 워치독: idle_timeout 동안 진행이 0이면 리더 턴 취소(리더-행 구멍 메움). 진행 중이면 무제한.
             result = await self._await_with_idle_watchdog(leader_task, flow)
         except asyncio.CancelledError:
+            for t in list(getattr(flow, "inflight_tasks", ())):   # 흐름 중단 시 완주 태스크도 정리(누수 방지)
+                if not t.done():
+                    t.cancel()
             result = (f"(흐름 자동 중단: 약 {self.idle_timeout // 60}분간 아무 진행(요청·파일작성·실행)이 없어 '행'으로 "
                       f"판단했습니다 — 리더/동료 서브프로세스가 멈춘 듯합니다(환경 불안정). 지금까지 산출물은 작업공간에 "
                       f"남아 있습니다. 다시 시도하거나 반복되면 잠시 뒤 재요청하세요.)")

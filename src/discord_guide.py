@@ -100,14 +100,25 @@ class DiscordGuide:
     async def typing(self, channel_id, sender_id=None):
         """채널/스레드에 '…입력 중' 표시(가시성 — Organt가 응답·작업 작성 중임을 사람이 봄).
         보낸 봇 = sender의 Organt(없으면 system). 가이드 문서엔 없지만 Discord 기능을 활용한
-        관찰성. 실패해도 작업엔 영향 없게 방어적(타이핑은 부수효과)."""
+        관찰성. 실패해도 작업엔 영향 없게 방어적(타이핑은 부수효과).
+        주의: yield는 정확히 한 번 — 본문 예외를 except로 받아 다시 yield하면(과거 형태) 제너레이터
+        이중-yield로 RuntimeError가 나며 원래 예외를 가린다. 타이핑 시작/종료만 각각 방어한다."""
+        cm = None
         try:
             client = self.organts.get(sender_id) if sender_id else None
             ch = await self._resolve(client or self.system, int(channel_id))
-            async with ch.typing():
-                yield
+            cm = ch.typing()
+            await cm.__aenter__()
         except Exception:
-            yield   # 타이핑 표시 실패는 무시(전송/작업과 무관)
+            cm = None   # 타이핑 표시 실패는 무시(전송/작업과 무관) — 본문은 그대로 진행
+        try:
+            yield
+        finally:
+            if cm is not None:
+                try:
+                    await cm.__aexit__(None, None, None)
+                except Exception:
+                    pass
 
     # --- Project = 채널 (담당 Organt가 'create_project' 기능으로 요청, System Bot이 실행) ---
 

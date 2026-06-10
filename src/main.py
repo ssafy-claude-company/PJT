@@ -144,6 +144,9 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
             turns = 220         # 대부분 빌드가 한 세그먼트로 끝나 '10분마다 continue 재호출' 경계가 드물게(전원기획+분배+조율 감안)
         state_path = cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"
         label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
+        # sdk 서버별 도구호출 타임아웃(ms) — CLI가 env(MCP_TOOL_TIMEOUT)보다 우선 적용하는 명시 설정.
+        # request(동료 위임)는 동료의 중첩 작업 동안 수십 분 블록되는 게 정상 설계라 사실상 해제해 둔다.
+        server = {**server, "timeout": int(os.environ.get("MCP_TOOL_TIMEOUT", "14400000"))}
         heartbeat = None
         if flow is not None:
             def heartbeat():   # 메시지 수신 단위 하트비트 — 도구 훅 사이 사각(긴 단일 생성)을 메움

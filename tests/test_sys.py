@@ -1400,3 +1400,58 @@ def test_겸직_예외_예비없으면_허용_유사직군도_허용_한도2():
     r2 = asyncio.run(t2["recruit"].handler({"member": "12", "role": "게임 비주얼 디자이너", "reason": "통합"}))
     assert "겸직" in r2["content"][0]["text"]
     assert f2.bot_info[12] == "디자이너·게임 비주얼 디자이너"   # 주직군 유지 + 부직군 추가
+
+
+def test_위임은_도구호출_취소에도_완주_detached결과_전달():
+    """CLI가 request 도구 호출을 포기(취소)해도 위임 자체는 끝까지 완주한다 — 프레임이 정상 닫혀
+    베턴이 복귀하고 owner 인도가 성립하며, 완주 결과는 detached_results로 남아 SYS가 이어가기
+    리더에게 전달한다(라이브 관측: 도구 포기가 '이중 활성'·'비동기 작업 중' 오인을 만들던 결함 차단)."""
+    g = FakeGuide()
+    f = _flow(g)
+
+    async def wake(to, b, k):
+        f.act_count += 1
+        await asyncio.sleep(0.2)        # 일하는 중(이 사이 도구 호출이 포기됨)
+        return "구현·검증 완료"
+
+    f.wake = wake
+    t = _tools(f, 11, "leader")
+
+    async def scenario():
+        await t["create_task"].handler({"members": "12"})
+        f.current.participated.add(12)
+        await t["set_goal"].handler({"goal": "g"})
+        h = asyncio.ensure_future(t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
+        await asyncio.sleep(0.05)
+        h.cancel()                      # CLI의 도구 호출 포기 모의
+        try:
+            await h
+        except asyncio.CancelledError:
+            pass
+        assert any(not x.done() for x in f.inflight_tasks)   # 완주 태스크는 계속 살아 있음
+        await asyncio.gather(*list(f.inflight_tasks), return_exceptions=True)
+        assert f.comm.alive == 11                            # 프레임 닫혀 베턴 복귀(단일활성 일관)
+        assert f.current.owner_delivered is True             # 인도 성립(작업 유실 없음)
+        assert f.detached_results and "완료" in f.detached_results[0]
+
+    asyncio.run(scenario())
+
+
+def test_drain_inflight_완주대기_결과전달():
+    """SYS는 이어가기 전에 완주 중인 위임(detach 포함)을 끝까지 기다리고, 도착한 결과를 이어가기
+    본문으로 돌려준다 — 일하는 owner를 드레인으로 자르지 않는다(단일활성·작업 보존)."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"})
+    f = _flow(FakeGuide())
+
+    async def scenario():
+        async def slow():
+            await asyncio.sleep(0.1)
+            f.detached_results.append("M → 남은 부분 구현 완료")
+        task = asyncio.ensure_future(slow())
+        f.inflight_tasks.add(task)
+        task.add_done_callback(f.inflight_tasks.discard)
+        out = await s._drain_inflight(f)
+        assert task.done() and "구현 완료" in out and not f.detached_results
+        assert await s._drain_inflight(f) == ""              # 남은 게 없으면 빈 문자열
+
+    asyncio.run(scenario())
