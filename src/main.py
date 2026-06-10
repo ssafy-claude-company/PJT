@@ -345,7 +345,8 @@ async def run() -> None:
     pendings = []
     for ch in recover_channels:
         try:
-            recent = await guide.read_thread(ch, limit=30)
+            # 등록 프로젝트 채널은 '평문도 개입'이므로 평문까지 복구 후보로 읽는다(on_message와 동일 규칙).
+            recent = await guide.read_thread(ch, limit=30, include_plain=(ch in sysm.projects))
         except Exception:
             continue                     # 사라진/접근 불가 채널은 건너뜀
         pending = find_pending_request(recent, known)
