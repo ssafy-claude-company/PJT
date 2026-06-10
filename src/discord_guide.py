@@ -191,6 +191,15 @@ class DiscordGuide:
         client = self.organts.get(sender_id, self.system)
         return await self._send(client, int(channel_id), content, reply_to=reply_to)
 
+    async def delete_message(self, channel_id, message_id) -> None:
+        """메시지 삭제(best-effort) — 카나리아 등 시스템 잡음 정리용."""
+        try:
+            ch = await self._resolve(self.system, int(channel_id))
+            msg = await ch.fetch_message(int(message_id))
+            await msg.delete()
+        except Exception:
+            pass
+
     async def react(self, channel_id, message_id, emoji: str) -> None:
         """메시지에 이모지 반응을 단다(흐름 상태를 Discord-native하게 표시). best-effort."""
         try:

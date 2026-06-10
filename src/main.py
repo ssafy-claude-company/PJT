@@ -449,10 +449,14 @@ async def run() -> None:
         while True:
             await asyncio.sleep(period)
             try:
-                await guide.post(canary["ch"], system_client.user.id, "\u200b")
+                mid = await guide.post(canary["ch"], system_client.user.id, "\u200b")
             except Exception:
                 continue                      # 전송 실패 = 일반 네트워크 문제 — 수신 판정과 별개
             await asyncio.sleep(25)           # 게이트웨이 수신 전파 여유
+            try:
+                await guide.delete_message(canary["ch"], mid)   # 판정 끝난 카나리아는 삭제(채널 공백 방지)
+            except Exception:
+                pass
             if time.monotonic() - canary["last_recv"] > period:
                 canary["misses"] += 1
                 log.error("게이트웨이 카나리아 미수신 %d회 — 수신 좀비 의심", canary["misses"])
