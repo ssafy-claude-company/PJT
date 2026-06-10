@@ -1,17 +1,22 @@
 """config 모듈 검증."""
 import importlib
+import tempfile
+from pathlib import Path
 
 import pytest
 
 
 def _load(monkeypatch, **env):
-    """주어진 환경변수만 세팅한 뒤 config 모듈을 새로 로드한다."""
+    """주어진 환경변수만 세팅한 뒤 config 모듈을 새로 로드한다(실제 repo의 .env로부터 격리).
+    ROOT를 .env 없는 임시 디렉토리로 돌린다 — 운영 시크릿(.env)이 실존하면 load_dotenv가 값을
+    채워 '필수 누락' 케이스가 무효화되는 비헤르메틱을 차단(작업공간·로그 mkdir도 임시 쪽으로)."""
     for key in ("SYSTEM_BOT", "CHANNEL_ID", "ORGANT_MODEL"):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     import src.config as config
     importlib.reload(config)
+    monkeypatch.setattr(config, "ROOT", Path(tempfile.mkdtemp(prefix="organt-config-test-")))
     return config
 
 

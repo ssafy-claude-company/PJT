@@ -37,13 +37,17 @@ def load_roster() -> List[Tuple[str, str]]:
       TEST_BOT_1:담당자; TEST_OBT_2:백엔드; TEST_OBT_3:프론트엔드; TEST_OBT_4:디자이너; TEST_OBT_5:QA
     """
     roster: List[Tuple[str, str]] = []
+    seen_tokens = set()
     spec = os.environ.get("ORGANT_ROSTER", "").strip()
     if spec:
         sep = ";" if ";" in spec else ","
         for item in spec.split(sep):
             env_name, _, role = item.strip().partition(":")
             token = os.environ.get(env_name.strip(), "").strip()
-            if token:
+            # 같은 토큰(=같은 봇)이 두 슬롯에 들어오면 첫 슬롯만 쓴다(로스터 순서=우선순위) — 예:
+            # ORGANT_BOT_3와 TEST_OBT_2 폴백이 같은 봇일 때 이중 연결(유령 세션)·라벨 덮어쓰기 방지.
+            if token and token not in seen_tokens:
+                seen_tokens.add(token)
                 roster.append((token, role.strip() or env_name.strip()))
     if not roster:
         token = os.environ.get("TEST_BOT", "").strip()
