@@ -340,7 +340,8 @@ async def run() -> None:
     # 재전송해야 했음). 복수 채널의 미응답 요청은 순차로 처리(단일흐름 — SYS가 두 번째부터 큐잉).
     # ORGANT_SKIP_RECOVERY=1 이면 복구를 건너뛴다(깨끗한 슬레이트로 시작 — 이전 미응답 요청 재실행 안 함).
     known = set(organts) | {system_client.user.id}
-    skip_recovery = bool(os.environ.get("ORGANT_SKIP_RECOVERY"))
+    # 불리언 env 함정 방지: "0"/"false"/빈 값은 '복구 실행'으로 해석한다(문자열 "0"은 truthy).
+    skip_recovery = os.environ.get("ORGANT_SKIP_RECOVERY", "") not in ("", "0", "false", "no")
     recover_channels = [cfg.channel_id] + [ch for ch in sysm.projects if ch != cfg.channel_id]
     pendings = []
     for ch in recover_channels:
