@@ -13,12 +13,7 @@ cd "$DIR" || exit 0
 if [ ! -x .venv/bin/python ]; then python -m venv .venv 2>/dev/null || python3 -m venv .venv; fi
 .venv/bin/python -m pip install -q -r requirements.txt -r requirements-dev.txt 2>/dev/null || true
 
-# 2) Organt 리스너 자동 기동 — 이미 떠 있으면 스킵, 아니면 완전 분리(detached)로 기동(세션 시작을 막지 않음).
-if pgrep -f "python -m src.main" >/dev/null 2>&1; then
-  echo "[session-start] Organt 리스너 이미 실행 중 — 스킵"
-else
-  # setsid로 '새 세션'에 띄운다 — 훅이 끝난 뒤 하네스가 훅의 프로세스그룹을 정리할 때 같이 죽지 않게
-  # (nohup만으론 SIGHUP만 막혀, 그룹째 종료엔 같이 죽어 자동복구가 실패하던 원인). stdin도 분리(/dev/null).
-  setsid nohup bash "$DIR/scripts/run_listener.sh" > /tmp/listener.log 2>&1 < /dev/null &
-  echo "[session-start] Organt 리스너 백그라운드 기동(자동 복구, setsid 분리)"
-fi
+# 2) Organt 리스너 자동 기동은 '비활성화'됨.
+#    이유: 자율 봇 군을 운영자 감독 없이(차용 세션 자격증명으로) 상시 가동하지 않기 위함.
+#    리스너가 필요하면 .env(비밀값)를 갖춘 상태에서 수동으로 `bash scripts/run_listener.sh`를 직접 실행한다.
+echo "[session-start] 의존성만 보장. 리스너 자동 기동은 비활성화됨(필요 시 수동 실행)."
