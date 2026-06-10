@@ -16,7 +16,7 @@ import time
 from typing import Dict, Optional
 
 from .communication import CommError
-from .guide_tools import Flow, TaskRef, build_guide_server
+from .guide_tools import Flow, TaskRef, build_guide_server, make_guide_tools
 from .protocol import Kind, Request, TaskStatus, format_response
 
 # 턴 한도로 작업이 끊겼을 때 같은 세션으로 이어가게 하는 지시(구조적 연속 실행).
@@ -580,6 +580,43 @@ class Sys:
             return out
         return ""
 
+    async def _auto_continue_owner(self, flow, lead, limit=None) -> str:
+        """[구조적 이어가기] 현재 Task의 위임이 '구조적으로 미완'(owner_incomplete — 턴한도·무활동
+        타임아웃으로 끊김)이면, 리더(LLM)의 판단·기억에 맡기지 않고 **SYS가 직접** 같은 owner에게
+        '이어서'를 보낸다 — 미완 이어가기는 판단이 아니라 기계적 행동이므로 구조가 보장한다(리더가
+        '비동기 작업 중' 오인으로 폴링하며 이어가기 예산을 태우던 결함의 구조적 차단). 호출은 리더
+        명의의 표준 request 파이프라인(베턴·게이트·기록·Discord 게시 동일)을 그대로 쓴다. 완성되면
+        (owner_incomplete 해제) 결과 요약을 돌려줘 리더가 '판정'(검증·마감)만 하게 한다."""
+        out = []
+        n = int(os.environ.get("ORGANT_AUTO_CONTINUE", "8")) if limit is None else limit
+        body = ("[SYS 자동 이어가기 — 처음부터 다시 하지 말 것] 직전 작업이 도중에 끊겼습니다. "
+                "작업공간을 확인해 이미 된 부분은 그대로 두고, 남은 부분만 마저 끝내 완성하세요.")
+        while n > 0:
+            ref = flow.current
+            if (ref is None or not getattr(ref, "owner", 0) or not getattr(ref, "owner_incomplete", False)
+                    or flow.comm.alive != lead or flow.comm.done):
+                break
+            n -= 1
+            acts_before = flow.act_count
+            self._log("sys_auto_continue", task=ref.task_id, owner=ref.owner, left=n)
+            tools = {t.name: t for t in make_guide_tools(flow, lead, "leader")}
+            try:
+                res = await tools["request"].handler(
+                    {"to_id": str(ref.owner), "kind": "Work", "body": body})
+                txt = (res.get("content") or [{}])[0].get("text", "")
+            except Exception as e:
+                txt = f"(자동 이어가기 처리 오류: {e})"
+                out.append(txt)
+                break
+            out.append(txt[:500])
+            # 진행이 전혀 없는데 여전히 미완이면(크래시 반복 등) 같은 호출을 더 박지 않는다 — 환경 문제.
+            if flow.current is not None and flow.current.owner_incomplete and flow.act_count == acts_before:
+                break
+        if out:
+            return ("\n\n[SYS 자동 이어가기 — 미완이던 위임을 시스템이 같은 담당자에게 이어 보내 받은 결과]\n"
+                    + "\n".join(out))
+        return ""
+
     async def _run_until_silent(self, coro_factory, flow) -> str:
         """coro를 실행하되, '도구 활동(flow.last_activity)이 turn_timeout 동안 한 번도 갱신되지 않은'
         경우(=진짜 행)에만 취소하고 TimeoutError를 낸다. 도구가 하나라도 돌면 시계가 갱신되어 무한정
@@ -798,6 +835,9 @@ class Sys:
                             break
                         guard += 1
                     self._log("baton_recover_continue", alive=flow.comm.alive, recovered=(flow.comm.alive == lead))
+                # [구조적 이어가기] 미완(턴한도·타임아웃) 위임은 리더 판단에 맡기지 않고 SYS가 직접
+                # 같은 owner에게 이어 보낸다 — 리더는 완성본을 받아 '판정'(검증·마감)만 한다.
+                drained += await self._auto_continue_owner(flow, lead)
                 cont += 1
                 flow.leader_segment = cont + 1
                 self._log("continue_incomplete",

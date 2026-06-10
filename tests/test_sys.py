@@ -1455,3 +1455,60 @@ def test_drain_inflight_완주대기_결과전달():
         assert await s._drain_inflight(f) == ""              # 남은 게 없으면 빈 문자열
 
     asyncio.run(scenario())
+
+
+def test_SYS_자동이어가기_미완위임을_시스템이_완주시킴():
+    """[구조적 이어가기] 위임이 '구조적 미완'(턴한도/타임아웃)으로 끊기면 — 리더(LLM)의 판단·기억에
+    맡기지 않고 — SYS가 표준 request 파이프라인으로 같은 owner에게 '이어서'를 자동 발사해 완성본을
+    받아낸다. 리더는 완성 결과를 받아 판정(검증·마감)만 한다(리더가 '비동기 작업' 오인으로 폴링하며
+    이어가기 예산을 태우던 결함의 구조적 차단 — 프롬프트 의존 제거)."""
+    g = FakeGuide()
+    f = _flow(g)
+    st = {"n": 0}
+
+    async def wake(to, b, k):
+        st["n"] += 1
+        if st["n"] == 1:
+            f.act_count += 1
+            return "절반 구현 (⚠ 턴 한도 도달 — 작업이 미완일 수 있음)"   # 1차: 구조적 미완
+        f.act_count += 1
+        assert "SYS 자동 이어가기" in b                                  # SYS가 보낸 이어가기 본문
+        return "남은 부분 구현·검증 완료"
+
+    f.wake = wake
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"})
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
+    assert f.current.owner_incomplete is True                            # 1차 미완 확인
+    out = asyncio.run(s._auto_continue_owner(f, 11))
+    assert f.current.owner_incomplete is False                           # SYS가 완주시킴
+    assert f.current.owner_delivered is True                             # 인도 성립 → 리더는 판정만
+    assert "완료" in out and st["n"] == 2
+
+
+def test_SYS_자동이어가기_무진행이면_중단():
+    """자동 이어가기는 '진행이 전혀 없는데 미완 유지'(환경 문제·크래시 반복)면 같은 호출을 반복해
+    박지 않는다 — 무한 재시도 대신 리더/사용자 보고 경로로 넘긴다."""
+    g = FakeGuide()
+    f = _flow(g)
+    st = {"n": 0}
+
+    async def wake(to, b, k):
+        st["n"] += 1
+        if st["n"] == 1:
+            f.act_count += 1
+            return "절반 (⚠ 턴 한도 도달 — 작업이 미완일 수 있음)"
+        return "API Error: 500 overloaded"     # 이어가기가 크래시(무진행) — 미완은 보존 게이트로 유지
+
+    f.wake = wake
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"})
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
+    asyncio.run(s._auto_continue_owner(f, 11, limit=5))
+    assert f.current.owner_incomplete is True and st["n"] <= 3           # 무진행 반복 안 함
