@@ -14,6 +14,9 @@ export ORGANT_SKIP_RECOVERY="${ORGANT_SKIP_RECOVERY:-1}"
 # 행 감지는 CLI가 아니라 SYS의 침묵 워치독(turn_timeout/idle_timeout, 활동 기반)이 담당한다.
 export MCP_TOOL_TIMEOUT="${MCP_TOOL_TIMEOUT:-14400000}"   # 4h(ms) — 정상 긴 위임을 안 끊게
 export MCP_TIMEOUT="${MCP_TIMEOUT:-120000}"               # MCP 서버 시작 대기 2m(ms)
+# 이어가기 예산: 낭비(폴링·churn)는 구조적으로 차단돼 있어, 한도는 '큰 작업을 자르는 일'만 없게 넉넉히.
+# (라이브 관측: 결함수정 개입이 생산적 세그먼트 7개 필요 — 기본 6으로 마감 직전에 끊김)
+export ORGANT_MAX_CONTINUE="${ORGANT_MAX_CONTINUE:-12}"
 export CHANNEL_ID="${CHANNEL_ID:-1510828120490643517}"
 export DEPLOY_NAME="${DEPLOY_NAME:-todo-organt-demo}"
 # 로스터(직군만 — 담당자는 [Request]의 To로 런타임 결정): 2~7 시드 직군, 8~100·TEST_BOT_1 예비.
