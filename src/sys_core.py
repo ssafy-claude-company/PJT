@@ -833,8 +833,10 @@ class Sys:
                 # 그래도 베턴이 굳어 있으면(진짜 고아 프레임) 강제 복구(escalate-drain)한 뒤 이어간다.
                 if flow.comm.alive != lead and not flow.comm.done:
                     guard = 0
+                    # origin 프레임은 남긴다(스택 1장에서 멈춤) — 이어가기 준비 드레인이 흐름
+                    # 자체를 종료(comm.done)시켜 이후 요청이 전부 막히는 것 방지.
                     while (flow.comm.alive != lead and not flow.comm.done
-                           and flow.comm.open_requests and guard < 64):
+                           and len(flow.comm.open_requests) > 1 and guard < 64):
                         try:
                             flow.comm.escalate("continue 전 베턴 복구(위임 고아 정리)")
                         except CommError:

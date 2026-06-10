@@ -515,8 +515,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     if flow.log:
                         flow.log("baton_recover", me=me_id, stuck_alive=flow.comm.alive, to=to)
                     guard = 0
+                    # origin 프레임(스택 마지막 1장)은 여기서 닫지 않는다 — 핸들러 레벨 복구가
+                    # 흐름 자체를 종료시키면 안 됨(origin 마감은 SYS의 _close_flow 책임). detach로
+                    # 프레임 순서가 어긋난 최악 타이밍에 흐름이 통째로 드레인되던 위험 차단.
                     while (not flow.comm.done and flow.comm.alive != me_id
-                           and flow.comm.open_requests and guard < 30):
+                           and len(flow.comm.open_requests) > 1 and guard < 30):
                         flow.comm.escalate("베턴 굳음 안전복구")
                         guard += 1
             if failed:
