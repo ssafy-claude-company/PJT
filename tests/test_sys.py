@@ -1197,3 +1197,83 @@ def test_직군게이트_비교풀에_서버_커스텀역할_포함():
     # '게임 기획자'는 서버에 이미 있는 이름 그대로 → '게임 비주얼 디자이너'와 토큰('게임')이 겹쳐도 통과
     r2 = asyncio.run(t["recruit"].handler({"role": "게임 기획자", "reason": "기획"}))
     assert "직군으로 채용" in r2["content"][0]["text"]
+
+
+# ── 타임아웃 결함 수정: 하트비트(일하는 워커 보호) + 인프라 타임아웃 '이어가기' ──────────────
+
+def test_하트비트_일하는워커는_침묵타임아웃_안걸림():
+    """워커가 turn_timeout보다 오래 걸려도, 도구 활동으로 last_activity를 갱신하는 한 끊기지 않는다
+    (벽시계 고정 타임아웃이 일하는 owner를 잘라 좀비·미완을 만들던 결함의 근본 교정)."""
+    import time as _t
+    g = FakeGuide()
+    f = Flow(g, channel_id=1, guild_id=1, leader_id=11, bot_info={11: "L", 12: "M"})
+    f.start_root("root")
+
+    class _Worker:
+        def __init__(self, flow):
+            self.flow = flow
+
+        async def handle(self, prompt):
+            for _ in range(12):                 # 총 ~1.2s > turn_timeout(0.5) — 그래도 활동으로 보호
+                await asyncio.sleep(0.1)
+                self.flow.last_activity = _t.monotonic()   # 도구 활동 흉내(하트비트)
+            return "끝까지 완료"
+
+    s = Sys(g, guild_id=1, organt_builder=lambda oid, srv, role, flow=None: _Worker(flow),
+            bot_info={11: "L", 12: "M"})
+    s.turn_timeout = 0.5
+    import src.sys_core as sc
+    _orig = sc.build_guide_server
+    sc.build_guide_server = lambda *a, **k: object()
+    try:
+        out = asyncio.run(s.run_turn(f, 12, "b", Kind.WORK, "member"))
+    finally:
+        sc.build_guide_server = _orig
+    assert out == "끝까지 완료"                  # >turn_timeout 걸렸지만 하트비트로 안 잘림
+
+
+def test_하트비트_무활동워커는_침묵으로_끊김():
+    """반대로, 도구 활동이 전혀 없는(진짜 행) 워커는 turn_timeout 침묵 후 'API Error: timeout'으로 끊긴다."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=1, guild_id=1, leader_id=11, bot_info={11: "L", 12: "M"})
+    f.start_root("root")
+
+    class _Hang:
+        async def handle(self, prompt):
+            await asyncio.sleep(10)             # 무활동(last_activity 갱신 0) → 행
+            return "done"
+
+    s = Sys(g, guild_id=1, organt_builder=lambda oid, srv, role, flow=None: _Hang(),
+            bot_info={11: "L", 12: "M"})
+    s.turn_timeout = 0.3
+    import src.sys_core as sc
+    _orig = sc.build_guide_server
+    sc.build_guide_server = lambda *a, **k: object()
+    try:
+        out = asyncio.run(s.run_turn(f, 12, "b", Kind.WORK, "member"))
+    finally:
+        sc.build_guide_server = _orig
+    assert out.lower().startswith("api error") and "timeout" in out.lower()
+
+
+def test_인프라타임아웃이라도_작업했으면_이어가기():
+    """워커가 작업을 하다(act_count↑) 무활동으로 끊긴 인프라 타임아웃은 '실패'가 아니라 '이어가기'로
+    처리된다 — owner_incomplete=True(작업 보존·complete 차단) + 같은 owner '이어서' 재위임 안내."""
+    g = FakeGuide()
+    f = _flow(g)
+
+    async def wake(to, b, k):
+        f.act_count += 1                        # owner가 실제로 일했음(파일/실행)
+        return "API Error: timeout — 동료 무응답(행)"
+
+    f.wake = wake
+    tools = _tools(f, 11, "leader")
+    asyncio.run(tools["create_task"].handler({"purpose": "p", "members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(tools["set_goal"].handler({"goal": "g"}))
+    r = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
+    assert f.current.owner_incomplete is True               # 이어가기로 표시(작업 유실 방지)
+    assert "이어서" in r["content"][0]["text"]              # 같은 owner 재위임 안내
+    f.current.verified = True                                # run 검증은 됐다 쳐도
+    rc = asyncio.run(tools["complete_task"].handler({"result": "끝"}))
+    assert "거부" in rc["content"][0]["text"]               # 미완이라 완료 거부(허위완료 차단)

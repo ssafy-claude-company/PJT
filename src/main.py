@@ -134,7 +134,7 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
             cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={
                 "PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label, flow=flow)])],
-                "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit, actor=organt_id, role=label)])],
+                "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit, actor=organt_id, role=label, flow=flow)])],
             },
         ), state_path=str(state_path))
     return organt_builder

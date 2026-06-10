@@ -22,14 +22,21 @@ class AuditLog:
         return entry
 
 
-def make_post_tool_use_hook(audit: AuditLog, actor=None, role=None):
+def make_post_tool_use_hook(audit: AuditLog, actor=None, role=None, flow=None):
     """Organt의 모든 툴 호출을 audit에 남기는 PostToolUse 훅 콜백을 만든다.
 
     actor/role를 주면 '누가(어느 봇·역할)' 그 툴을 호출했는지 기록한다 — 협업 관찰성.
+    flow를 주면 툴 '완료' 시점에도 무진행 시계(last_activity)를 갱신한다 — 오래 걸리는 단일 작업
+    (예: 빌드·설치 run)이 시작(PreToolUse)만 찍히고 도중에 '행'으로 오인돼 잘리는 것을 막는다.
     hooks={"PostToolUse": [HookMatcher(hooks=[이 콜백])]} 으로 옵션에 주입한다.
     """
     async def hook(input_data, tool_use_id, context) -> dict:
         data = input_data if isinstance(input_data, dict) else {}
+        if flow is not None:                 # 도구 완료도 '진행' 신호 — 긴 단일 작업 보호
+            try:
+                flow.last_activity = time.monotonic()
+            except Exception:
+                pass
         audit.record(
             "tool_use",
             actor=actor,

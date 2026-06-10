@@ -120,7 +120,11 @@ class Organt:
         return self.options
 
     async def _run_once(self, prompt: str):
-        """ClaudeSDKClient 한 번 실행 → (최종 발화, session_id)."""
+        """ClaudeSDKClient 한 번 실행 → (최종 발화, session_id).
+
+        SYS의 무진행 취소(CancelledError)가 나도 `async with`의 정상 종료(__aexit__)가 SDK 자원을
+        정리한다. 취소는 '도구 활동이 완전히 멈춘'(진짜 행) 경우에만 일어나므로 — 일하는 워커는 자르지
+        않으므로 — 정상 종료가 깔끔히 이뤄진다(바쁜 워커를 끊다 자원이 남던 과거 문제의 근본 회피)."""
         final_text = ""
         captured_sid: Optional[str] = None
         truncated = False

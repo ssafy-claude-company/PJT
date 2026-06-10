@@ -49,9 +49,10 @@ class Sys:
         self.workspace = workspace             # run 툴 cwd(작업공간 경로)
         self.session_dir = session_dir         # organt_state_*.json 위치(새 요청마다 세션 초기화)
         self.max_continue = max_continue       # 턴 한도로 미완 시 같은 세션으로 이어가는 최대 횟수
-        # 워커 턴 안전 타임아웃(초): 서브프로세스가 '행'(무응답·무크래시)이면 단일흐름 전체가 영구 정지하므로
-        # 한도 넘으면 포기하고 '인프라 실패'로 반환해 리더가 보고·진행하게 한다(리더 턴은 흐름 전체라 제외).
-        self.turn_timeout = int(os.environ.get("ORGANT_TURN_TIMEOUT", "480"))   # 기본 8분
+        # 워커 턴 '침묵' 타임아웃(초): 도구 활동(last_activity)이 이 시간 동안 '한 번도' 갱신되지 않으면
+        # (=진짜 행) 포기하고 '인프라 실패'로 반환한다. 벽시계 총 실행시간이 아니라 '무활동' 기준이라,
+        # 오래 걸려도 일하는 워커는 안 자르고 완전히 멈춘 것만 끊는다(일하는 owner 절단·좀비의 근본 교정).
+        self.turn_timeout = int(os.environ.get("ORGANT_TURN_TIMEOUT", "480"))   # 기본 8분(무활동 기준)
         # 흐름 '무진행(행)' 워치독: 요청·파일작성·실행 등 어떤 진행도 이 시간(초) 동안 없으면 흐름이 행으로
         # 멈춘 것(리더 서브프로세스 행 포함 — 리더 턴엔 타임아웃이 없어 생기는 구멍)으로 보고 자동 중단·보고한다.
         # 워커 타임아웃(turn_timeout=8분)보다 넉넉히 커야 워커 1회 행→복구를 '무진행'으로 오인하지 않는다.
@@ -545,6 +546,38 @@ class Sys:
         finally:
             wd.cancel()
 
+    async def _run_until_silent(self, coro_factory, flow) -> str:
+        """coro를 실행하되, '도구 활동(flow.last_activity)이 turn_timeout 동안 한 번도 갱신되지 않은'
+        경우(=진짜 행)에만 취소하고 TimeoutError를 낸다. 도구가 하나라도 돌면 시계가 갱신되어 무한정
+        허용된다 → '퀄리티 있게 오래 일하는 owner'는 안 자르고 '완전히 멈춘 것'만 끊는다(벽시계 고정
+        타임아웃이 일하는 워커를 잘라 좀비·미완을 만들던 결함의 근본 교정)."""
+        flow.last_activity = time.monotonic()
+        task = asyncio.ensure_future(coro_factory())
+        poll = max(1, min(15, self.turn_timeout))
+        timed_out = False
+
+        async def _wd():
+            nonlocal timed_out
+            while not task.done():
+                await asyncio.sleep(poll)
+                idle = time.monotonic() - getattr(flow, "last_activity", time.monotonic())
+                if idle > self.turn_timeout and not task.done():
+                    timed_out = True
+                    task.cancel()
+                    return
+
+        wd = asyncio.ensure_future(_wd())
+        try:
+            return await task
+        except asyncio.CancelledError:
+            if timed_out:
+                raise asyncio.TimeoutError   # 무활동(행)으로 우리가 끊은 것
+            raise                            # 외부(상위 흐름)에서 취소 — 그대로 전파
+        finally:
+            wd.cancel()
+            if not task.done():              # 외부 취소·타임아웃 어느 쪽이든 내부 task 누수 방지
+                task.cancel()
+
     async def run_turn(self, flow: Flow, organt_id, body, kind, role) -> str:
         # 에이전트가 죽으면(SDK 메시지리더 크래시·서브프로세스 SIGTERM 등) 같은 세션으로 되살려 재시도.
         # State는 organt_id별 파일에 영속되므로 새 인스턴스가 세션을 이어간다(전체 워크플로우 보호).
@@ -565,16 +598,17 @@ class Sys:
                             return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader))
                     return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader))
 
-                # 리더 턴은 '흐름 전체'(중첩 워커 포함)를 품으므로 타임아웃 안 건다 — 워커 타임아웃이 행을 끊는다.
-                # 워커(비-리더) 턴은 turn_timeout 초과 시 포기하고 '인프라 실패'로 반환(재시도·충원 금지 경로로
-                # 라우팅). asyncio.wait_for가 행 코루틴을 취소 → ClaudeSDKClient __aexit__가 서브프로세스 정리.
+                # 리더 턴은 '흐름 전체'(중첩 워커 포함)를 품으므로 여기선 타임아웃 안 건다 — 상위 무진행
+                # 워치독이 흐름 전체를 본다. 워커(비-리더) 턴은 '도구 활동이 turn_timeout 동안 완전히 멈춘'
+                # 경우(진짜 행)에만 끊는다 — 일하는 동안은 무한정 허용(하트비트). 끊기면 '인프라 실패'로 반환.
                 if role == "leader":
                     return await _do()
-                return await asyncio.wait_for(_do(), timeout=self.turn_timeout)
+                return await self._run_until_silent(_do, flow)
             except asyncio.TimeoutError:
                 self._log("agent_timeout", organt=organt_id, role=role, sec=self.turn_timeout)
-                return (f"API Error: timeout — 동료({organt_id}) 서브프로세스가 {self.turn_timeout}s 무응답(행). "
-                        f"단일흐름이라 인프라 문제로 간주(크래시와 동일) — 대체 채용 말고 잠시 뒤 재요청하거나 보고.")
+                return (f"API Error: timeout — 동료({organt_id}) 서브프로세스가 {self.turn_timeout}s 동안 "
+                        f"도구 활동이 전혀 없어(행) 끊겼습니다. 단일흐름이라 인프라 문제로 간주(크래시와 동일) — "
+                        f"대체 채용 말고, 진행하던 일이 있으면 같은 담당자에게 '이어서' 재요청하거나 보고하세요.")
             except Exception as e:
                 last = f"(에이전트 {organt_id} 처리 실패: {e})"
                 self._log("agent_revive", organt=organt_id, attempt=attempt + 1, err=str(e)[:100])

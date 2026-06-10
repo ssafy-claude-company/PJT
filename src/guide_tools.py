@@ -431,14 +431,24 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         # 같은 owner에게 '이어서(continuation)' 재위임해 끝내야 한다(허위완료→다음 Task churn 차단). 미완은
         # delivered(accept)로 안 쳐서 respond 마커를 'incomplete'로 두면, 재위임이 Redo 한도에 안 걸린다
         # (이어가기는 '직전 결함 보완'이 아니라 '남은 작업 마저 하기'이므로 횟수 제한 없이 계속 가능).
-        incomplete = (kind == Kind.WORK and not was_clarify and not failed
-                      and "턴 한도 도달" in (result or ""))
-        if kind == Kind.WORK and not was_clarify and flow.current:
-            flow.current.owner_incomplete = incomplete
         # owner가 '위임 도중 실제로 일했나' — 단일흐름이라 깨운 동료(+그 하위)만 활성이므로 wake 전후
         # act_count(run/Write/Edit) 증가 = owner 작업. 거짓이면 owner는 깨어났지만 착수 전/계획만 하고
         # 곧장 반환한 것(허위완료의 씨앗). 이걸로 '검증된 인도'와 '빈 응답'을 가른다.
         owner_acted = flow.act_count > acts_before
+        # 진짜 행(무활동)으로 끊긴 인프라 타임아웃인데 owner가 그 전에 실제로 작업을 했다면, 한 작업은
+        # 작업공간에 남아 있다 → '실패'로 끝내 유실시키지 말고 '이어가기'(미완)로 처리한다. (하트비트
+        # 타임아웃이 일하는 워커는 안 자르므로 드문 경우지만, 안전망으로 작업 유실·허위완료를 막는다.)
+        infra_timeout = (kind == Kind.WORK and not was_clarify
+                         and "api error: timeout" in (result or "").lower())
+        resumable_timeout = infra_timeout and owner_acted
+        # 동료가 'turn 한도'로 미완 반환했나(Work) — 그러면 이 Task는 완료로 못 닫고(complete_task 거부),
+        # 같은 owner에게 '이어서(continuation)' 재위임해 끝내야 한다(허위완료→다음 Task churn 차단). 미완은
+        # delivered(accept)로 안 쳐서 respond 마커를 'incomplete'로 두면, 재위임이 Redo 한도에 안 걸린다
+        # (이어가기는 '직전 결함 보완'이 아니라 '남은 작업 마저 하기'이므로 횟수 제한 없이 계속 가능).
+        incomplete = (kind == Kind.WORK and not was_clarify and not failed
+                      and "턴 한도 도달" in (result or "")) or resumable_timeout
+        if kind == Kind.WORK and not was_clarify and flow.current:
+            flow.current.owner_incomplete = incomplete
         is_owner_work = (kind == Kind.WORK and not was_clarify and not failed and not incomplete
                          and flow.current is not None and to == flow.current.owner)
         # owner가 Work를 받고도 실작업(run/Write) 0회로 곧장 반환 = 착수 전/계획만 = '인도 아님'.
@@ -466,6 +476,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     flow.comm.escalate("베턴 굳음 안전복구")
                     guard += 1
         if failed:
+            if resumable_timeout:
+                # owner가 작업을 진행하다 '무활동'으로 끊긴 경우 — 한 작업은 작업공간에 보존돼 있다.
+                # 실패로 끝내지 말고 같은 owner에게 '이어서' 재위임(연속). owner_incomplete=True라 complete는
+                # 막히고, 프레임 마커가 incomplete라 redo 한도와 무관하게 계속 이어갈 수 있다(유실·허위완료 동시 차단).
+                if flow.log:
+                    flow.log("owner_resumable_timeout", to=to, seg=getattr(flow, "leader_segment", 0))
+                return _ok(f"[{flow._info(to)}] 작업을 진행하던 중 일시 무응답으로 끊겼습니다 — 한 작업은 "
+                           f"작업공간에 보존돼 있습니다. **같은 담당자에게 request(Work)로 '이어서 남은 부분을 "
+                           f"마저 끝내라'**고 다시 맡기세요(이어가기 — 횟수 제한 없음). 다른 사람으로 바꾸거나 "
+                           f"새로 뽑지 마세요(같은 환경이라 같은 문제).")
             # 구조적 사실: 단일흐름은 한 번에 한 명만 일한다 → 요청자는 그 동료가 끝날 때까지 '블록'된다.
             # 따라서 여기서의 '실패'는 그 동료가 느리거나 불응한 게 아니라 그 동료의 LLM 서브프로세스가
             # '크래시'(SIGTERM/143·연결끊김·과부하)한 것 — 즉 인프라/환경 문제다. 새 사람으로 바꾸거나
