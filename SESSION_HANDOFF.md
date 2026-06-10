@@ -7,8 +7,20 @@
 - 브랜치: `claude/exciting-volta-b06xmh` (origin과 일치)
 - 테스트: `python -m pytest -q` → 149 통과
 - 리스너: 정지 상태. 세션 시작 시 자동 기동은 비활성화됨.
-  필요 시 `.env`(비밀값)를 갖춘 뒤 `bash scripts/run_listener.sh`로 수동 실행.
-- `.env`는 레포에 없음(gitignore). 봇 가동이 필요할 때만 별도로 마련.
+  필요 시 `bash scripts/run_listener.sh`로 수동 실행.
+
+## 자격증명 / 실행 (중요 — 실제로 어떻게 도는가)
+- **영속 환경변수**(컨테이너 바뀌어도 유지)에는 봇 토큰이 4개만 있다:
+  `SYSTEM_BOT`(라우터) + 워커용 `TEST_BOT_1`·`TEST_OBT_2`·`TEST_OBT_3`.
+  → 이대로 `run_listener.sh`를 돌리면 **워커 3명(프론트엔드·디자이너·예비) 기준으로 정상 동작**한다.
+  (`CHANNEL_ID`·`DEPLOY_NAME`은 `run_listener.sh`가 기본값을 주입하므로 별도 설정 불필요.)
+- **풀팀(워커 ~20명)**을 돌리려면 `ORGANT_BOT_2~20` 토큰이 필요하다. 이 토큰들은 영속 env에
+  등록된 적이 없고 과거 `.env`에만 있었다(현재 없음). 풀팀 운영 = 이 토큰들을
+  **환경설정(웹 UI)의 환경변수에 등록**해야 컨테이너 교체에도 유지된다.
+  로스터(`run_listener.sh`)는 "토큰이 있으면 그만큼, 없으면 건너뜀"으로 자동 적응한다 —
+  토큰을 더 등록할수록 워커가 더 붙는다(코드 변경 불필요).
+- **LLM 인증**: `ANTHROPIC_API_KEY`는 env에 없다. 별도 호스트에서 돌리려면 주입 필요.
+
 
 ## 시스템 한 줄 요약
 Discord에서 여러 봇이 "AI 직원"처럼 협업하는 멀티에이전트 시스템. 사용자가 `[Request] To: @봇`
