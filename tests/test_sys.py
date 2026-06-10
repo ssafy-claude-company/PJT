@@ -1512,3 +1512,83 @@ def test_SYS_자동이어가기_무진행이면_중단():
     asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
     asyncio.run(s._auto_continue_owner(f, 11, limit=5))
     assert f.current.owner_incomplete is True and st["n"] <= 3           # 무진행 반복 안 함
+
+
+def test_요청자_자기활동은_owner인도로_안침():
+    """[구조 신호 정확성] 위임 측정창에서 '요청자(리더) 자신의 활동'(detach 뒤 모델 쪽 폴링 run 등)은
+    owner 인도 신호(owner_acted)로 치지 않는다 — 이중 활성 잔재가 허위완료 게이트를 뚫지 못하게.
+    또한 미착수(premature)는 구조적 미완 마커를 세워 SYS 자동 이어가기의 대상이 된다."""
+    g = FakeGuide()
+    f = _flow(g)
+
+    async def wake(to, b, k):
+        f.act_count += 1                          # 측정창에 활동 1회가 있었지만...
+        f.act_by[11] = f.act_by.get(11, 0) + 1    # ...그건 요청자(리더 11) 자신의 것
+        return "네, 곧 시작하겠습니다"
+    f.wake = wake
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    r = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
+    assert f.current.owner_delivered is False                 # 리더 노이즈는 인도가 아님
+    assert f.current.owner_incomplete is True                 # 미착수 = 구조적 미완(자동 이어가기 대상)
+    assert "산출물을 만들지" in r["content"][0]["text"]
+
+
+def test_강제배포는_완료Task가_있을때만(tmp_path, monkeypatch):
+    """[품질 게이트] SYS 강제배포는 '완료된 Task가 있고 미완 Task가 안 남은' 흐름에서만 발동한다 —
+    미완·실패 산출물이 흐름 종료마다 자동으로 라이브를 덮던 것 차단."""
+    import types
+    (tmp_path / "package.json").write_text("{}")
+    for k, v in (("GH_PAT", "x"), ("GH_USER", "u"), ("RENDER_KEY", "k"),
+                 ("RENDER_OWNER", "o"), ("DEPLOY_NAME", "n")):
+        monkeypatch.setenv(k, v)
+    deployed = {"n": 0}
+    monkeypatch.setattr("src.deploy.deploy_sync",
+                        lambda *a: (deployed.__setitem__("n", deployed["n"] + 1), "https://URL")[1])
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"})
+    f = _flow(FakeGuide())
+    f.workspace = str(tmp_path)
+    f.current = object()                                       # ① 미완 Task 남음 → 배포 금지
+    assert asyncio.run(s._ensure_deploy(f, 11, "r")) == "r" and deployed["n"] == 0
+    f.current = None
+    f.tasks = []                                               # ② 완료 Task 없음 → 배포 금지
+    assert asyncio.run(s._ensure_deploy(f, 11, "r")) == "r" and deployed["n"] == 0
+    f.tasks = [types.SimpleNamespace(status=types.SimpleNamespace(status="완료"))]
+    out = asyncio.run(s._ensure_deploy(f, 11, "r"))            # ③ 완료 있음 → 강제배포 발동
+    assert deployed["n"] == 1 and "배포" in out
+
+
+def test_read_thread_시간순과_평문개입_포함():
+    """read_thread는 시간순(과거→최신)으로 돌려준다(discord 기본 최신→과거를 뒤집음 — '마지막 요청'
+    판정의 전제). include_plain=True면 평문도 Request(to=None)로 감싼다 — 등록 프로젝트 채널의
+    평문 개입을 부팅 복구가 잡을 수 있게(라이브에서 평문 '이어서 계속해'가 복구 누락되던 구멍)."""
+    import types
+    from src.discord_guide import DiscordGuide
+
+    def _m(mid, author, content):
+        return types.SimpleNamespace(id=mid, author=types.SimpleNamespace(id=author),
+                                     content=content, mentions=[], reference=None)
+
+    class _Ch:
+        def __init__(self, msgs):
+            self._m = msgs
+
+        async def history(self, limit=50):
+            for x in reversed(self._m):       # discord history 기본: 최신→과거
+                yield x
+
+    class _Client:
+        def __init__(self, ch):
+            self._ch = ch
+
+        def get_channel(self, cid):
+            return self._ch
+
+    msgs = [_m(1, 9, "하나"), _m(2, 9, "이어서 계속해")]      # 시간순 원본
+    g = DiscordGuide(_Client(_Ch(msgs)))
+    out = asyncio.run(g.read_thread(5, include_plain=True))
+    assert [r.body for r in out] == ["하나", "이어서 계속해"]   # 시간순 보장 + 평문 래핑
+    assert out[-1].to_id is None and out[-1].from_id == 9
+    assert asyncio.run(g.read_thread(5)) == []                 # 기본값은 구조화 메시지만

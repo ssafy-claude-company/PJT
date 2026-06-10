@@ -691,6 +691,12 @@ class Sys:
         리더에게 의존하지 않고 **SYS가 직접 deploy_sync로 배포**한다(리더가 빼먹는 누락 구멍 차단).
         deploy_sync가 라이브 URL 실제 응답까지 확인하므로, 거짓 성공이 아니라 진짜 배포가 보장된다."""
         ws = str(flow.workspace) if flow.workspace else ""
+        # 품질 게이트: 흐름이 미완으로 끝나거나(중단될 Task가 남음) 이 흐름에서 '완료'된 Task가 하나도
+        # 없으면 강제 배포하지 않는다 — 미완·실패 산출물이 흐름 종료마다 자동으로 라이브를 덮던 것 차단.
+        completed = any(getattr(getattr(t, "status", None), "status", "") == "완료"
+                        for t in getattr(flow, "tasks", []))
+        if flow.current is not None or not completed:
+            return result
         deployable = bool(ws) and os.path.exists(os.path.join(ws, "package.json"))
         gh, ghu = os.environ.get("GH_PAT"), os.environ.get("GH_USER")
         rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")

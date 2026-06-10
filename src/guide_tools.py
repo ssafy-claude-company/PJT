@@ -234,6 +234,7 @@ class Flow:
         self.req_results = {}          # (seg,from,to,kind,body)->응답: 같은 턴 병렬 중복요청 합치기용 캐시
         self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로
                                        #   일했나'를 wake 전후 스냅샷 차이로 판정(허위완료/독점 차단)
+        self.act_by = {}               # 행위자별 작업 누계(actor→count) — 요청자 자신의 활동을 빼고 재기 위함
         self.consec_fail = 0           # 연속 '응답 실패(무응답/타임아웃)' 횟수 — 시스템 일시불안정 판별(충원 루프 차단)
         self.inflight_tasks = set()    # 진행 중 위임의 '완주 태스크'들 — CLI가 도구 호출을 포기해도 위임은
                                        #   계속 완주하며(중첩 가능), SYS가 이어가기 전에 이들의 완주를 기다린다
@@ -438,6 +439,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         async def _deliver():
             runs_before = flow.current.run_count if flow.current else 0
             acts_before = flow.act_count   # 위임 도중 owner(단일흐름이라 깨운 동료만 활성)가 실제로 일했는지 측정
+            mine_before = flow.act_by.get(me_id, 0) if getattr(flow, "act_by", None) is not None else 0
             try:
                 result = await flow.wake(to, owner_body, kind)      # 동료 깨워 응답(중첩 베턴)
                 if _looks_transient(result):                        # 일시 오류면 한 번 더(답으로 취급 X)
@@ -459,7 +461,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # owner가 '위임 도중 실제로 일했나' — 단일흐름이라 깨운 동료(+그 하위)만 활성이므로 wake 전후
             # act_count(run/Write/Edit) 증가 = owner 작업. 거짓이면 owner는 깨어났지만 착수 전/계획만 하고
             # 곧장 반환한 것(허위완료의 씨앗). 이걸로 '검증된 인도'와 '빈 응답'을 가른다.
-            owner_acted = flow.act_count > acts_before
+            # '요청자 자신'의 활동(detach 뒤 리더가 모델 쪽에서 돌린 폴링 run 등)은 빼고 잰다 —
+            # 위임 측정창의 인도 신호(owner_acted)가 이중 활성 잔재로 오염되지 않게(허위완료 차단 정확성).
+            mine_delta = (flow.act_by.get(me_id, 0) - mine_before) if getattr(flow, "act_by", None) is not None else 0
+            owner_acted = (flow.act_count - acts_before) > mine_delta
             # 진짜 행(무활동)으로 끊긴 인프라 타임아웃인데 owner가 그 전에 실제로 작업을 했다면, 한 작업은
             # 작업공간에 남아 있다 → '실패'로 끝내 유실시키지 말고 '이어가기'(미완)로 처리한다. (하트비트
             # 타임아웃이 일하는 워커는 안 자르므로 드문 경우지만, 안전망으로 작업 유실·허위완료를 막는다.)
@@ -485,6 +490,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                              and flow.current is not None and to == flow.current.owner)
             # owner가 Work를 받고도 실작업(run/Write) 0회로 곧장 반환 = 착수 전/계획만 = '인도 아님'.
             premature = is_owner_work and not owner_acted
+            if premature and flow.current is not None:
+                # 미착수도 '구조적 미완'이다 — 마커를 세워 complete를 막고, 리더 세그먼트가 여기서
+                # 끝나도 SYS 자동 이어가기가 같은 owner를 다시 깨운다(판단이 아니라 기계적 행동).
+                flow.current.owner_incomplete = True
             if is_owner_work and owner_acted and _is_substantive(result):
                 flow.current.owner_delivered = True   # 이 owner가 실작업+응답을 냈다 → complete_task 허용 근거
             try:

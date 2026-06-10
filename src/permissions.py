@@ -168,6 +168,10 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
         if tool in ("Write", "Edit", "mcp__guide__run") and flow is not None:
             try:
                 flow.act_count += 1
+                # 행위자별 귀속도 함께 — 위임 측정창에서 '요청자 자신의 활동'(detach 후 리더의 폴링
+                # run 등)을 빼고 재기 위함(단일활성이 흔들린 순간에도 인도/이어가기 신호가 오염되지 않게).
+                if actor is not None and getattr(flow, "act_by", None) is not None:
+                    flow.act_by[actor] = flow.act_by.get(actor, 0) + 1
             except Exception:
                 pass
 

@@ -388,8 +388,12 @@ class DiscordGuide:
         return await self._send(client, int(thread_id), format_response(body),
                                 reply_to=request_msg_id)
 
-    async def read_thread(self, thread_id: int, limit: int = 50) -> List[Union[Request, Response]]:
-        """Thread의 구조화 메시지(Request/Response)를 시간순으로 파싱해 반환."""
+    async def read_thread(self, thread_id: int, limit: int = 50,
+                          include_plain: bool = False) -> List[Union[Request, Response]]:
+        """Thread의 구조화 메시지(Request/Response)를 **시간순(과거→최신)**으로 파싱해 반환.
+        (discord history는 기본 최신→과거라 뒤집는다 — '마지막 요청' 판정이 순서에 기대므로 중요.)
+        include_plain=True면 형식 없는 '평문' 메시지도 Request(to=None)로 감싸 포함한다 — 등록
+        프로젝트 채널에선 평문이 곧 개입이므로, 부팅 복구가 평문 개입도 잡을 수 있게."""
         ch = await self._resolve(self.system, int(thread_id))
         out: List[Union[Request, Response]] = []
         async for m in ch.history(limit=limit):
@@ -401,6 +405,9 @@ class DiscordGuide:
                 reply_to_id=ref,
                 content=m.content,
             )
+            if parsed is None and include_plain and (m.content or "").strip():
+                parsed = Request(to_id=None, kind=Kind.WORK, body=m.content.strip(),
+                                 from_id=m.author.id, message_id=str(m.id))
             if parsed is not None:
                 out.append(parsed)
         out.reverse()  # history는 최신→과거 → 시간순으로
