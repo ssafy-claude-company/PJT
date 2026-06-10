@@ -1369,11 +1369,11 @@ def test_직군보유자_자기직군_덮어쓰기_거부_1봇1직업():
     assert "이미" in r2["content"][0]["text"] and f.bot_info[11] == "L"   # 같은 직군은 무해 통과
 
 
-def test_전직_예외_예비없으면_허용_유사직군도_허용():
-    """전직(직군 교체)은 사용자 정책의 예외 둘 중 하나일 때만 허용된다 — ① 풀에 예비가 0명(어쩔 수
-    없음) ② 새 직군이 기존과 '비슷한 일'(도메인 토큰 공유). 허용 시 겸직이 아니라 '교체'다(라벨·
-    직업 기억 모두 새 직군 하나)."""
-    # ① 예비 0명 — 무관한 직군이라도 전직 허용
+def test_겸직_예외_예비없으면_허용_유사직군도_허용_한도2():
+    """겸직(직군 추가)은 사용자 정책의 예외 둘 중 하나일 때만 허용된다 — ① 풀에 예비가 0명(어쩔 수
+    없음) ② 새 직군이 기존과 '비슷한 일'(도메인 토큰 공유). 허용 시 교체가 아니라 '추가'다(기존
+    전문화 기억 유지 — 라벨·직업 기억이 '주직군·부직군'). 봇당 최대 2개(직군 스택 재발 방지)."""
+    # ① 예비 0명 — 무관한 직군이라도 겸직 허용(기존 직군 유지 + 추가)
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드"})
     f.start_root("root")
@@ -1382,9 +1382,15 @@ def test_전직_예외_예비없으면_허용_유사직군도_허용():
     t = _tools(f, 11, "leader")
     asyncio.run(t["create_task"].handler({"members": "12"}))
     r = asyncio.run(t["recruit"].handler({"member": "12", "role": "QA", "reason": "재배치"}))
-    assert "전직" in r["content"][0]["text"]
-    assert f.bot_info[12] == "QA" and persisted.get(12) == "QA"   # 라벨·기억 모두 교체(겸직 아님)
-    # ② 예비가 있어도 '비슷한 일'(기존 직군명 재사용 — 토큰 공유)이면 전직 허용
+    assert "겸직" in r["content"][0]["text"]
+    assert f.bot_info[12] == "백엔드·QA" and persisted.get(12) == "백엔드·QA"   # 기존 유지 + 추가
+    # 이미 보유한 직군 재요청 → 변경 없이 무해 통과
+    r_dup = asyncio.run(t["recruit"].handler({"member": "12", "role": "QA", "reason": "재확인"}))
+    assert f.bot_info[12] == "백엔드·QA"
+    # 한도: 직군 2개 보유자에게 셋째 직군(예비 0명이어도) → 거부
+    r_cap = asyncio.run(t["recruit"].handler({"member": "12", "role": "사운드", "reason": "추가"}))
+    assert "한도" in r_cap["content"][0]["text"] and f.bot_info[12] == "백엔드·QA"
+    # ② 예비가 있어도 '비슷한 일'(기존 직군명 재사용 — 토큰 공유)이면 겸직 허용
     g2 = FakeGuide()
     f2 = Flow(g2, channel_id=500, guild_id=1, leader_id=11,
               bot_info={11: "L", 12: "디자이너", 13: "게임 비주얼 디자이너", 14: "예비"})
@@ -1392,4 +1398,5 @@ def test_전직_예외_예비없으면_허용_유사직군도_허용():
     t2 = _tools(f2, 11, "leader")
     asyncio.run(t2["create_task"].handler({"members": "12,13"}))
     r2 = asyncio.run(t2["recruit"].handler({"member": "12", "role": "게임 비주얼 디자이너", "reason": "통합"}))
-    assert "전직" in r2["content"][0]["text"] and f2.bot_info[12] == "게임 비주얼 디자이너"
+    assert "겸직" in r2["content"][0]["text"]
+    assert f2.bot_info[12] == "디자이너·게임 비주얼 디자이너"   # 주직군 유지 + 부직군 추가

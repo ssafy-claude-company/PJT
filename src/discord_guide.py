@@ -181,28 +181,32 @@ class DiscordGuide:
         return not (p.administrator or p.manage_guild or p.manage_roles)
 
     async def assign_job_role(self, guild_id: int, user_id: int, job_name: str) -> bool:
-        """봇에게 '직군'을 **Discord 역할(권한)**로 부여한다(같은 이름 역할 없으면 생성). **1봇 1직업** —
-        새 직군 역할을 달면서 기존 '직군 역할'들은 제거한다(교체). 더하기만 하면 흐름이 거듭될수록 옛
-        직군이 누적돼(라이브 관측: 봇당 5~6개 스택) '직업 복원'이 잔재를 집는다. 직군이 아닌 권한 역할
-        ('관리자' 등)·관리 역할은 건드리지 않는다.
+        """봇의 직군 라벨('백엔드' 또는 겸직 '백엔드·QA', 최대 2개)을 **Discord 역할(권한)**로 동기화한다 —
+        라벨의 구성 직군 역할을 모두 보장(없으면 생성·부여)하고, **라벨에 없는 '직군 역할' 잔재는 제거**한다.
+        더하기만 하면 흐름이 거듭될수록 옛 직군이 누적돼(라이브 관측: 봇당 5~6개 스택) '직업 복원'이
+        잔재를 집는다. 직군이 아닌 권한 역할('관리자' 등)·관리 역할은 건드리지 않는다.
         System 봇에 '역할 관리' 권한 + 대상보다 높은 역할이 필요(없으면 best-effort 실패)."""
         import discord
-        job = (job_name or "").strip()
-        if not job:
+        jobs = [j.strip() for j in str(job_name or "").split("·") if j.strip()]   # 겸직 라벨 구분자
+        if not jobs:
             return False
         try:
             guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
-            role = discord.utils.get(guild.roles, name=job)
-            if role is None:
-                role = await guild.create_role(name=job, mentionable=True, reason="Organt 직군")
             member = guild.get_member(int(user_id)) or await guild.fetch_member(int(user_id))
-            await member.add_roles(role, reason="Organt 직군 배정")
-            stale = [r for r in member.roles if r.id != role.id and self._is_job_role(r)]
+            want = []
+            for job in jobs:
+                role = discord.utils.get(guild.roles, name=job)
+                if role is None:
+                    role = await guild.create_role(name=job, mentionable=True, reason="Organt 직군")
+                want.append(role)
+            await member.add_roles(*want, reason="Organt 직군 배정")
+            wanted = {r.id for r in want}
+            stale = [r for r in member.roles if r.id not in wanted and self._is_job_role(r)]
             if stale:
-                await member.remove_roles(*stale, reason="Organt 직군 교체(1봇 1직업)")
+                await member.remove_roles(*stale, reason="Organt 직군 동기화(라벨 밖 잔재 제거)")
             return True
         except Exception as e:
-            print(f"[discord_guide] 직군 역할 부여 실패 user={user_id} job={job!r}: "
+            print(f"[discord_guide] 직군 역할 부여 실패 user={user_id} job={job_name!r}: "
                   f"{type(e).__name__}: {e}", flush=True)
             return False
 
@@ -218,8 +222,8 @@ class DiscordGuide:
         """각 봇의 현재 Discord 역할 중 '커스텀 직군 역할'(@everyone·봇 통합 역할 제외)을 찾아 id→직군명.
         직군은 assign_job_role이 '직군 이름'으로 만든 역할이고, Discord 역할은 서버에 영속되므로 컨테이너
         재시작/리클레임(디스크 jobs.json까지 사라져도)을 넘어 '직업'을 복원하는 진실원이 된다(사용자 요청:
-        '권한 자체로도 유추'). 권한 역할('관리자' 등)은 직군이 아니므로 제외한다. 1봇 1직군(assign이
-        교체 방식)이라 보통 하나지만, 잔재로 여러 개면 첫 번째만 돌려준다(best-effort — 실패는 건너뜀)."""
+        '권한 자체로도 유추'). 권한 역할('관리자' 등)은 직군이 아니므로 제외한다. 겸직(최대 2개)은
+        '주직군·부직군' 라벨로 합쳐 돌려주고, 그 이상 잔재 스택은 앞 2개만 쓴다(best-effort — 실패는 건너뜀)."""
         out: Dict[int, str] = {}
         try:
             guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
@@ -230,7 +234,7 @@ class DiscordGuide:
                 m = guild.get_member(int(uid)) or await guild.fetch_member(int(uid))
                 jobs = [r.name for r in m.roles if self._is_job_role(r)]
                 if jobs:
-                    out[int(uid)] = jobs[0]
+                    out[int(uid)] = "·".join(jobs[:2])   # 겸직 라벨 구분자(guide_tools._JOB_SEP와 동일)
             except Exception:
                 continue
         return out
