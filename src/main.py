@@ -60,9 +60,22 @@ KOREAN_NAMES = ["김민준", "이서연", "박지호", "최예은", "정우진",
                 "배준영", "노아름", "문태경", "심유빈"]
 
 
-def assign_korean_names(ids) -> Dict[int, str]:
-    """봇 id들에 사람 이름(닉네임)을 차례로 배정 — 직군과 무관한 고정 정체성."""
-    return {uid: KOREAN_NAMES[i % len(KOREAN_NAMES)] for i, uid in enumerate(ids)}
+def assign_stable_names(ids, existing=None) -> Dict[int, str]:
+    """봇 id들에 사람 이름(닉네임)을 배정하되, 서버에 '이미 닉네임이 있는 봇은 그 이름을 유지'한다.
+    닉네임은 서버에 영속되므로(역할과 동일) 재시작·리클레임·로스터 변동에도 같은 봇은 같은 이름 —
+    '연결 순서 인덱스' 배정이 주던 재시작마다 개명(정체성 흔들림)을 제거한다. 이름이 없는 봇만
+    아직 안 쓰인 이름을 차례로 받는다."""
+    existing = dict(existing or {})
+    used = set(existing.values())
+    fresh = (n for n in KOREAN_NAMES if n not in used)
+    out: Dict[int, str] = {}
+    for uid in ids:
+        name = existing.get(uid) or next(fresh, None)
+        if name is None:                       # 이름 풀(20명) 소진 — 번호를 붙여 충돌 없이 확장
+            name = f"{KOREAN_NAMES[len(used) % len(KOREAN_NAMES)]}{len(used) // len(KOREAN_NAMES) + 1}"
+        out[uid] = name
+        used.add(name)
+    return out
 
 
 async def _connect(token: str, message_content: bool = False) -> Tuple[discord.Client, asyncio.Task]:
@@ -179,12 +192,20 @@ async def run() -> None:
         log.warning("직업 기억 복원(Discord 역할) 실패 — 건너뜀", exc_info=True)
     # 이름은 '사람 이름'(닉네임, 고정 정체성), 직군은 'Discord 역할(권한)'로 부여한다 — 한 봇이 직군을
     # 여러 개 가질 수 있고, 직군이 바뀌어도 이름은 안 바뀐다(사용자 요청). 둘 다 best-effort.
-    names = assign_korean_names(list(organts))
+    # 닉네임도 역할처럼 '서버 영속 진실원': 기존 닉을 먼저 읽어 유지하고, 이름 없는 봇에만 새 이름을
+    # 준다(연결 순서 인덱스 배정이 재시작·로스터 변동마다 같은 봇을 개명시키던 문제의 근본 해결).
     try:
-        n_name = await guide.set_nicks(channel.guild.id, names)                 # 닉네임 = 사람 이름
+        existing_nicks = await guide.get_member_nicks(channel.guild.id, list(organts))
+    except Exception:
+        existing_nicks = {}
+    names = assign_stable_names(list(organts), existing_nicks)
+    try:
+        to_set = {u: n for u, n in names.items() if existing_nicks.get(u) != n}   # 이미 맞는 닉은 안 건드림
+        n_name = await guide.set_nicks(channel.guild.id, to_set)
         jobs = {u: r for u, r in bot_info.items() if not str(r).startswith("예비")}  # 예비는 직군 역할 없음
         n_role = await guide.assign_job_roles(channel.guild.id, jobs)           # 직군 = 역할(권한)
-        log.info("이름 설정 %d/%d · 직군 역할 부여 %d/%d", n_name, len(names), n_role, len(jobs))
+        log.info("이름 설정 %d/%d(기존 유지 %d) · 직군 역할 부여 %d/%d",
+                 n_name, len(to_set), len(names) - len(to_set), n_role, len(jobs))
     except Exception:
         pass
     # 원터치 초대: 토큰은 있는데 아직 '서버에 없는' 봇은 클릭 한 번이면 합류하는 초대 링크를 띄운다
@@ -198,12 +219,20 @@ async def run() -> None:
                              f"[원터치 초대 필요] 아래 봇이 서버에 없습니다. 각 링크 클릭 한 번으로 합류시키세요:\n{lines}")
     except Exception:
         pass
+    from .config import ROOT
     sysm = Sys(guide, channel.guild.id, _make_builder(cfg, audit, bot_info), bot_info=bot_info,
                workspace=cfg.workspace_dir,
                projects_path=str(cfg.audit_log_path.parent / "projects.json"),
                session_dir=str(cfg.audit_log_path.parent),
-               jobs_path=str(cfg.audit_log_path.parent / "jobs.json"))
+               jobs_path=str(cfg.audit_log_path.parent / "jobs.json"),
+               seed_path=str(ROOT / "organt" / "projects.seed.json"))
     sysm._save_jobs()   # Discord 역할에서 복원한 직군을 디스크 jobs.json에도 캐시(다음 시작은 디스크 빠른 경로)
+    # 레지스트리 reconcile(디스크 > 채널 토픽 > 시드): 리클레임으로 logs/가 사라져도 채널 토픽에서
+    # 등록·리더 재지정을 복원한다(시드로 옛 리더가 원복되던 한계 해소). 직군의 Discord 역할 복원과 같은 원리.
+    try:
+        await sysm.reconcile_projects_from_discord()
+    except Exception:
+        log.warning("프로젝트 레지스트리 토픽 복원 실패 — 건너뜀", exc_info=True)
 
     print(f"SYS 가동 — 리더={bot_info[leader_id]}({leader_id}), 팀={list(bot_info.values())}")
     print(f"#{channel.name} 에서 User 입력 대기 중 — 그냥 말 걸어도 됩니다(Ctrl+C 종료)")
@@ -317,8 +346,10 @@ async def run() -> None:
                     guide.register_organt(uid, client)
                     tasks.append(task)
                     try:
-                        await guide.set_nick(channel.guild.id, uid,           # 이름=사람 이름
-                                             KOREAN_NAMES[(len(organts) - 1) % len(KOREAN_NAMES)])
+                        nicks = await guide.get_member_nicks(channel.guild.id, list(organts))
+                        if uid not in nicks:                                  # 이름=사람 이름(이미 있으면 유지)
+                            await guide.set_nick(channel.guild.id, uid,
+                                                 assign_stable_names([uid], nicks)[uid])
                         if not str(role).startswith("예비"):                  # 예비면 직군 역할 없음
                             await guide.assign_job_role(channel.guild.id, uid, role)
                     except Exception:

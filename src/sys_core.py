@@ -11,6 +11,7 @@ import asyncio
 import glob
 import json
 import os
+import re
 import time
 from typing import Dict, Optional
 
@@ -31,7 +32,7 @@ _CONTINUE_BODY = (
 class Sys:
     def __init__(self, guide, guild_id, organt_builder, bot_info: Optional[Dict[int, str]] = None,
                  workspace=None, projects_path=None, session_dir=None, max_continue=6,
-                 jobs_path=None):
+                 jobs_path=None, seed_path=None):
         self.guide = guide
         self.guild_id = guild_id
         self.organt_builder = organt_builder   # (organt_id, guide_server, role) -> Organt
@@ -60,18 +61,31 @@ class Sys:
         self.flow_log = []
         self.flow_log_path = (os.path.join(session_dir, "flow.jsonl") if session_dir else None)
         self.projects_path = projects_path     # 레지스트리 영속 경로(없으면 인메모리)
+        self.seed_path = seed_path             # 커밋된 시드(리클레임으로 디스크 유실 시 폴백)
         self.projects: Dict[int, dict] = {}    # channel_id → 프로젝트 컨텍스트(개입 진입점)
         self._proj_n = 0
         self._load_projects()
 
     def _load_projects(self):
-        """디스크에서 프로젝트 레지스트리 복원 — 프로세스가 끝나도 '원래 작업'에 개입 가능."""
-        if not self.projects_path or not os.path.exists(self.projects_path):
-            return
+        """디스크에서 프로젝트 레지스트리 복원 — 프로세스가 끝나도 '원래 작업'에 개입 가능.
+        디스크(logs/)가 없으면(컨테이너 리클레임으로 유실) 커밋된 시드에서 복원하되 'seeded' 마커를
+        남긴다 — 시드는 커밋 시점에 멈춘 과거라, 부팅 reconcile에서 Discord 채널 토픽(런타임마다
+        갱신되는 영속 진실원)이 있으면 그쪽이 이긴다(리더 재지정·워크스페이스가 시드로 원복되던 한계 해소)."""
+        path, seeded = self.projects_path, False
+        if not path or not os.path.exists(path):
+            if self.seed_path and os.path.exists(self.seed_path):
+                path, seeded = self.seed_path, True
+            else:
+                return
         try:
-            data = json.load(open(self.projects_path, encoding="utf-8"))
+            data = json.load(open(path, encoding="utf-8"))
             self.projects = {int(k): v for k, v in data.get("projects", {}).items()}
             self._proj_n = data.get("n", len(self.projects))
+            if seeded:
+                for p in self.projects.values():
+                    p["seeded"] = True
+                self._save_projects()   # logs에 물질화(마커 포함 — reconcile이 보고 토픽 우선 적용)
+                self._log("projects_seed_restored", n=len(self.projects))
         except Exception:
             pass
 
@@ -141,14 +155,101 @@ class Sys:
                 self.projects[ch] = p
                 if c != ch:
                     del self.projects[c]
+                    self._clear_topic(c)   # 옛 채널의 스테일 토픽 제거(부팅 reconcile 때 유령 등록 방지)
                 self._save_projects()
+                self._sync_topic(ch)
                 return p["id"]
         self._proj_n += 1
         pid = f"P-{self._proj_n:03d}"
         self.projects[ch] = {"id": pid, "name": name, "channel": ch,
                              "workspace": workspace, "leader": leader, "summary": ""}
         self._save_projects()
+        self._sync_topic(ch)
         return pid
+
+    # --- 레지스트리의 Discord 영속(채널 토픽) — logs/는 리클레임으로 사라지므로, 직군을 Discord '역할'에
+    # 영속하듯 등록 정보(식별번호·리더·워크스페이스·이름)를 그 프로젝트 '채널 토픽'에 영속한다.
+    # 우선순위: 런타임 디스크 > 채널 토픽 > 커밋 시드. ---
+
+    _TOPIC_RE = re.compile(r"^\[ORGANT:(P-\d+)\]\s+leader=(\d+)\s+\|\s+ws=(.*?)\s+\|\s+name=(.*)$", re.S)
+
+    @staticmethod
+    def _topic_for(p) -> str:
+        return (f"[ORGANT:{p['id']}] leader={int(p.get('leader') or 0)} "
+                f"| ws={p.get('workspace') or ''} | name={p.get('name') or ''}")[:1024]
+
+    @classmethod
+    def parse_project_topic(cls, topic) -> Optional[dict]:
+        m = cls._TOPIC_RE.match((topic or "").strip())
+        if not m:
+            return None
+        return {"id": m.group(1), "leader": int(m.group(2)),
+                "workspace": m.group(3).strip() or None, "name": m.group(4).strip()}
+
+    def _spawn_topic_write(self, channel_id, topic: str):
+        if not hasattr(self.guide, "set_channel_topic"):
+            return
+        try:
+            asyncio.get_running_loop().create_task(
+                self.guide.set_channel_topic(int(channel_id), topic))
+        except RuntimeError:    # 이벤트 루프 밖(동기 테스트 등) — best-effort라 건너뜀
+            pass
+
+    def _sync_topic(self, channel_id):
+        """등록/리더 재지정 때 레지스트리 요지를 채널 토픽에 기록(best-effort, 비동기)."""
+        p = self.projects.get(int(channel_id))
+        if p:
+            self._spawn_topic_write(channel_id, self._topic_for(p))
+
+    def _clear_topic(self, channel_id):
+        self._spawn_topic_write(channel_id, "")
+
+    async def reconcile_projects_from_discord(self):
+        """부팅 시 Discord 채널 토픽으로 레지스트리를 보강한다(리클레임 내구성의 마지막 조각).
+        - 레지스트리에 없는 토픽 프로젝트(시드 이후 생겼거나 시드에도 없던 것): 토픽에서 등록 복원.
+        - 시드로 복원된 항목(seeded 마커): 토픽이 더 최신이므로 leader/workspace/name을 토픽으로 갱신
+          (리더 재지정이 시드로 원복되던 한계 해소). 런타임 디스크 항목은 그대로(디스크가 진실원).
+        끝나면 마커를 지우고, 토픽이 없거나 깨진 등록 채널엔 토픽을 다시 채워 자가치유한다."""
+        if not hasattr(self.guide, "get_channel_topics") or not self.guild_id:
+            return
+        try:
+            topics = await self.guide.get_channel_topics(self.guild_id) or {}
+        except Exception:
+            topics = {}
+        changed = False
+        for ch, topic in topics.items():
+            info = self.parse_project_topic(topic)
+            if not info:
+                continue
+            ch, cur = int(ch), self.projects.get(int(ch))
+            if cur is None:
+                # 같은 식별번호가 다른 채널에 이미 살아 있으면(채널 이동 후 남은 스테일 토픽) 유령 등록 금지
+                if any(p.get("id") == info["id"] for p in self.projects.values()):
+                    continue
+                self.projects[ch] = {"id": info["id"], "name": info["name"], "channel": ch,
+                                     "workspace": info["workspace"], "leader": info["leader"],
+                                     "summary": ""}
+                changed = True
+                self._log("project_restored_from_topic", project=info["id"], channel=ch)
+            elif cur.pop("seeded", None):
+                changed = True
+                if (cur.get("leader") != info["leader"] or cur.get("name") != info["name"]
+                        or (info["workspace"] and cur.get("workspace") != info["workspace"])):
+                    cur["leader"], cur["name"] = info["leader"], info["name"]
+                    if info["workspace"]:
+                        cur["workspace"] = info["workspace"]
+                    self._log("project_updated_from_topic", project=cur["id"], channel=ch)
+            try:
+                self._proj_n = max(self._proj_n, int(info["id"].split("-")[1]))
+            except (IndexError, ValueError):
+                pass
+        for ch, p in self.projects.items():
+            if p.pop("seeded", None):    # 토픽이 없던 시드 항목 — 시드 값이 최선, 마커만 제거
+                changed = True
+            if self.parse_project_topic(topics.get(int(ch), "")) is None:
+                self._sync_topic(ch)     # 자가치유: 등록돼 있는데 토픽이 없으면/깨졌으면 다시 기록
+        if changed:
+            self._save_projects()
 
     def _task_snapshot(self, flow, ref) -> dict:
         """미완 Task를 다음 개입에서 '되살릴' 수 있도록 최소 스냅샷으로 직렬화한다(상태블록·스레드·담당자·
@@ -545,6 +646,7 @@ class Sys:
             self._log("leader_reassigned", project=proj["id"], old=proj.get("leader"), new=leader_id)
             proj["leader"] = leader_id
             self._save_projects()
+            self._sync_topic(channel_id)   # 토픽(서버 영속)에도 반영 — 리클레임 후 시드로 원복되지 않게
         lead = proj["leader"] if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
         flow.register_project = lambda ch, name: self._register_project(ch, name, flow.workspace, flow.leader)

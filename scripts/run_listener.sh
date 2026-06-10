@@ -12,19 +12,17 @@ export CHANNEL_ID="${CHANNEL_ID:-1510828120490643517}"
 export DEPLOY_NAME="${DEPLOY_NAME:-todo-organt-demo}"
 # 로스터(직군만 — 담당자는 [Request]의 To로 런타임 결정): 2~7 시드 직군, 8~100·TEST_BOT_1 예비.
 # 토큰이 든 슬롯만 활성화된다(빈 슬롯 자동 제외). 환경변수로 ORGANT_ROSTER를 주면 그게 우선.
+# TEST_OBT_2/TEST_OBT_3은 실행환경(env)에 영속 설정된 구세대 토큰 — ORGANT_BOT_*가 든 .env는
+# gitignore라 컨테이너 리클레임 때 사라지므로, 이 폴백 슬롯 덕에 리클레임 직후에도 팀이 선다.
 if [ -z "${ORGANT_ROSTER:-}" ]; then
   R="ORGANT_BOT_2:백엔드;ORGANT_BOT_3:백엔드;ORGANT_BOT_4:프론트엔드;ORGANT_BOT_5:프론트엔드;ORGANT_BOT_6:디자이너;ORGANT_BOT_7:QA"
   for i in $(seq 8 100); do R="$R;ORGANT_BOT_$i:예비"; done
-  export ORGANT_ROSTER="$R;TEST_BOT_1:예비"
+  export ORGANT_ROSTER="$R;TEST_OBT_2:프론트엔드;TEST_OBT_3:디자이너;TEST_BOT_1:예비"
 fi
-# 프로젝트 레지스트리 복원: logs/projects.json은 gitignore(/logs/*)라 컨테이너 리클레임(재클론) 때 사라진다.
-# 커밋된 시드(organt/projects.seed.json)가 있는데 레지스트리가 없으면(=reclaim으로 유실) 시드에서 복원 →
-# 등록된 프로젝트 채널이 reclaim을 넘어 살아남는다('채널 사라짐' 방지). 레지스트리가 이미 있으면(런타임이
-# 최신) 건드리지 않는다.
-if [ -f "$HERE/organt/projects.seed.json" ] && [ ! -f "$HERE/logs/projects.json" ]; then
-  mkdir -p "$HERE/logs" && cp "$HERE/organt/projects.seed.json" "$HERE/logs/projects.json"
-  echo "[restore] logs/projects.json 없음 → 시드에서 복원(프로젝트 등록 유지)"
-fi
+# 프로젝트 레지스트리의 시드 복원은 파이썬이 한다(sys_core._load_projects): logs/projects.json이
+# 없으면 커밋 시드(organt/projects.seed.json)를 'seeded' 마커와 함께 적재하고, 부팅 reconcile이
+# Discord 채널 토픽(런타임마다 갱신되는 영속 진실원)으로 최신화한다 — 셸에서 cp 하면 마커가 없어
+# '토픽 > 시드' 우선순위가 깨지므로 여기선 복사하지 않는다.
 while true; do
   echo "===== [$(date +%H:%M:%S)] 리스너 시작 ====="
   python -m src.main

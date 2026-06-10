@@ -1065,3 +1065,92 @@ def test_되묻기후_재위임은_Redo아님():
     r = asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "구현(답 반영)"}))
     assert not any(ev[0] == "redo" for ev in f.comm.history)       # 재위임이지만 Redo 아님
     assert "응답" in r["content"][0]["text"]
+
+
+# --- 레지스트리의 리클레임 내구성: 시드(seeded 마커) + Discord 채널 토픽(영속 진실원) ---
+
+class TopicGuide(FakeGuide):
+    """채널 토픽을 흉내내는 가짜 Guide — set/get_channel_topic 기록·반환."""
+    def __init__(self, topics=None):
+        super().__init__()
+        self.topics = {int(k): v for k, v in (topics or {}).items()}
+
+    async def get_channel_topics(self, gid):
+        return dict(self.topics)
+
+    async def set_channel_topic(self, ch, topic):
+        self.calls.append(("topic", int(ch), topic))
+        self.topics[int(ch)] = topic
+        return True
+
+
+def _seed(tmp_path, projects, n=None):
+    sp = tmp_path / "projects.seed.json"
+    sp.write_text(__import__("json").dumps(
+        {"n": n or len(projects), "projects": projects}, ensure_ascii=False), encoding="utf-8")
+    return str(sp)
+
+
+def test_시드복원은_seeded마커와_함께_적재(tmp_path):
+    """logs/projects.json이 없으면(리클레임) 커밋 시드에서 복원하되 'seeded' 마커를 남긴다 —
+    reconcile이 마커를 보고 '토픽 > 시드' 우선순위를 적용할 수 있게(셸 cp 복원의 대체)."""
+    seed = _seed(tmp_path, {"9001": {"id": "P-001", "name": "스네이크", "channel": 9001,
+                                     "workspace": "/ws", "leader": 11, "summary": ""}})
+    pp = tmp_path / "projects.json"
+    s = Sys(TopicGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
+            projects_path=str(pp), seed_path=seed)
+    assert s.projects[9001]["seeded"] is True and s.projects[9001]["leader"] == 11
+    assert pp.exists()                                   # logs에 물질화(마커 포함)
+    # 디스크(logs)가 있으면 시드는 안 본다(런타임이 최신)
+    s2 = Sys(TopicGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
+             projects_path=str(pp), seed_path=_seed(tmp_path, {}))
+    assert 9001 in s2.projects
+
+
+def test_reconcile_토픽이_시드를_이기고_런타임디스크는_그대로(tmp_path):
+    """부팅 reconcile 우선순위(런타임 디스크 > 토픽 > 시드): 시드로 복원된 항목은 토픽(리더 재지정이
+    반영된 영속 진실원)이 덮고, 런타임 디스크 항목은 토픽이 못 덮는다 + 토픽만 있는 프로젝트는 복원."""
+    seed = _seed(tmp_path, {"9001": {"id": "P-001", "name": "스네이크", "channel": 9001,
+                                     "workspace": "/ws", "leader": 11, "summary": ""}})
+    g = TopicGuide(topics={
+        9001: "[ORGANT:P-001] leader=12 | ws=/ws | name=스네이크",      # 재지정된 리더(12)
+        9003: "[ORGANT:P-007] leader=12 | ws=/game | name=협동 게임",   # 디스크·시드에 없던 등록
+        9004: "그냥 사람이 적은 토픽",                                   # 무관 토픽은 무시
+    })
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"},
+            projects_path=str(tmp_path / "projects.json"), seed_path=seed)
+    asyncio.run(s.reconcile_projects_from_discord())
+    assert s.projects[9001]["leader"] == 12              # 토픽 > 시드 (리더 재지정 원복 안 됨)
+    assert "seeded" not in s.projects[9001]
+    assert s.projects[9003]["id"] == "P-007"             # 토픽에서 등록 복원
+    assert s._proj_n >= 7                                # 식별번호 카운터도 따라감(중복 발급 방지)
+    assert 9004 not in s.projects
+    # 런타임 디스크(마커 없음)는 토픽이 못 덮는다
+    s2 = Sys(TopicGuide(topics={9001: "[ORGANT:P-001] leader=12 | ws=/ws | name=스네이크"}),
+             guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"},
+             projects_path=str(tmp_path / "projects.json"))
+    s2.projects[9001]["leader"] = 11                     # 런타임 상태(디스크가 진실원)
+    asyncio.run(s2.reconcile_projects_from_discord())
+    assert s2.projects[9001]["leader"] == 11
+
+
+def test_등록과_리더재지정이_채널토픽에_기록(tmp_path):
+    """_register_project(이동 포함)·리더 재지정 때 토픽이 갱신돼야 리클레임 후 복원이 가능하다."""
+    g = TopicGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"},
+            projects_path=str(tmp_path / "projects.json"))
+
+    async def scenario():
+        s._register_project(9001, "스네이크", "/ws", 11)
+        await asyncio.sleep(0)                           # best-effort 태스크 실행 양보
+        s._register_project(9002, "스네이크", "/ws2", 11)   # 같은 이름 → 채널 이동
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+    assert g.topics.get(9001) == ""                      # 옛 채널 토픽은 비움(유령 등록 방지)
+    parsed = Sys.parse_project_topic(g.topics.get(9002, ""))
+    assert parsed and parsed["id"] == "P-001" and parsed["leader"] == 11
+    # 토픽 포맷 왕복(기록한 걸 그대로 읽을 수 있어야 복원이 성립) — 공백·파이프 포함도 보존
+    p = {"id": "P-009", "leader": 12, "workspace": "/w s", "name": "이름 | 파이프포함"}
+    back = Sys.parse_project_topic(Sys._topic_for(p))
+    assert back == {"id": "P-009", "leader": 12, "workspace": "/w s", "name": "이름 | 파이프포함"}

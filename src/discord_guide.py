@@ -220,6 +220,54 @@ class DiscordGuide:
                 continue
         return out
 
+    async def get_member_nicks(self, guild_id: int, user_ids) -> Dict[int, str]:
+        """각 봇의 현재 '서버 닉네임'(사람 이름)을 읽는다 — 닉네임은 역할처럼 서버에 영속되므로
+        재시작/리클레임(디스크가 사라져도)을 넘어 '이름 정체성'을 복원하는 진실원이 된다. 닉네임이
+        없는 봇은 결과에서 뺀다(best-effort — 실패는 건너뜀)."""
+        out: Dict[int, str] = {}
+        try:
+            guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
+        except Exception:
+            return out
+        for uid in user_ids:
+            try:
+                m = guild.get_member(int(uid)) or await guild.fetch_member(int(uid))
+                nick = getattr(m, "nick", None)
+                if nick:
+                    out[int(uid)] = nick
+            except Exception:
+                continue
+        return out
+
+    async def set_channel_topic(self, channel_id: int, topic: str) -> bool:
+        """채널 '주제(topic)'를 설정한다 — 프로젝트 레지스트리 요지의 영속 기록용. 토픽은 서버에
+        영속되므로 logs/(gitignore)가 컨테이너 리클레임으로 사라져도 채널 자체가 등록 정보를 들고
+        있어, 부팅 시 레지스트리를 복원할 수 있다(best-effort)."""
+        try:
+            ch = await self._resolve(self.system, int(channel_id))
+            await ch.edit(topic=(topic or "")[:1024])
+            return True
+        except Exception as e:
+            print(f"[discord_guide] 토픽 설정 실패 ch={channel_id}: {type(e).__name__}: {e}", flush=True)
+            return False
+
+    async def get_channel_topics(self, guild_id: int) -> Dict[int, str]:
+        """길드의 텍스트 채널 id→topic(빈 토픽 제외) — 부팅 시 프로젝트 레지스트리 복원용."""
+        out: Dict[int, str] = {}
+        try:
+            guild = self.system.get_guild(int(guild_id))
+            chans = list(guild.text_channels) if guild else []
+            if not chans:
+                guild = guild or await self.system.fetch_guild(int(guild_id))
+                chans = [c for c in await guild.fetch_channels() if hasattr(c, "topic")]
+            for c in chans:
+                topic = getattr(c, "topic", None)
+                if topic:
+                    out[int(c.id)] = topic
+        except Exception:
+            pass
+        return out
+
     # 새 봇 '원터치 초대'용 권한 — 워커가 스레드에 글 쓰고 반응/기록을 읽는 데 필요한 최소 집합
     # (View+Send+Embed+History+Reactions+Send-in-Threads). 봇 생성만 사람이 하고 초대는 링크 한 번.
     INVITE_PERMS = 1024 + 2048 + 16384 + 65536 + 64 + 274877906944  # = 274877992000

@@ -70,10 +70,16 @@ python -m src.main       # SYS 가동 → #채널에서 User [Request] 대기
 pytest -q                # 단위 테스트
 ```
 
-죽어도 자동 재시작하려면 while-true 래퍼로 감쌉니다:
+죽어도 자동 재시작하려면 while-true 래퍼로 감쌉니다(`scripts/run_listener.sh` — 원격 세션에선
+`.claude/hooks/session-start.sh`가 세션 시작마다 자동 기동):
 ```bash
 while true; do python -m src.main; echo "재시작…"; sleep 3; done
 ```
+
+> **리클레임 내구성**: 컨테이너가 회수되면 gitignore된 `logs/`·`.env`가 사라진다. 직군은 Discord
+> **역할**, 이름은 **닉네임**, 프로젝트 등록(식별번호·리더·워크스페이스)은 **채널 토픽**에서 부팅 시
+> 복원된다(우선순위: 런타임 디스크 > Discord > 커밋 시드 `organt/projects.seed.json`). 봇 토큰만은
+> 복원 불가 — 실행환경의 환경변수(또는 `.env` 재작성)로 공급해야 한다.
 
 **사용** — 디스코드 채널에서 `[Request] To: @담당 …` 형식으로 보내면 그 담당(To)이 흐름을 엽니다
 (그냥 말 걸면 로스터 첫 항목이 기본 담당자로 받음). 리더의 최종 반환이 `[Response]`로 게시됩니다.
