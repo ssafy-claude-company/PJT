@@ -171,9 +171,20 @@ class DiscordGuide:
                 ok += 1
         return ok
 
+    @staticmethod
+    def _is_job_role(r) -> bool:
+        """이 역할이 '직군 라벨 역할'인지 — 기본(@everyone)·관리(managed)·권한 역할('관리자' 등 위험 권한
+        보유)은 직군이 아니다. assign_job_role이 만드는 직군 역할은 권한 없는 순수 라벨이라 이걸로 가른다."""
+        if r.is_default() or getattr(r, "managed", False):
+            return False
+        p = r.permissions
+        return not (p.administrator or p.manage_guild or p.manage_roles)
+
     async def assign_job_role(self, guild_id: int, user_id: int, job_name: str) -> bool:
-        """봇에게 '직군'을 **Discord 역할(권한)**로 부여한다(같은 이름 역할 없으면 생성). 이름(닉네임)은
-        그대로 두고 '역할'만 더하므로 **한 봇이 직군을 여러 개** 가질 수 있다(닉네임 방식의 한계 해소).
+        """봇에게 '직군'을 **Discord 역할(권한)**로 부여한다(같은 이름 역할 없으면 생성). **1봇 1직업** —
+        새 직군 역할을 달면서 기존 '직군 역할'들은 제거한다(교체). 더하기만 하면 흐름이 거듭될수록 옛
+        직군이 누적돼(라이브 관측: 봇당 5~6개 스택) '직업 복원'이 잔재를 집는다. 직군이 아닌 권한 역할
+        ('관리자' 등)·관리 역할은 건드리지 않는다.
         System 봇에 '역할 관리' 권한 + 대상보다 높은 역할이 필요(없으면 best-effort 실패)."""
         import discord
         job = (job_name or "").strip()
@@ -186,6 +197,9 @@ class DiscordGuide:
                 role = await guild.create_role(name=job, mentionable=True, reason="Organt 직군")
             member = guild.get_member(int(user_id)) or await guild.fetch_member(int(user_id))
             await member.add_roles(role, reason="Organt 직군 배정")
+            stale = [r for r in member.roles if r.id != role.id and self._is_job_role(r)]
+            if stale:
+                await member.remove_roles(*stale, reason="Organt 직군 교체(1봇 1직업)")
             return True
         except Exception as e:
             print(f"[discord_guide] 직군 역할 부여 실패 user={user_id} job={job!r}: "
@@ -204,7 +218,8 @@ class DiscordGuide:
         """각 봇의 현재 Discord 역할 중 '커스텀 직군 역할'(@everyone·봇 통합 역할 제외)을 찾아 id→직군명.
         직군은 assign_job_role이 '직군 이름'으로 만든 역할이고, Discord 역할은 서버에 영속되므로 컨테이너
         재시작/리클레임(디스크 jobs.json까지 사라져도)을 넘어 '직업'을 복원하는 진실원이 된다(사용자 요청:
-        '권한 자체로도 유추'). 1봇 1직군이라 여러 개면 첫 번째만 돌려준다(best-effort — 실패는 건너뜀)."""
+        '권한 자체로도 유추'). 권한 역할('관리자' 등)은 직군이 아니므로 제외한다. 1봇 1직군(assign이
+        교체 방식)이라 보통 하나지만, 잔재로 여러 개면 첫 번째만 돌려준다(best-effort — 실패는 건너뜀)."""
         out: Dict[int, str] = {}
         try:
             guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
@@ -213,7 +228,7 @@ class DiscordGuide:
         for uid in user_ids:
             try:
                 m = guild.get_member(int(uid)) or await guild.fetch_member(int(uid))
-                jobs = [r.name for r in m.roles if not r.is_default() and not getattr(r, "managed", False)]
+                jobs = [r.name for r in m.roles if self._is_job_role(r)]
                 if jobs:
                     out[int(uid)] = jobs[0]
             except Exception:
@@ -246,7 +261,7 @@ class DiscordGuide:
         try:
             guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
             roles = list(guild.roles) or await guild.fetch_roles()
-            return [r.name for r in roles if not r.is_default() and not getattr(r, "managed", False)]
+            return [r.name for r in roles if self._is_job_role(r)]   # 권한 역할('관리자' 등)은 직군 풀 제외
         except Exception:
             return []
 

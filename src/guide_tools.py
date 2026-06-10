@@ -578,10 +578,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 if cur and not _is_spare(flow, me_id):
                     if _norm_job(cur) == _norm_job(role_name):
                         return _ok(f"이미 '{cur}' 직군입니다 — 그대로 진행하세요(변경 없음).")
-                    return _ok(f"자기 직군 변경 거부: 당신은 이미 '{cur}' 직군입니다 — **1봇 1직업**이라 "
-                               f"'{role_name}'(으)로 바꿀 수 없습니다(직업 기억·전문화 보호). '{role_name}' "
-                               f"직군이 필요하면 Task를 연 뒤 recruit(role='{role_name}')로 '예비' 인력을 "
-                               f"그 직군으로 채용해 합류시키세요.")
+                    # 전직 예외(사용자 정책): ① 풀에 예비가 한 명도 없거나 ② 새 직군이 기존 직군과
+                    # '비슷한 일'(도메인 토큰 공유 — 같은 직무의 명칭 변형)일 때만 전직(교체)을 허용.
+                    # 그 외에는 1봇 1직업(전문화 기억 보호) — 예비를 그 직군으로 새로 뽑는 게 정도.
+                    spares_left = [s for s in flow.pool if _is_spare(flow, s)]
+                    if spares_left and not (_job_tokens(cur) & _job_tokens(role_name)):
+                        return _ok(f"자기 직군 변경 거부: 당신은 이미 '{cur}' 직군입니다 — **1봇 1직업**이라 "
+                                   f"무관한 직군('{role_name}')으로 바꿀 수 없습니다(직업 기억·전문화 보호). "
+                                   f"'{role_name}'이 필요하면 Task를 연 뒤 recruit(role='{role_name}')로 "
+                                   f"'예비'를 그 직군으로 채용하세요(예비 {len(spares_left)}명). 전직은 "
+                                   f"예비가 없거나 기존 직군과 비슷한 일일 때만 허용됩니다.")
                 flow.bot_info[me_id] = role_name
                 if getattr(flow, "persist_role", None):
                     try:
@@ -637,10 +643,23 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     except Exception:
                         pass
             elif cur != role_name:
-                # 이미 다른 직군 보유 → **1봇 1직업**: 겸직 불가. 그 직군이 필요하면 '예비'를 새로 그 직군으로 뽑는다.
-                return _ok(f"채용 거부: {cur}(id {mid})는 이미 '{cur}' 직군입니다 — **1봇 1직업**이라 다른 직군"
-                           f"('{role_name}')을 겸할 수 없습니다(겸직 폐지). '{role_name}'이 필요하면 "
-                           f"recruit(role='{role_name}')로 '예비' 인력을 그 직군으로 새로 뽑으세요.")
+                # 이미 다른 직군 보유 — 원칙은 **1봇 1직업**(겸직 불가). 전직(교체)은 사용자 정책의 예외
+                # 둘 중 하나일 때만: ① 풀에 예비가 한 명도 없음(어쩔 수 없음) ② 새 직군이 기존 직군과
+                # '비슷한 일'(도메인 토큰 공유 — 명칭 변형 수준). 허용 시 겸직이 아니라 교체다 —
+                # 라벨·직업 기억·Discord 역할(assign_job_role이 교체 방식) 모두 새 직군 하나가 된다.
+                spares_left = [s for s in flow.pool if _is_spare(flow, s)]
+                if spares_left and not (_job_tokens(cur) & _job_tokens(role_name)):
+                    return _ok(f"채용 거부: {cur}(id {mid})는 이미 '{cur}' 직군입니다 — **1봇 1직업**이라 무관한 "
+                               f"직군('{role_name}')으로 바꿀 수 없습니다(전문화 기억 보호). '{role_name}'이 "
+                               f"필요하면 recruit(role='{role_name}')로 '예비'를 그 직군으로 새로 뽑으세요"
+                               f"(예비 {len(spares_left)}명). 전직은 예비가 없거나 기존 직군과 비슷한 일일 때만 허용됩니다.")
+                flow.bot_info[mid] = role_name
+                hired = f" — '{cur}'→'{role_name}' 전직(1봇 1직업 교체)"
+                if getattr(flow, "persist_role", None):
+                    try:
+                        flow.persist_role(mid, role_name)
+                    except Exception:
+                        pass
             # cur == role_name(이미 그 직군)이면 라벨 변경 없이 그대로 합류.
             flow.current.status.group = _group_of(flow, flow.current.team)
             # 이름은 그대로 두고 '직군'을 Discord 역할(권한)로 부여(1봇 1직업) — best-effort.

@@ -1352,11 +1352,13 @@ def test_크래시응답은_인도아님_재요청은_Redo아님():
 
 
 def test_직군보유자_자기직군_덮어쓰기_거부_1봇1직업():
-    """Task 전 '자기 직군' recruit는 예비(무직) 담당자 전용이다 — 이미 직군이 있는 봇이 다른
-    직군으로 자기를 재채용하면 거부한다(1봇 1직업·전문화 기억 보호; 라이브에서 디자이너가
+    """Task 전 '자기 직군' recruit는 예비(무직) 담당자 전용이다 — 예비가 남아 있는데 직군 보유 봇이
+    '무관한' 직군으로 자기를 재채용하면 거부한다(1봇 1직업·전문화 기억 보호; 라이브에서 디자이너가
     '게임 기획자'로 자기 직군을 덮어써 영속까지 오염되던 버그). 같은 직군 재확인은 무해 통과."""
     g = FakeGuide()
-    f = _flow(g)                                      # leader 11='L'(직군 보유)
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "M", 13: "예비"})   # 예비가 남아 있음 → 전직 예외 미적용
+    f.start_root("root")
     persisted = {}
     f.persist_role = lambda mid, role: persisted.__setitem__(mid, role)
     t = _tools(f, 11, "leader")
@@ -1365,3 +1367,29 @@ def test_직군보유자_자기직군_덮어쓰기_거부_1봇1직업():
     assert f.bot_info[11] == "L" and 11 not in persisted      # 라벨·영속 기억 모두 안 바뀜
     r2 = asyncio.run(t["recruit"].handler({"member": "11", "role": "L", "reason": "재확인"}))
     assert "이미" in r2["content"][0]["text"] and f.bot_info[11] == "L"   # 같은 직군은 무해 통과
+
+
+def test_전직_예외_예비없으면_허용_유사직군도_허용():
+    """전직(직군 교체)은 사용자 정책의 예외 둘 중 하나일 때만 허용된다 — ① 풀에 예비가 0명(어쩔 수
+    없음) ② 새 직군이 기존과 '비슷한 일'(도메인 토큰 공유). 허용 시 겸직이 아니라 '교체'다(라벨·
+    직업 기억 모두 새 직군 하나)."""
+    # ① 예비 0명 — 무관한 직군이라도 전직 허용
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드"})
+    f.start_root("root")
+    persisted = {}
+    f.persist_role = lambda mid, role: persisted.__setitem__(mid, role)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    r = asyncio.run(t["recruit"].handler({"member": "12", "role": "QA", "reason": "재배치"}))
+    assert "전직" in r["content"][0]["text"]
+    assert f.bot_info[12] == "QA" and persisted.get(12) == "QA"   # 라벨·기억 모두 교체(겸직 아님)
+    # ② 예비가 있어도 '비슷한 일'(기존 직군명 재사용 — 토큰 공유)이면 전직 허용
+    g2 = FakeGuide()
+    f2 = Flow(g2, channel_id=500, guild_id=1, leader_id=11,
+              bot_info={11: "L", 12: "디자이너", 13: "게임 비주얼 디자이너", 14: "예비"})
+    f2.start_root("root")
+    t2 = _tools(f2, 11, "leader")
+    asyncio.run(t2["create_task"].handler({"members": "12,13"}))
+    r2 = asyncio.run(t2["recruit"].handler({"member": "12", "role": "게임 비주얼 디자이너", "reason": "통합"}))
+    assert "전직" in r2["content"][0]["text"] and f2.bot_info[12] == "게임 비주얼 디자이너"
