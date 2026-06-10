@@ -7,7 +7,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repo 루트(scripts/
 cd "$HERE" || exit 1
 [ -d .venv ] && source .venv/bin/activate
 export PYTHONUNBUFFERED=1
-export ORGANT_SKIP_RECOVERY="${ORGANT_SKIP_RECOVERY-1}"   # ":-"가 아니라 "-": 0/빈 값을 의도적으로 주면 존중(복구 실행)
+# 부팅 복구 기본 = 실행(0): 재시작 틈새·수신 좀비로 유실된 미응답 요청을 자동으로 구한다(라이브에서
+# 2회 실제 유실→복구 성공). [Response]가 달린 요청은 건너뛰므로 중복 실행 위험 없음. 깨끗한
+# 슬레이트가 필요하면 ORGANT_SKIP_RECOVERY=1을 명시.
+export ORGANT_SKIP_RECOVERY="${ORGANT_SKIP_RECOVERY-0}"
 # [필수] CLI의 MCP 도구 호출 '하드 월클럭 타임아웃' 해제(사실상): 이 시스템의 request 도구는 동료의
 # 중첩 작업이 끝날 때까지 수십 분 블록되는 게 정상 설계인데, CLI 기본 한도가 이를 몇 분에 끊으면
 # 리더는 '타임아웃' 에러를 받고 파이썬 핸들러는 베턴을 쥔 고아로 남아 흐름 전체가 헛돈다(라이브 관측).
