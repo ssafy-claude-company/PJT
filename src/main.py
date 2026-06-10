@@ -304,6 +304,7 @@ async def run() -> None:
     canary = {"last_recv": time.monotonic(), "misses": 0, "ch": None, "anchor": None, "flip": False}
     try:
         canary["ch"] = await guide.get_or_create_channel(channel.guild.id, "sys-canary")
+        await guide.hide_channel(channel.guild.id, canary["ch"])   # 사람 눈에서 숨김(@everyone 차단)
         anchor_ch = await guide._resolve(system_client, canary["ch"])
         async for _m in anchor_ch.history(limit=20):
             if _m.author.id == system_client.user.id and (_m.content or "").startswith("[수신 점검]"):

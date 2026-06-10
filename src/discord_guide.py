@@ -191,6 +191,19 @@ class DiscordGuide:
         client = self.organts.get(sender_id, self.system)
         return await self._send(client, int(channel_id), content, reply_to=reply_to)
 
+    async def hide_channel(self, guild_id: int, channel_id: int) -> None:
+        """채널을 사람 눈에서 숨긴다(@everyone 보기 차단, system 봇만 허용) — 시스템 내부 채널
+        (sys-canary 등)이 사이드바·알림에 나타나지 않게. best-effort."""
+        import discord
+        try:
+            guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
+            ch = await self._resolve(self.system, int(channel_id))
+            me = guild.get_member(self.system.user.id) or await guild.fetch_member(self.system.user.id)
+            await ch.set_permissions(me, view_channel=True, send_messages=True, read_message_history=True)
+            await ch.set_permissions(guild.default_role, view_channel=False)
+        except Exception:
+            pass
+
     async def edit_message(self, channel_id, message_id, content: str) -> None:
         """시스템 봇 자신의 메시지를 수정(best-effort) — 앵커 편집형 카나리아 등."""
         ch = await self._resolve(self.system, int(channel_id))
