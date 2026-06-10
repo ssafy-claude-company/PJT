@@ -1349,3 +1349,19 @@ def test_크래시응답은_인도아님_재요청은_Redo아님():
     asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "다시 부탁"}))
     assert not any(ev[0] == "redo" for ev in f.comm.history)   # 크래시 후 재요청 = 새 위임(Redo 아님)
     assert f.current.owner_delivered is True                   # 정상 인도 성립
+
+
+def test_직군보유자_자기직군_덮어쓰기_거부_1봇1직업():
+    """Task 전 '자기 직군' recruit는 예비(무직) 담당자 전용이다 — 이미 직군이 있는 봇이 다른
+    직군으로 자기를 재채용하면 거부한다(1봇 1직업·전문화 기억 보호; 라이브에서 디자이너가
+    '게임 기획자'로 자기 직군을 덮어써 영속까지 오염되던 버그). 같은 직군 재확인은 무해 통과."""
+    g = FakeGuide()
+    f = _flow(g)                                      # leader 11='L'(직군 보유)
+    persisted = {}
+    f.persist_role = lambda mid, role: persisted.__setitem__(mid, role)
+    t = _tools(f, 11, "leader")
+    r = asyncio.run(t["recruit"].handler({"member": "", "role": "게임 기획자", "reason": "전직"}))
+    assert "거부" in r["content"][0]["text"] and "1봇 1직업" in r["content"][0]["text"]
+    assert f.bot_info[11] == "L" and 11 not in persisted      # 라벨·영속 기억 모두 안 바뀜
+    r2 = asyncio.run(t["recruit"].handler({"member": "11", "role": "L", "reason": "재확인"}))
+    assert "이미" in r2["content"][0]["text"] and f.bot_info[11] == "L"   # 같은 직군은 무해 통과

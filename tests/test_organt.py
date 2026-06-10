@@ -80,3 +80,33 @@ def test_보고_장식수평선_제거():
     out = _strip_decoration("백엔드 완료\n---\n프론트 연동됨")
     assert out == "백엔드 완료\n프론트 연동됨"
     assert _strip_decoration("결과만\n***\n___") == "결과만"
+
+
+def test_메시지수신마다_하트비트_on_activity(monkeypatch):
+    """_run_once가 메시지를 받을 때마다 on_activity를 호출한다 — 도구 호출이 없는 긴 모델 생성
+    (거대 파일 단일 Write 직전의 장문 작성)이 침묵 워치독에 '행'으로 오인되지 않게, 도구 훅
+    (Pre/Post) 사이 사각을 메시지 단위 하트비트로 메운다."""
+    import asyncio
+    beats = {"n": 0}
+    o = Organt(_cfg(), on_activity=lambda: beats.__setitem__("n", beats["n"] + 1))
+
+    class _FakeClient:
+        def __init__(self, options):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def query(self, prompt):
+            pass
+
+        async def receive_response(self):
+            for _ in range(3):
+                yield object()   # 메시지 3건 — 타입 무관, 수신 자체가 활동 신호
+
+    monkeypatch.setattr("src.organt.ClaudeSDKClient", _FakeClient)
+    asyncio.run(o._run_once("p"))
+    assert beats["n"] == 3

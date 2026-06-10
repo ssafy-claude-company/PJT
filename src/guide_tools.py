@@ -571,6 +571,17 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 채용 등은 종전대로 Task가 먼저 있어야 한다.
             self_pick = _resolve_members(spec, flow, flow.pool) if spec else []
             if role_name and ((not spec) or (self_pick and self_pick[0] == me_id)):
+                # 1봇 1직업: 이 분기는 '예비(무직)' 담당자용이다 — 이미 직군이 있는 봇이 자기 직군을
+                # 덮어쓰면(디자이너→게임 기획자) 전문화 기억이 영속 오염된다(라이브 관측). 같은 직군
+                # 재확인만 통과시키고, 다른 직군은 거부한다(필요하면 예비를 그 직군으로 뽑는 것).
+                cur = (flow._info(me_id) or "").strip()
+                if cur and not _is_spare(flow, me_id):
+                    if _norm_job(cur) == _norm_job(role_name):
+                        return _ok(f"이미 '{cur}' 직군입니다 — 그대로 진행하세요(변경 없음).")
+                    return _ok(f"자기 직군 변경 거부: 당신은 이미 '{cur}' 직군입니다 — **1봇 1직업**이라 "
+                               f"'{role_name}'(으)로 바꿀 수 없습니다(직업 기억·전문화 보호). '{role_name}' "
+                               f"직군이 필요하면 Task를 연 뒤 recruit(role='{role_name}')로 '예비' 인력을 "
+                               f"그 직군으로 채용해 합류시키세요.")
                 flow.bot_info[me_id] = role_name
                 if getattr(flow, "persist_role", None):
                     try:

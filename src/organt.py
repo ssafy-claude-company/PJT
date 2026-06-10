@@ -90,10 +90,11 @@ class Organt:
     """파일시스템에 접근하고, 세션 resume로 State를 보존하는 Organt(LLM) 본체."""
 
     def __init__(self, config: Config, options: Optional[ClaudeAgentOptions] = None,
-                 state_path=None, narrate=None):
+                 state_path=None, narrate=None, on_activity=None):
         self.config = config
         self.options = options or build_options(config)
         self.narrate = narrate   # (text)->None: 매 발화(추론) 기록 콜백(관측). 없으면 미기록.
+        self.on_activity = on_activity   # ()->None: 메시지 수신마다 호출 — 침묵 워치독 하트비트.
         # State(작업 맥락)는 세션 ID로 보존한다. 재시작(새 인스턴스) 시 파일에서 복원.
         self.state_path = (Path(state_path) if state_path is not None
                            else config.audit_log_path.parent / "organt_state.json")
@@ -131,6 +132,14 @@ class Organt:
         async with ClaudeSDKClient(options=self._options_for_call()) as client:
             await client.query(prompt)
             async for msg in client.receive_response():
+                # 메시지 수신도 '활동'이다 — 도구 호출이 없는 긴 모델 생성(거대 파일 하나를 첫 Write로
+                # 만들기 직전의 장문 사고/작성)이 침묵 워치독에 '행'으로 오인되지 않게, 도구 훅(Pre/Post)
+                # 사이의 사각을 메시지 단위 하트비트로 메운다.
+                if self.on_activity:
+                    try:
+                        self.on_activity()
+                    except Exception:
+                        pass
                 sid = getattr(msg, "session_id", None)
                 if sid:
                     captured_sid = sid

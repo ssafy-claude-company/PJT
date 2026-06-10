@@ -13,8 +13,9 @@ Organt 로스터는 ORGANT_ROSTER 환경변수로 구성한다(없으면 TEST_BO
 import asyncio
 import logging
 import os
+import time
 import traceback
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import discord
 from claude_agent_sdk import HookMatcher
@@ -82,6 +83,19 @@ def assign_stable_names(ids, existing=None) -> Dict[int, str]:
     return out
 
 
+def find_pending_request(messages, known_ids) -> Optional[Request]:
+    """채널 메시지(시간순)에서 '아직 [Response]가 안 달린 마지막 사용자 [Request]'를 찾는다.
+    봇(known_ids)이 보낸 Request는 무시하고, Response가 하나라도 뒤따르면 해제(완료로 간주).
+    부팅 복구가 메인·프로젝트 채널에 같은 판정을 쓰도록 분리한 순수 함수."""
+    pending = None
+    for m in messages:
+        if isinstance(m, Request) and m.from_id not in known_ids:
+            pending = m
+        elif isinstance(m, Response):
+            pending = None
+    return pending
+
+
 async def _connect(token: str, message_content: bool = False,
                    members: bool = False) -> Tuple[discord.Client, asyncio.Task]:
     """봇 하나를 연결하고 on_ready까지 기다린다. 일시적 TLS/클럭 스큐 블립엔 재시도.
@@ -130,13 +144,20 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
             turns = 220         # 대부분 빌드가 한 세그먼트로 끝나 '10분마다 continue 재호출' 경계가 드물게(전원기획+분배+조율 감안)
         state_path = cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"
         label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
+        heartbeat = None
+        if flow is not None:
+            def heartbeat():   # 메시지 수신 단위 하트비트 — 도구 훅 사이 사각(긴 단일 생성)을 메움
+                try:
+                    flow.last_activity = time.monotonic()
+                except Exception:
+                    pass
         return Organt(cfg, build_options(
             cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={
                 "PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label, flow=flow)])],
                 "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit, actor=organt_id, role=label, flow=flow)])],
             },
-        ), state_path=str(state_path))
+        ), state_path=str(state_path), on_activity=heartbeat)
     return organt_builder
 
 
@@ -305,30 +326,39 @@ async def run() -> None:
 
     # 부팅 복구: 응답이 안 달린 [Request](중단됐거나 연결 직전 도착)는 다시 처리한다 — 리스너가 흐름
     # 도중 죽어도 재시작 시 그 요청을 마저 완료한다([Response]가 달린 요청은 완료로 보고 건너뜀).
+    # 메인 채널만이 아니라 '등록된 프로젝트 채널'도 같은 판정으로 스캔한다 — 개입(프로젝트 채널 평문/
+    # [Request]) 도중 재시작하면 그 요청이 통째로 유실되던 구멍을 메운다(라이브 관측: 사용자가 직접
+    # 재전송해야 했음). 복수 채널의 미응답 요청은 순차로 처리(단일흐름 — SYS가 두 번째부터 큐잉).
     # ORGANT_SKIP_RECOVERY=1 이면 복구를 건너뛴다(깨끗한 슬레이트로 시작 — 이전 미응답 요청 재실행 안 함).
-    try:
-        recent = await guide.read_thread(cfg.channel_id, limit=30)
-    except Exception:
-        recent = []
     known = set(organts) | {system_client.user.id}
-    pending = None
-    for m in recent:
-        if isinstance(m, Request) and m.from_id not in known:
-            pending = m                  # User가 올린 미처리 Request 후보(응답이 뒤따르면 아래에서 해제)
-        elif isinstance(m, Response):
-            pending = None
-    if os.environ.get("ORGANT_SKIP_RECOVERY"):
-        if pending is not None:
-            seen.add(str(pending.message_id))   # 재실행 안 하되, 이후 on_message 중복도 막게 seen 처리
-            log.info("부팅 복구 건너뜀(ORGANT_SKIP_RECOVERY) — 미응답 요청 재실행 안 함")
-        pending = None
-    if pending is not None and str(pending.message_id) not in seen:
-        seen.add(str(pending.message_id))
-        if pending.to_id is None:
-            pending.to_id = leader_id
-        log.info("부팅 복구: 미응답 [Request] 재처리: %r", (pending.body or '')[:60])
-        audit.record("user_request", to=pending.to_id, body=(pending.body or '')[:200])
-        asyncio.create_task(sysm.route_channel_request(cfg.channel_id, pending))
+    skip_recovery = bool(os.environ.get("ORGANT_SKIP_RECOVERY"))
+    recover_channels = [cfg.channel_id] + [ch for ch in sysm.projects if ch != cfg.channel_id]
+    pendings = []
+    for ch in recover_channels:
+        try:
+            recent = await guide.read_thread(ch, limit=30)
+        except Exception:
+            continue                     # 사라진/접근 불가 채널은 건너뜀
+        pending = find_pending_request(recent, known)
+        if pending is None or str(pending.message_id) in seen:
+            continue
+        seen.add(str(pending.message_id))   # 재실행하든 안 하든 이후 on_message 중복은 막는다
+        if skip_recovery:
+            log.info("부팅 복구 건너뜀(ORGANT_SKIP_RECOVERY) ch=%s — 미응답 요청 재실행 안 함", ch)
+            continue
+        if pending.to_id is None:        # 프로젝트 채널이면 그 프로젝트의 등록 리더가 기본 담당
+            pending.to_id = sysm.projects[ch]["leader"] if ch in sysm.projects else leader_id
+        pendings.append((ch, pending))
+    if pendings:
+        async def _recover_all():
+            for ch, req in pendings:
+                log.info("부팅 복구: 미응답 [Request] 재처리 ch=%s: %r", ch, (req.body or '')[:60])
+                audit.record("user_request", to=req.to_id, body=(req.body or '')[:200])
+                try:
+                    await sysm.route_channel_request(ch, req)
+                except Exception:
+                    log.error("부팅 복구 처리 중 예외 ch=%s:\n%s", ch, traceback.format_exc())
+        asyncio.create_task(_recover_all())
 
     # 핫리로드: 실행 중 .env를 주기적으로 다시 읽어 '새로 떨군 토큰'을 자동 연결·합류시킨다(재시작 불필요).
     # 사람은 봇 생성+토큰을 .env에 넣기만 하면 되고, 연결·직군 닉네임·풀 합류·미초대 시 초대링크까지 자동.
