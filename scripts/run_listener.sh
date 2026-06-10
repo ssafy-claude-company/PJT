@@ -8,6 +8,12 @@ cd "$HERE" || exit 1
 [ -d .venv ] && source .venv/bin/activate
 export PYTHONUNBUFFERED=1
 export ORGANT_SKIP_RECOVERY="${ORGANT_SKIP_RECOVERY:-1}"
+# [필수] CLI의 MCP 도구 호출 '하드 월클럭 타임아웃' 해제(사실상): 이 시스템의 request 도구는 동료의
+# 중첩 작업이 끝날 때까지 수십 분 블록되는 게 정상 설계인데, CLI 기본 한도가 이를 몇 분에 끊으면
+# 리더는 '타임아웃' 에러를 받고 파이썬 핸들러는 베턴을 쥔 고아로 남아 흐름 전체가 헛돈다(라이브 관측).
+# 행 감지는 CLI가 아니라 SYS의 침묵 워치독(turn_timeout/idle_timeout, 활동 기반)이 담당한다.
+export MCP_TOOL_TIMEOUT="${MCP_TOOL_TIMEOUT:-14400000}"   # 4h(ms) — 정상 긴 위임을 안 끊게
+export MCP_TIMEOUT="${MCP_TIMEOUT:-120000}"               # MCP 서버 시작 대기 2m(ms)
 export CHANNEL_ID="${CHANNEL_ID:-1510828120490643517}"
 export DEPLOY_NAME="${DEPLOY_NAME:-todo-organt-demo}"
 # 로스터(직군만 — 담당자는 [Request]의 To로 런타임 결정): 2~7 시드 직군, 8~100·TEST_BOT_1 예비.
