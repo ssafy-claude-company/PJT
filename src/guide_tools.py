@@ -427,10 +427,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             result = (f"[확인요청 from {flow._info(to)}] {q}\n"
                       f"(→ 답을 정한 뒤, 이 작업을 {flow._info(to)}에게 request(Work)로 다시 맡기세요)")
         failed = _looks_transient(result)
-        # 동료가 'turn 한도'로 미완 반환했나(Work) — 그러면 이 Task는 완료로 못 닫고(complete_task 거부),
-        # 같은 owner에게 '이어서(continuation)' 재위임해 끝내야 한다(허위완료→다음 Task churn 차단). 미완은
-        # delivered(accept)로 안 쳐서 respond 마커를 'incomplete'로 두면, 재위임이 Redo 한도에 안 걸린다
-        # (이어가기는 '직전 결함 보완'이 아니라 '남은 작업 마저 하기'이므로 횟수 제한 없이 계속 가능).
         # owner가 '위임 도중 실제로 일했나' — 단일흐름이라 깨운 동료(+그 하위)만 활성이므로 wake 전후
         # act_count(run/Write/Edit) 증가 = owner 작업. 거짓이면 owner는 깨어났지만 착수 전/계획만 하고
         # 곧장 반환한 것(허위완료의 씨앗). 이걸로 '검증된 인도'와 '빈 응답'을 가른다.
@@ -447,8 +443,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         # (이어가기는 '직전 결함 보완'이 아니라 '남은 작업 마저 하기'이므로 횟수 제한 없이 계속 가능).
         incomplete = (kind == Kind.WORK and not was_clarify and not failed
                       and "턴 한도 도달" in (result or "")) or resumable_timeout
+        # 미완 게이트(owner_incomplete)는 '의미 있는 신호'로만 갱신한다: 미완 신호면 True, owner가
+        # '실작업을 담은 정상 응답'으로 마무리하면 False(이어가기 완료 = 게이트 자동 해제). 크래시(failed)
+        # ·실작업 없는 응답은 완료의 증거가 아니므로 직전 상태를 유지한다 — 타임아웃 미완이 후속 크래시/
+        # 빈 응답으로 풀려 미완인 채 complete가 통과되는 구멍 차단.
         if kind == Kind.WORK and not was_clarify and flow.current:
-            flow.current.owner_incomplete = incomplete
+            if incomplete:
+                flow.current.owner_incomplete = True
+            elif not failed and owner_acted:
+                flow.current.owner_incomplete = False
         is_owner_work = (kind == Kind.WORK and not was_clarify and not failed and not incomplete
                          and flow.current is not None and to == flow.current.owner)
         # owner가 Work를 받고도 실작업(run/Write) 0회로 곧장 반환 = 착수 전/계획만 = '인도 아님'.
@@ -462,9 +465,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         finally:
             # 프레임 close = 베턴 복귀(누수 방지). 정상이면 alive==to 라 그대로 닫힌다. 미완·미착수(premature)는
             # 'accept'로 안 쳐서 delivered로 기록 안 함 → 같은 owner 재위임이 Redo 한도에 안 걸리고 '실제 첫 인도'로 성립.
+            # 크래시(failed)도 'accept'가 아니다 — 인프라 실패가 '완료 인도'로 기록되면 직후 재요청이
+            # Redo(보완)로 둔갑해 한도를 태우고 owner에게 '직전 산출물 결함' 프레임으로 잘못 전달된다.
             try:
                 flow.comm.respond(to, "clarify" if was_clarify else
-                                  ("incomplete" if (incomplete or premature) else "accept"), result)
+                                  ("incomplete" if (incomplete or premature) else
+                                   "failed" if failed else "accept"), result)
             except CommError:
                 # to의 중첩 하위요청이 응답 없이 끝나(크래시/이탈) 베턴이 to에 '굳은' 비정상 상황 →
                 # me_id(요청자)가 다시 alive 될 때까지 위 프레임을 강제 close. 흐름 교착(굳음) 방지.

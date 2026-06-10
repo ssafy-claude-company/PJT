@@ -1277,3 +1277,75 @@ def test_인프라타임아웃이라도_작업했으면_이어가기():
     f.current.verified = True                                # run 검증은 됐다 쳐도
     rc = asyncio.run(tools["complete_task"].handler({"result": "끝"}))
     assert "거부" in rc["content"][0]["text"]               # 미완이라 완료 거부(허위완료 차단)
+
+
+def test_미완게이트는_크래시나_무작업응답으로_안풀림():
+    """타임아웃 미완(owner_incomplete)은 'owner의 실작업을 담은 정상 응답'만이 해제한다 — 후속 요청이
+    크래시(일시오류)나 실작업 없는 응답으로 끝나도 게이트가 풀리지 않는다(과거 정상 인도가 있었어도
+    미완인 채 complete가 통과되던 구멍 차단)."""
+    g = FakeGuide()
+    f = _flow(g)
+    st = {"mode": "timeout"}
+
+    async def wake(to, b, k):
+        if st["mode"] == "timeout":
+            f.act_count += 1                    # 작업하다 무활동으로 끊김(이어가기 대상)
+            return "API Error: timeout — 동료 무응답(행)"
+        if st["mode"] == "crash":
+            return "API Error: 500 overloaded"  # 타임아웃 아닌 크래시(일시오류)
+        return "이미 다 했습니다"                  # 실작업 없는 응답(착수·증거 없음)
+
+    f.wake = wake
+    tools = _tools(f, 11, "leader")
+    asyncio.run(tools["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(tools["set_goal"].handler({"goal": "g"}))
+    asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))
+    assert f.current.owner_incomplete is True               # 작업하다 끊김 → 미완(이어가기)
+    st["mode"] = "crash"
+    asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "이어서"}))
+    assert f.current.owner_incomplete is True               # 크래시는 완료의 증거가 아님 — 미완 유지
+    st["mode"] = "idle"
+    asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "이어서 마무리"}))
+    assert f.current.owner_incomplete is True               # 실작업 없는 응답도 미완 유지
+    f.current.verified = True
+    f.current.owner_delivered = True                        # 과거 정상 인도가 있었다 쳐도
+    rc = asyncio.run(tools["complete_task"].handler({"result": "끝"}))
+    assert "거부" in rc["content"][0]["text"]               # 이어가기 완료 전엔 마감 불가
+
+    async def wake_done(to, b, k):
+        f.act_count += 1                                    # owner가 실작업으로 마저 끝냄
+        return "남은 부분 구현·검증 완료"
+
+    f.wake = wake_done
+    asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "이어서 끝내기"}))
+    assert f.current.owner_incomplete is False              # 실작업 담은 정상 응답 → 게이트 해제
+    rc2 = asyncio.run(tools["complete_task"].handler({"result": "끝"}))
+    assert "마감" in rc2["content"][0]["text"]              # 이제 완료 허용
+
+
+def test_크래시응답은_인도아님_재요청은_Redo아님():
+    """크래시(일시오류) 응답은 '완료 인도(accept)'로 기록되지 않는다 — 직후 같은 동료 재요청이
+    Redo(직전 산출물 보완)로 둔갑해 한도를 태우거나 owner에게 '결함 보완' 프레임으로 잘못 전달되지 않는다."""
+    g = FakeGuide()
+    f = _flow(g)
+    st = {"fail": True}
+
+    async def wake(to, b, k):
+        if st["fail"]:
+            return "API Error: 529 overloaded"              # 서브프로세스 크래시 모의
+        f.act_count += 1
+        return "구현·검증 완료"
+
+    f.wake = wake
+    tools = _tools(f, 11, "leader")
+    asyncio.run(tools["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(tools["set_goal"].handler({"goal": "g"}))
+    asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))   # 크래시
+    assert not f.comm.delivered_work(11, 12)                # 크래시는 인도가 아님(accept 아님)
+    assert any(ev[0] == "respond" and ev[4] == "failed" for ev in f.comm.history)
+    st["fail"] = False
+    asyncio.run(tools["request"].handler({"to_id": "12", "kind": "Work", "body": "다시 부탁"}))
+    assert not any(ev[0] == "redo" for ev in f.comm.history)   # 크래시 후 재요청 = 새 위임(Redo 아님)
+    assert f.current.owner_delivered is True                   # 정상 인도 성립
