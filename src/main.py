@@ -138,10 +138,13 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
         # 역할: 목표는 팀 합의로 정하고(set_goal), Work 위임 본문은 '스펙'이 아니라
         # '측정가능한 목표'이며, 받은 owner가 구현·검증까지 끝까지 책임진다.
         allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
-        turns = 60          # 동료가 한 산출물을 한 번의 위임으로 끝내도록 여유(턴한도 미완 반환 줄임)
+        # 턴 한도 = 폭주(무한 루프) 브레이크일 뿐, 작업을 자르는 수단이 아니다 — 끊겨도 작업·세션은
+        # 보존되고 '이어서' 재위임으로 잇는다. 다만 큰 산출물(대형 클라 본체 등)이 한 위임 안에 끝나도록
+        # 워커 예산을 넉넉히 두고, 운영 중 조정은 환경변수로(코드 수정·재배포 불필요).
+        turns = int(os.environ.get("ORGANT_WORKER_TURNS", "120"))
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
-            turns = 220         # 대부분 빌드가 한 세그먼트로 끝나 '10분마다 continue 재호출' 경계가 드물게(전원기획+분배+조율 감안)
+            turns = int(os.environ.get("ORGANT_LEADER_TURNS", "220"))
         state_path = cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"
         label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
         # sdk 서버별 도구호출 타임아웃(ms) — CLI가 env(MCP_TOOL_TIMEOUT)보다 우선 적용하는 명시 설정.
