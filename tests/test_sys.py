@@ -1154,3 +1154,46 @@ def test_등록과_리더재지정이_채널토픽에_기록(tmp_path):
     p = {"id": "P-009", "leader": 12, "workspace": "/w s", "name": "이름 | 파이프포함"}
     back = Sys.parse_project_topic(Sys._topic_for(p))
     assert back == {"id": "P-009", "leader": 12, "workspace": "/w s", "name": "이름 | 파이프포함"}
+
+
+# --- 직군 '변형(중복) 생성' 게이트: VFX류가 흐름마다 새 이름으로 불어나던 중복 생성 오류의 근본 차단 ---
+
+def test_직군_변형생성_게이트_재사용유도와_명시적신설():
+    """기존 직군의 변형 이름(VFX 전문가 ↔ VFX 아티스트)으로 recruit하면 생성하지 않고 멈춰 세운다.
+    같은 이름은 재사용(증원)이라 통과, 변형은 보류(기존 이름 재사용 안내), 정말 다른 일을 하는
+    새 직군이면 new_role='yes'로 명시적 신설 — 시스템이 정답 이름을 정하지 않는다(하드코딩 아님)."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "백엔드", 12: "VFX 전문가", 13: "예비", 14: "예비"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": ""}))
+    r = asyncio.run(t["recruit"].handler({"role": "VFX 아티스트", "reason": "이펙트"}))
+    assert "중복 의심" in r["content"][0]["text"] and "VFX 전문가" in r["content"][0]["text"]
+    assert all(v != "VFX 아티스트" for v in f.bot_info.values())   # 변형 직군이 생기지 않음
+    # 기존 이름 그대로 → 재사용·증원 통과(같은 직군 채용 자유 정책 유지)
+    r2 = asyncio.run(t["recruit"].handler({"role": "VFX 전문가", "reason": "증원"}))
+    assert "직군으로 채용" in r2["content"][0]["text"]
+    # 정말 다른 일을 하는 새 직군 → 명시적 신설(new_role='yes')로 통과
+    r3 = asyncio.run(t["recruit"].handler({"role": "VFX 아티스트", "new_role": "yes", "reason": "다른 일"}))
+    assert "직군으로 채용" in r3["content"][0]["text"]
+
+
+def test_직군게이트_비교풀에_서버_커스텀역할_포함():
+    """비교 풀은 현재 팀 라벨만이 아니라 '서버 커스텀 역할 전체' — 토큰 유실/오프라인으로 로스터에 없는
+    봇이 보유한 직군('VFX 전문가')과도 변형 충돌을 잡는다(직군 역할은 서버에 영속이므로 그것이 진실원).
+    정확히 같은 이름은 다른 역할과 토큰이 겹쳐도 재사용으로 즉시 통과한다(오차단 금지)."""
+    class RoleGuide(FakeGuide):
+        async def get_custom_role_names(self, gid):
+            return ["VFX 전문가", "게임 비주얼 디자이너", "게임 기획자"]
+
+    f = Flow(RoleGuide(), channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "백엔드", 13: "예비", 14: "예비"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": ""}))
+    r = asyncio.run(t["recruit"].handler({"role": "VFX 디자이너", "reason": "이펙트"}))
+    assert "중복 의심" in r["content"][0]["text"] and "VFX 전문가" in r["content"][0]["text"]
+    # '게임 기획자'는 서버에 이미 있는 이름 그대로 → '게임 비주얼 디자이너'와 토큰('게임')이 겹쳐도 통과
+    r2 = asyncio.run(t["recruit"].handler({"role": "게임 기획자", "reason": "기획"}))
+    assert "직군으로 채용" in r2["content"][0]["text"]

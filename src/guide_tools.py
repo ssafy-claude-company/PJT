@@ -99,6 +99,31 @@ def _is_spare(flow, oid) -> bool:
     return (flow._info(oid) or "").strip().startswith(_SPARE_LABEL)
 
 
+def _norm_job(name: str) -> str:
+    return " ".join((name or "").split()).casefold()
+
+
+def _job_tokens(name: str):
+    return {t.casefold() for t in (name or "").split() if t}
+
+
+def _find_variant_job(name: str, existing) -> Optional[str]:
+    """기존 직군과 '이름은 다른데 토큰을 공유'하면 변형(중복 생성) 의심으로 그 기존 직군을 돌려준다.
+    recruit가 자유 텍스트 직군명을 받다 보니 흐름마다 'VFX 전문가'/'VFX 아티스트' 같은 변형이 새 역할로
+    계속 불어났다(중복 생성 오류의 뿌리). 무엇이 '정답 이름'인지는 시스템이 정하지 않는다(하드코딩 금지)
+    — 같은 이름(공백·대소문자 무시)은 기존 역할 재사용이라 통과시키고, 변형만 멈춰 세워 에이전트가
+    '재사용'인지 '진짜 새 직군'인지 명시하게 한다."""
+    mine_n, mine_t = _norm_job(name), _job_tokens(name)
+    if not mine_t:
+        return None
+    if any(_norm_job(ex) == mine_n for ex in existing):
+        return None                        # 같은 이름이 이미 있음 → 그대로 재사용(변형 아님), 즉시 통과
+    for ex in sorted(existing):            # 정렬: 같은 입력엔 같은 안내(메시지 결정성)
+        if mine_t & _job_tokens(ex):
+            return ex
+    return None
+
+
 # 협의로 '인정되는' Info인지 — 순수 응답확인 핑('응답 가능하신가요?')은 합의로 치지 않는다(빈 핑 차단).
 # 짧은데 핑 문구가 거의 전부일 때만 비실질(긴 메시지는 핑 문구가 섞여도 실질로 본다).
 _HOLLOW_PING = ("응답 가능", "응답가능", "응답 되시", "응답되시", "계신가요", "준비되셨", "들리시",
@@ -484,11 +509,35 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
           "인원이 부족하거나 '새 직군'이 필요하면 채용한다. role=맡길 직군(예: 게임 기획자, UX 디자이너, "
           "사운드 — '예비' 인력을 이 직군으로 신규 채용). member=특정 동료 id/역할명(비우고 role만 주면 예비에서 "
           "자동 선발). reason=사유. 로스터에 없는 직군도 이렇게 런타임에 채용해 쓴다. **1봇 1직업(겸직 불가)** — "
-          "이미 직군이 있는 봇에는 다른 직군을 줄 수 없으니, 필요하면 또 다른 예비를 그 직군으로 뽑는다.",
-          {"member": str, "role": str, "reason": str})
+          "이미 직군이 있는 봇에는 다른 직군을 줄 수 없으니, 필요하면 또 다른 예비를 그 직군으로 뽑는다. "
+          "**직군명은 기존 것 재사용 우선** — 같은 도메인 직군이 이미 있으면 그 이름 그대로 쓰고(변형 금지), "
+          "정말 다른 일을 하는 새 직군일 때만 new_role='yes'를 함께 줘 명시적으로 만든다.",
+          {"member": str, "role": str, "reason": str, "new_role": str})
     async def recruit(args):
         role_name = (args.get("role") or "").strip()
         spec = (args.get("member") or "").strip()
+        # [직군 중복 생성 게이트 — 근본] recruit가 자유 텍스트 직군명을 받다 보니 흐름마다 변형 이름
+        # ('VFX 전문가' 있는데 'VFX 아티스트')으로 '같은 도메인 직군'이 새 Discord 역할로 계속 불어났다.
+        # 비교 풀은 현재 팀 라벨 + '서버의 커스텀 역할 전체'(직군 역할은 서버 영속이라, 토큰 유실/오프라인
+        # 봇의 직군도 보인다). 변형이 감지되면 생성하지 않고 멈춰 세운다 — 재사용(기존 이름 그대로)이나
+        # 명시적 신설(new_role='yes')은 에이전트가 정한다(시스템이 정답 이름을 정하는 하드코딩 아님).
+        if role_name:
+            existing_jobs = {v for v in flow.bot_info.values()
+                             if v and not str(v).startswith(_SPARE_LABEL)}
+            fn_roles = getattr(g, "get_custom_role_names", None)
+            if fn_roles and getattr(flow, "guild_id", None):
+                try:
+                    existing_jobs |= set(await fn_roles(flow.guild_id) or [])
+                except Exception:
+                    pass
+            dup = _find_variant_job(role_name, existing_jobs)
+            if dup and _norm_job(args.get("new_role") or "") not in ("yes", "y", "true", "1"):
+                if flow.log:
+                    flow.log("recruit_variant_blocked", asked=role_name, existing=dup)
+                return _ok(f"직군 중복 의심으로 보류: '{role_name}'은(는) 이미 있는 직군 '{dup}'의 변형으로 "
+                           f"보입니다(같은 도메인을 다른 이름으로 또 만들면 직군이 계속 불어납니다). 같은 일이면 "
+                           f"role='{dup}' 그대로 다시 호출해 기존 직군으로 채용하세요. 정말 '{dup}'과(와) 다른 "
+                           f"일을 하는 새 직군이 필요하면 new_role='yes'를 함께 줘 명시적으로 신설하세요.")
         if flow.current is None:
             # [예비 담당자 '자기 직군 우선'] Task 열기 전에 담당자가 자기 직군부터 정하는 건 허용한다 — 자기
             # 자신 + role 지정일 때만. 이래야 '예비'인 채로 create_project/create_task를 열어 화면(상태블록·동료

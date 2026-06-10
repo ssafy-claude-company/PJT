@@ -239,6 +239,35 @@ class DiscordGuide:
                 continue
         return out
 
+    async def get_custom_role_names(self, guild_id: int) -> List[str]:
+        """길드의 커스텀(비관리·비기본) 역할 이름 목록 — 직군 중복(변형) 생성 게이트의 비교 풀.
+        직군 역할은 서버에 영속되므로, 현재 로스터에 없는 봇(토큰 유실·오프라인)이 보유한 직군도
+        여기서 보인다(예: 'VFX 전문가'가 있는데 recruit가 'VFX 아티스트'를 새로 만드는 사고 방지)."""
+        try:
+            guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
+            roles = list(guild.roles) or await guild.fetch_roles()
+            return [r.name for r in roles if not r.is_default() and not getattr(r, "managed", False)]
+        except Exception:
+            return []
+
+    async def get_guild_bot_nicks(self, guild_id: int) -> Optional[Dict[int, str]]:
+        """길드의 '모든 봇 멤버' id→닉네임(없으면 제외) — 이름 배정의 충돌 풀로 쓴다. 로스터에 연결된
+        봇만 보면, 오프라인/로스터 밖 봇이 이미 쓰는 이름(예: 토큰 유실로 안 뜬 testtest4의 '박지호')을
+        새 봇에 중복 배정하는 구멍이 생긴다 — 이름의 진실원은 '서버 전체'다.
+        **실패는 None, '진짜 닉 없음'은 {}** — 둘을 구분해야 호출자가 '조회 실패'를 '전원 무명'으로
+        오인해 전면 개명(이름 뒤섞기)하지 않는다. fetch_members는 members 인텐트 필요(system 봇만 켬)."""
+        try:
+            guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
+            out: Dict[int, str] = {}
+            async for m in guild.fetch_members(limit=None):
+                if getattr(m, "bot", False) and getattr(m, "nick", None):
+                    out[int(m.id)] = m.nick
+            return out
+        except Exception as e:
+            print(f"[discord_guide] 길드 닉네임 풀 조회 실패(개명 스킵 대상): {type(e).__name__}: {e}",
+                  flush=True)
+            return None
+
     async def set_channel_topic(self, channel_id: int, topic: str) -> bool:
         """채널 '주제(topic)'를 설정한다 — 프로젝트 레지스트리 요지의 영속 기록용. 토픽은 서버에
         영속되므로 logs/(gitignore)가 컨테이너 리클레임으로 사라져도 채널 자체가 등록 정보를 들고

@@ -78,14 +78,17 @@ def assign_stable_names(ids, existing=None) -> Dict[int, str]:
     return out
 
 
-async def _connect(token: str, message_content: bool = False) -> Tuple[discord.Client, asyncio.Task]:
+async def _connect(token: str, message_content: bool = False,
+                   members: bool = False) -> Tuple[discord.Client, asyncio.Task]:
     """봇 하나를 연결하고 on_ready까지 기다린다. 일시적 TLS/클럭 스큐 블립엔 재시도.
 
-    message_content(특권 인텐트)는 '메시지 내용을 읽어야 하는' System 봇만 True. Organt 봇은
-    게시·타이핑만 하므로 불필요 → 새 봇이 개발자 포털에서 이 인텐트를 안 켜도 연결된다(봇 추가 간소화).
+    message_content/members(특권 인텐트)는 System 봇만 True — 메시지 내용을 읽고, 길드 멤버
+    (닉네임 풀·직군 역할)를 fetch_members로 조회해야 한다(포털에 둘 다 켜져 있음). Organt 봇은
+    게시·타이핑만 하므로 불필요 → 새 봇이 개발자 포털에서 인텐트를 안 켜도 연결된다(봇 추가 간소화).
     """
     intents = discord.Intents.default()
     intents.message_content = message_content
+    intents.members = members
     last = None
     for attempt in range(4):
         client = discord.Client(intents=intents)
@@ -149,7 +152,7 @@ async def run() -> None:
     except Exception:
         pass
 
-    system_client, sys_task = await _connect(cfg.system_bot_token, message_content=True)
+    system_client, sys_task = await _connect(cfg.system_bot_token, message_content=True, members=True)
     log.info("System 봇(관리자/라우터) 연결: %s (%s)", system_client.user, system_client.user.id)
     tasks = [sys_task]
     organts: Dict[int, object] = {}
@@ -194,18 +197,28 @@ async def run() -> None:
     # 여러 개 가질 수 있고, 직군이 바뀌어도 이름은 안 바뀐다(사용자 요청). 둘 다 best-effort.
     # 닉네임도 역할처럼 '서버 영속 진실원': 기존 닉을 먼저 읽어 유지하고, 이름 없는 봇에만 새 이름을
     # 준다(연결 순서 인덱스 배정이 재시작·로스터 변동마다 같은 봇을 개명시키던 문제의 근본 해결).
+    # 충돌 풀은 '길드 전체 봇'이다 — 로스터에 연결된 봇만 보면 오프라인/토큰 유실로 안 뜬 봇이
+    # 이미 쓰는 이름을 새 봇에 중복 배정한다(예: testtest4의 '박지호'를 testtest에 또 주려던 버그).
     try:
-        existing_nicks = await guide.get_member_nicks(channel.guild.id, list(organts))
+        guild_nicks = await guide.get_guild_bot_nicks(channel.guild.id)
     except Exception:
-        existing_nicks = {}
-    names = assign_stable_names(list(organts), existing_nicks)
+        guild_nicks = None
+    if guild_nicks is None:
+        # 조회 '실패'를 '전원 무명'으로 오인하면 전면 개명으로 이름이 뒤섞인다(실측 사고) —
+        # 이름은 서버에 이미 영속이므로, 풀을 못 읽은 부팅은 개명을 통째로 건너뛰는 게 안전.
+        log.warning("길드 닉네임 풀 조회 실패 — 이번 부팅은 이름 배정을 건너뜀(기존 닉 유지)")
+    else:
+        names = assign_stable_names(list(organts), guild_nicks)
+        try:
+            to_set = {u: n for u, n in names.items() if guild_nicks.get(u) != n}   # 이미 맞는 닉은 안 건드림
+            n_name = await guide.set_nicks(channel.guild.id, to_set)
+            log.info("이름 설정 %d/%d(기존 유지 %d)", n_name, len(to_set), len(names) - len(to_set))
+        except Exception:
+            pass
     try:
-        to_set = {u: n for u, n in names.items() if existing_nicks.get(u) != n}   # 이미 맞는 닉은 안 건드림
-        n_name = await guide.set_nicks(channel.guild.id, to_set)
         jobs = {u: r for u, r in bot_info.items() if not str(r).startswith("예비")}  # 예비는 직군 역할 없음
         n_role = await guide.assign_job_roles(channel.guild.id, jobs)           # 직군 = 역할(권한)
-        log.info("이름 설정 %d/%d(기존 유지 %d) · 직군 역할 부여 %d/%d",
-                 n_name, len(to_set), len(names) - len(to_set), n_role, len(jobs))
+        log.info("직군 역할 부여 %d/%d", n_role, len(jobs))
     except Exception:
         pass
     # 원터치 초대: 토큰은 있는데 아직 '서버에 없는' 봇은 클릭 한 번이면 합류하는 초대 링크를 띄운다
@@ -346,8 +359,9 @@ async def run() -> None:
                     guide.register_organt(uid, client)
                     tasks.append(task)
                     try:
-                        nicks = await guide.get_member_nicks(channel.guild.id, list(organts))
-                        if uid not in nicks:                                  # 이름=사람 이름(이미 있으면 유지)
+                        nicks = await guide.get_guild_bot_nicks(channel.guild.id)   # 충돌 풀=길드 전체 봇
+                        # 풀 조회 실패(None)면 배정 스킵(이름 뒤섞기 방지) — 닉이 이미 있으면 유지
+                        if nicks is not None and uid not in nicks:
                             await guide.set_nick(channel.guild.id, uid,
                                                  assign_stable_names([uid], nicks)[uid])
                         if not str(role).startswith("예비"):                  # 예비면 직군 역할 없음
