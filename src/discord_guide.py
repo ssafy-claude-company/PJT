@@ -141,6 +141,40 @@ class DiscordGuide:
         ch = await guild.create_text_channel(name)
         return ch.id
 
+    async def load_role_profiles(self, guild_id: int) -> Dict[str, str]:
+        """sys-roles 채널에서 직군별 '직무 기준'을 읽는다({직군: 기준}). 한 직군 = 메시지 1개,
+        형식 '[직무기준] 직군\n본문'. Discord 영속이라 리클레임을 넘어 유지되고 사람이 직접
+        편집해 기준을 다듬을 수도 있다(시스템이 정답을 정하지 않음 — 전문가/사람이 기른다)."""
+        out: Dict[str, str] = {}
+        try:
+            cid = await self.get_or_create_channel(int(guild_id), "sys-roles")
+            ch = await self._resolve(self.system, cid)
+            async for m in ch.history(limit=200):
+                c = m.content or ""
+                if c.startswith("[직무기준] "):
+                    head, _, body = c.partition("\n")
+                    job = head[len("[직무기준] "):].strip()
+                    if job and job not in out:        # history는 최신→과거 — 최신 기준 우선
+                        out[job] = body.strip()
+        except Exception:
+            pass
+        return out
+
+    async def save_role_profile(self, guild_id: int, job: str, text: str) -> None:
+        """직군의 직무 기준을 sys-roles 채널에 영속(같은 직군 메시지가 있으면 edit, 없으면 새로)."""
+        try:
+            cid = await self.get_or_create_channel(int(guild_id), "sys-roles")
+            ch = await self._resolve(self.system, cid)
+            content = f"[직무기준] {job}\n{(text or '').strip()[:1500]}"
+            async for m in ch.history(limit=200):
+                if ((m.content or "").startswith(f"[직무기준] {job}\n")
+                        and m.author.id == self.system.user.id):
+                    await m.edit(content=content)
+                    return
+            await ch.send(content)
+        except Exception:
+            pass
+
     async def create_project_channel(self, guild_id: int, name: str) -> int:
         guild = self.system.get_guild(guild_id)
         if guild is None:

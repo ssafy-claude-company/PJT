@@ -280,6 +280,13 @@ async def run() -> None:
         await sysm.reconcile_projects_from_discord()
     except Exception:
         log.warning("프로젝트 레지스트리 토픽 복원 실패 — 건너뜀", exc_info=True)
+    # 직무 기준(craft profile) 로드 — 직군 전문가들이 작성·영속해 둔 자기검수 기준(sys-roles 채널).
+    try:
+        sysm.role_profiles.update(await guide.load_role_profiles(channel.guild.id))
+        if sysm.role_profiles:
+            log.info("직무 기준 로드: %d개 직군", len(sysm.role_profiles))
+    except Exception:
+        log.warning("직무 기준 로드 실패 — 빈 상태로 가동(첫 작업 때 작성됨)")
 
     print(f"SYS 가동 — 리더={bot_info[leader_id]}({leader_id}), 팀={list(bot_info.values())}")
     print(f"#{channel.name} 에서 User 입력 대기 중 — 그냥 말 걸어도 됩니다(Ctrl+C 종료)")

@@ -70,6 +70,11 @@ class Sys:
         self.projects_path = projects_path     # 레지스트리 영속 경로(없으면 인메모리)
         self.seed_path = seed_path             # 커밋된 시드(리클레임으로 디스크 유실 시 폴백)
         self.projects: Dict[int, dict] = {}    # channel_id → 프로젝트 컨텍스트(개입 진입점)
+        # 직군별 '직무 기준'(craft profile): {직군: 기준 텍스트}. 시스템이 정답을 정하지 않는다 —
+        # 각 직군의 전문가(그 봇)가 첫 작업 때 스스로 작성하고(보고의 [직무기준] 블록을 SYS가 흡수),
+        # Discord(sys-roles)에 영속돼 이후 모든 작업 프롬프트에 자기검수 기준으로 주입된다.
+        # QA·백엔드·프론트·런타임 채용 직군 모두 같은 메커니즘 하나로 '각자의 일'이 고도화된다.
+        self.role_profiles: Dict[str, str] = {}
         self._proj_n = 0
         self._load_projects()
 
@@ -380,6 +385,31 @@ class Sys:
         "'---' 구분선/'✅ 완성' 배너/표/긴 머리말 같은 장식은 쓰지 말고, 보고하려고 request 쓰지 마세요."
     )
 
+    def _craft_note(self, me) -> str:
+        """이 봇 직군(겸직 포함)의 '직무 기준'을 프롬프트에 주입한다 — 없으면 첫 작업 때 스스로
+        작성하게 한 번만 요청한다. 기준의 내용은 시스템이 정하지 않는다(그 직군의 전문가가 정의,
+        Discord sys-roles에 영속, 사람이 편집 가능) — QA·백엔드·프론트·런타임 직군 전부 같은
+        메커니즘으로 '각자의 일'이 고도화된다."""
+        jobs = [j.strip() for j in str(self.bot_info.get(me, "")).split("·")
+                if j.strip() and not j.strip().startswith("예비")]
+        if not jobs:
+            return ""
+        notes, missing = [], []
+        for j in jobs:
+            p = self.role_profiles.get(j)
+            if p:
+                notes.append(f"[당신의 직무 기준 — {j} 전문가의 자기검수 기준. 이 기준을 충족한 산출물만 인도하세요]\n{p}")
+            else:
+                missing.append(j)
+        if missing:
+            notes.append(
+                f"[직무 기준 작성 — 이번 한 번만] 당신 직군 '{missing[0]}'의 직무 기준이 아직 없습니다. "
+                f"이번 보고 **맨 끝에** 아래 형식으로 이 직군의 '훌륭한 산출물·검증 기준' 5~8줄을 작성해 "
+                f"포함하세요. 이후 모든 작업에서 당신의 자기검수 기준으로 영속·주입됩니다 — 당신이 이 "
+                f"직군의 전문가로서 정의하는 것입니다(일반론 말고 이 직군 특유의 품질·검증 기준으로):\n"
+                f"[직무기준] {missing[0]}\n(기준 줄들)\n[/직무기준]")
+        return ("\n\n".join(notes) + "\n\n") if notes else ""
+
     def _prompt(self, body, kind, role, me, leader_id=None):
         # '담당자'는 고정 직책이 아니라 이번 흐름의 To 수신자(=leader)다. 동료 목록엔 직군만 적고, 담당자에게만
         # '(담당자)' 표식을 단다(다른 흐름에선 같은 봇이 한 직원으로 참여).
@@ -420,6 +450,7 @@ class Sys:
                 f"당신의 역할: {my_role}\n"
                 f"{origin_note}"
                 f"받은 형태: {body}\n동료: {peers}\n\n"
+                f"{self._craft_note(me)}"
                 f"{spare_lead_note}{team_note}\n"
                 f"{self._PRINCIPLE}\n\n"
                 f"[구현은 위임 — 자문만 받고 독식 금지] **Info로 의견만 잔뜩 묻고 정작 파일은 당신이 다 만드는 건 "
@@ -517,6 +548,7 @@ class Sys:
         return (
             f"당신은 자율적으로 일하는 팀원입니다(당신도 필요하면 동료에게 먼저 묻습니다). "
             f"당신의 역할: {my_role}\n{origin_note}받은 요청({getattr(kind, 'value', kind)}): {body}\n동료: {peers}\n\n"
+            f"{self._craft_note(me)}"
             f"{self._PRINCIPLE}\n\n"
             f"**기획 단계에서 '당신 도메인의 할 일·담당'을 물으면**, 당신 전문 영역(디자인이면 디자인, 서버면 서버 등)의 "
             f"할 일을 스스로 정의해 구체적으로 제안하고 당신이 맡을 것을 밝히세요 — 리더가 당신 도메인을 대신 정하게 두지 "
@@ -560,6 +592,34 @@ class Sys:
             return await task
         finally:
             wd.cancel()
+
+    _PROFILE_RE = re.compile(r"\[직무기준\]\s*(?P<job>[^\n]+)\n(?P<body>.*?)\n?\[/직무기준\]", re.S)
+
+    async def _absorb_role_profiles(self, text: str) -> str:
+        """보고 속 [직무기준] 블록을 흡수한다 — 메모리·Discord(sys-roles)에 영속하고 본문에서 제거.
+        직군 전문가가 자기 기준을 한 번 쓰면 이후 모든 작업에 주입되는 '직무 기억'의 수집 지점."""
+        if not text or "[직무기준]" not in text:
+            return text
+        absorbed = []
+
+        def _take(m):
+            job = (m.group("job") or "").strip()
+            body = (m.group("body") or "").strip()[:1500]
+            if job and body:
+                self.role_profiles[job] = body
+                absorbed.append((job, body))
+            return ""
+
+        out = self._PROFILE_RE.sub(_take, text).strip()
+        fn = getattr(self.guide, "save_role_profile", None)
+        for job, body in absorbed:
+            self._log("role_profile_saved", job=job, size=len(body))
+            if fn and self.guild_id:
+                try:
+                    await fn(self.guild_id, job, body)
+                except Exception:
+                    pass
+        return out or "(직무 기준이 등록되었습니다.)"
 
     async def _drain_inflight(self, flow) -> str:
         """완주 중인 위임(detach 포함)이 있으면 끝까지 기다리고, 도착한 위임 결과를 이어가기 리더에게
@@ -673,8 +733,8 @@ class Sys:
                 # 워치독이 흐름 전체를 본다. 워커(비-리더) 턴은 '도구 활동이 turn_timeout 동안 완전히 멈춘'
                 # 경우(진짜 행)에만 끊는다 — 일하는 동안은 무한정 허용(하트비트). 끊기면 '인프라 실패'로 반환.
                 if role == "leader":
-                    return await _do()
-                return await self._run_until_silent(_do, flow)
+                    return await self._absorb_role_profiles(await _do())
+                return await self._absorb_role_profiles(await self._run_until_silent(_do, flow))
             except asyncio.TimeoutError:
                 self._log("agent_timeout", organt=organt_id, role=role, sec=self.turn_timeout)
                 return (f"API Error: timeout — 동료({organt_id}) 서브프로세스가 {self.turn_timeout}s 동안 "

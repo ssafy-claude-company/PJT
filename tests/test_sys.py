@@ -1592,3 +1592,38 @@ def test_read_thread_시간순과_평문개입_포함():
     assert [r.body for r in out] == ["하나", "이어서 계속해"]   # 시간순 보장 + 평문 래핑
     assert out[-1].to_id is None and out[-1].from_id == 9
     assert asyncio.run(g.read_thread(5)) == []                 # 기본값은 구조화 메시지만
+
+
+def test_직무기준_주입과_초안요청():
+    """[직군 고도화 — 하드코딩 없음] 직무 기준이 있는 직군은 프롬프트에 자기검수 기준으로 주입되고,
+    없는 직군은 '스스로 작성'을 한 번 요청받는다 — QA·백엔드·런타임 직군 전부 같은 메커니즘."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None,
+            bot_info={11: "백엔드", 12: "QA", 13: "백엔드·QA"})
+    s.role_profiles["백엔드"] = "엣지·경계값을 시뮬로 직접 재현해 검증한다"
+    p11 = s._prompt("b", Kind.WORK, "member", 11, 11)
+    assert "엣지·경계값을 시뮬로" in p11                       # 기준 보유 → 주입
+    p12 = s._prompt("b", Kind.WORK, "member", 12, 11)
+    assert "[직무기준] QA" in p12 and "직무 기준 작성" in p12   # 기준 없음 → 초안 요청
+    p13 = s._prompt("b", Kind.WORK, "member", 13, 11)
+    assert "엣지·경계값을 시뮬로" in p13 and "[직무기준] QA" in p13   # 겸직: 보유분 주입+부족분 요청
+
+
+def test_직무기준_흡수_영속_본문제거():
+    """보고 속 [직무기준] 블록은 SYS가 흡수한다 — 메모리·가이드(save_role_profile)로 영속하고
+    본문에서는 제거돼 요청자에게 깨끗한 보고만 전달된다."""
+    class _G(FakeGuide):
+        def __init__(self):
+            super().__init__()
+            self.saved = {}
+
+        async def save_role_profile(self, gid, job, text):
+            self.saved[job] = text
+
+    g = _G()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"})
+    out = asyncio.run(s._absorb_role_profiles(
+        "구현·검증 완료 보고입니다.\n[직무기준] QA\n실플레이 시나리오를 끝까지 재현한다\n경계값을 직접 친다\n[/직무기준]"))
+    assert out == "구현·검증 완료 보고입니다."                  # 본문에서 블록 제거
+    assert "실플레이 시나리오" in s.role_profiles["QA"]         # 메모리 흡수
+    assert "경계값" in g.saved["QA"]                            # 가이드 영속 호출
+    assert any(e["event"] == "role_profile_saved" for e in s.flow_log)
