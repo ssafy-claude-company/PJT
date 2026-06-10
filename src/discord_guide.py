@@ -122,6 +122,15 @@ class DiscordGuide:
 
     # --- Project = 채널 (담당 Organt가 'create_project' 기능으로 요청, System Bot이 실행) ---
 
+    async def get_or_create_channel(self, guild_id: int, name: str) -> int:
+        """이름으로 텍스트 채널을 찾고 없으면 만든다 — 시스템 채널(카나리아 등) 용도."""
+        guild = self.system.get_guild(int(guild_id)) or await self.system.fetch_guild(int(guild_id))
+        for ch in getattr(guild, "text_channels", []):
+            if ch.name == name:
+                return ch.id
+        ch = await guild.create_text_channel(name)
+        return ch.id
+
     async def create_project_channel(self, guild_id: int, name: str) -> int:
         guild = self.system.get_guild(guild_id)
         if guild is None:

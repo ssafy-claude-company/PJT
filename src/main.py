@@ -288,9 +288,23 @@ async def run() -> None:
     # 채널에 [Response]가 달렸는지로 판단한다(아래 부팅 복구) — 그래서 영속 dedup 파일은 쓰지 않는다.
     seen = set()
 
+    # 게이트웨이 수신 카나리아: RESUME 후 '프로세스는 살았는데 수신만 죽는' 좀비 세션 감지(라이브
+    # 관측: 사용자 메시지 유실). system 봇이 전용 채널에 주기적으로 캐나리아를 올리고 on_message
+    # 수신으로 살아있음을 확인 — 2주기 연속 미수신이면 자가 재기동(래퍼가 되살리고, 부팅 복구가
+    # 유실 요청을 구조). 하트비트/latency는 좀비에서도 정상이라 dispatch 수신만이 유효한 신호다.
+    canary = {"last_recv": time.monotonic(), "misses": 0, "ch": None}
+    try:
+        canary["ch"] = await guide.get_or_create_channel(channel.guild.id, "sys-canary")
+    except Exception:
+        log.warning("카나리아 채널 준비 실패 — 수신 감시 없이 가동")
+
     @system_client.event
     async def on_message(message):
         try:
+            if canary["ch"] is not None and message.channel.id == canary["ch"]:
+                if message.author.id == system_client.user.id:
+                    canary["last_recv"] = time.monotonic()   # 수신 생존 확인
+                return
             # 흐름은 User에서만 시작 — Organt/System 발화는 무시.
             if message.author.id in organts or message.author.id == system_client.user.id:
                 return
@@ -421,6 +435,27 @@ async def run() -> None:
             except Exception:
                 log.error("핫리로드 오류:\n%s", traceback.format_exc())
 
+    async def _gateway_canary():
+        if canary["ch"] is None:
+            return
+        period = int(os.environ.get("ORGANT_CANARY_PERIOD", "300"))
+        while True:
+            await asyncio.sleep(period)
+            try:
+                await guide.post(canary["ch"], system_client.user.id, "\u200b")
+            except Exception:
+                continue                      # 전송 실패 = 일반 네트워크 문제 — 수신 판정과 별개
+            await asyncio.sleep(25)           # 게이트웨이 수신 전파 여유
+            if time.monotonic() - canary["last_recv"] > period:
+                canary["misses"] += 1
+                log.error("게이트웨이 카나리아 미수신 %d회 — 수신 좀비 의심", canary["misses"])
+                if canary["misses"] >= 2:
+                    log.error("수신 좀비 확정 — 자가 재기동(래퍼가 되살리고 부팅 복구가 유실 요청을 구조)")
+                    os._exit(43)
+            else:
+                canary["misses"] = 0
+
+    tasks.append(asyncio.create_task(_gateway_canary()))
     tasks.append(asyncio.create_task(_watch_new_tokens()))
     await asyncio.gather(*tasks)
 
