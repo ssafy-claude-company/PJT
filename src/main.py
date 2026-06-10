@@ -141,10 +141,13 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
         # 턴 한도 = 폭주(무한 루프) 브레이크일 뿐, 작업을 자르는 수단이 아니다 — 끊겨도 작업·세션은
         # 보존되고 '이어서' 재위임으로 잇는다. 다만 큰 산출물(대형 클라 본체 등)이 한 위임 안에 끝나도록
         # 워커 예산을 넉넉히 두고, 운영 중 조정은 환경변수로(코드 수정·재배포 불필요).
-        turns = int(os.environ.get("ORGANT_WORKER_TURNS", "120"))
+        # 라이브 정량분석(2026-06-10): 어떤 워커도 한도 근처에 가지 않았다(최대 13회 도구호출/60턴) —
+        # 미완의 원인은 한도가 아니라 도구포기·자발 중간보고였다. 한도는 '작업을 자르는 일이 절대
+        # 없도록' 크게 두고(브레이크 역할만), 폭주는 활동 워치독·run 증거 게이트가 막는다.
+        turns = int(os.environ.get("ORGANT_WORKER_TURNS", "300"))
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
-            turns = int(os.environ.get("ORGANT_LEADER_TURNS", "220"))
+            turns = int(os.environ.get("ORGANT_LEADER_TURNS", "500"))
         state_path = cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"
         label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
         # sdk 서버별 도구호출 타임아웃(ms) — CLI가 env(MCP_TOOL_TIMEOUT)보다 우선 적용하는 명시 설정.
