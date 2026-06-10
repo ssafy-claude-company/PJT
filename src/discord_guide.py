@@ -191,6 +191,12 @@ class DiscordGuide:
         client = self.organts.get(sender_id, self.system)
         return await self._send(client, int(channel_id), content, reply_to=reply_to)
 
+    async def edit_message(self, channel_id, message_id, content: str) -> None:
+        """시스템 봇 자신의 메시지를 수정(best-effort) — 앵커 편집형 카나리아 등."""
+        ch = await self._resolve(self.system, int(channel_id))
+        msg = await ch.fetch_message(int(message_id))
+        await msg.edit(content=content[:1900])
+
     async def delete_message(self, channel_id, message_id) -> None:
         """메시지 삭제(best-effort) — 카나리아 등 시스템 잡음 정리용."""
         try:

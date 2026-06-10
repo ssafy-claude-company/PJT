@@ -295,22 +295,34 @@ async def run() -> None:
     # 채널에 [Response]가 달렸는지로 판단한다(아래 부팅 복구) — 그래서 영속 dedup 파일은 쓰지 않는다.
     seen = set()
 
-    # 게이트웨이 수신 카나리아: RESUME 후 '프로세스는 살았는데 수신만 죽는' 좀비 세션 감지(라이브
-    # 관측: 사용자 메시지 유실). system 봇이 전용 채널에 주기적으로 캐나리아를 올리고 on_message
-    # 수신으로 살아있음을 확인 — 2주기 연속 미수신이면 자가 재기동(래퍼가 되살리고, 부팅 복구가
-    # 유실 요청을 구조). 하트비트/latency는 좀비에서도 정상이라 dispatch 수신만이 유효한 신호다.
-    canary = {"last_recv": time.monotonic(), "misses": 0, "ch": None}
+    # 게이트웨이 수신 카나리아(앵커 편집형): RESUME 후 '프로세스는 살았는데 수신만 죽는' 좀비 세션
+    # 감지(라이브 관측: 사용자 메시지 유실). 하트비트/latency는 좀비에서도 정상이라 dispatch 수신만이
+    # 유효한 신호다. 채널을 메시지로 채우지 않도록 **고정 앵커 메시지 1개를 주기적으로 edit**하고
+    # 그 MESSAGE_UPDATE 수신(on_raw_message_edit)으로 생존을 확인한다 — 채널엔 안내문 1개만 영구
+    # 존재(증가 0). 2주기 연속 미수신이면 자가 재기동(래퍼 부활 + 부팅 복구가 유실 요청 구조).
+    _CANARY_TEXT = "[수신 점검] 이 채널은 시스템 수신 자가점검용입니다 — 메시지가 늘어나지 않습니다."
+    canary = {"last_recv": time.monotonic(), "misses": 0, "ch": None, "anchor": None, "flip": False}
     try:
         canary["ch"] = await guide.get_or_create_channel(channel.guild.id, "sys-canary")
+        anchor_ch = await guide._resolve(system_client, canary["ch"])
+        async for _m in anchor_ch.history(limit=20):
+            if _m.author.id == system_client.user.id and (_m.content or "").startswith("[수신 점검]"):
+                canary["anchor"] = _m.id
+                break
+        if canary["anchor"] is None:
+            canary["anchor"] = int(await guide.post(canary["ch"], system_client.user.id, _CANARY_TEXT))
     except Exception:
         log.warning("카나리아 채널 준비 실패 — 수신 감시 없이 가동")
+
+    @system_client.event
+    async def on_raw_message_edit(payload):
+        if canary["ch"] is not None and getattr(payload, "channel_id", None) == canary["ch"]:
+            canary["last_recv"] = time.monotonic()   # 앵커 edit 수신 = 게이트웨이 생존
 
     @system_client.event
     async def on_message(message):
         try:
             if canary["ch"] is not None and message.channel.id == canary["ch"]:
-                if message.author.id == system_client.user.id:
-                    canary["last_recv"] = time.monotonic()   # 수신 생존 확인
                 return
             # 흐름은 User에서만 시작 — Organt/System 발화는 무시.
             if message.author.id in organts or message.author.id == system_client.user.id:
@@ -443,20 +455,19 @@ async def run() -> None:
                 log.error("핫리로드 오류:\n%s", traceback.format_exc())
 
     async def _gateway_canary():
-        if canary["ch"] is None:
+        if canary["ch"] is None or canary["anchor"] is None:
             return
         period = int(os.environ.get("ORGANT_CANARY_PERIOD", "300"))
         while True:
             await asyncio.sleep(period)
             try:
-                mid = await guide.post(canary["ch"], system_client.user.id, "\u200b")
+                # 앵커 1개를 edit(제로폭 토글로 내용 변화 보장) — 새 메시지를 만들지 않는다.
+                canary["flip"] = not canary["flip"]
+                await guide.edit_message(canary["ch"], canary["anchor"],
+                                         _CANARY_TEXT + ("\u200b" if canary["flip"] else ""))
             except Exception:
                 continue                      # 전송 실패 = 일반 네트워크 문제 — 수신 판정과 별개
             await asyncio.sleep(25)           # 게이트웨이 수신 전파 여유
-            try:
-                await guide.delete_message(canary["ch"], mid)   # 판정 끝난 카나리아는 삭제(채널 공백 방지)
-            except Exception:
-                pass
             if time.monotonic() - canary["last_recv"] > period:
                 canary["misses"] += 1
                 log.error("게이트웨이 카나리아 미수신 %d회 — 수신 좀비 의심", canary["misses"])
