@@ -103,22 +103,32 @@ class DiscordGuide:
         관찰성. 실패해도 작업엔 영향 없게 방어적(타이핑은 부수효과).
         주의: yield는 정확히 한 번 — 본문 예외를 except로 받아 다시 yield하면(과거 형태) 제너레이터
         이중-yield로 RuntimeError가 나며 원래 예외를 가린다. 타이핑 시작/종료만 각각 방어한다."""
-        cm = None
-        try:
+        # discord.py의 ch.typing() 내장 루프는 네트워크 블립(연쇄 RESUME)에 조용히 죽는다 —
+        # 그러면 긴 작업(작업공간 작업만 하는 위임) 동안 화면이 완전히 침묵해 사용자가 '흐름이
+        # 멈췄다'고 오인한다(라이브 관측). 자체 견고 루프로 대체: 8초마다 트리거를 재발사하고,
+        # 실패하면 채널을 다시 해석해 재시도한다 — 본문이 사는 한 표시가 죽지 않는다.
+        async def _typer():
             client = self.organts.get(sender_id) if sender_id else None
-            ch = await self._resolve(client or self.system, int(channel_id))
-            cm = ch.typing()
-            await cm.__aenter__()
+            ch = None
+            while True:
+                try:
+                    if ch is None:
+                        ch = await self._resolve(client or self.system, int(channel_id))
+                    await ch.typing()      # 단발 트리거(discord.py 2.x Typing.__await__) — 약 10초 표시
+                except Exception:
+                    ch = None              # 다음 주기에 재해석·재시도(블립 내성)
+                await asyncio.sleep(8)
+
+        task = None
+        try:
+            task = asyncio.get_running_loop().create_task(_typer())
         except Exception:
-            cm = None   # 타이핑 표시 실패는 무시(전송/작업과 무관) — 본문은 그대로 진행
+            task = None
         try:
             yield
         finally:
-            if cm is not None:
-                try:
-                    await cm.__aexit__(None, None, None)
-                except Exception:
-                    pass
+            if task is not None:
+                task.cancel()
 
     # --- Project = 채널 (담당 Organt가 'create_project' 기능으로 요청, System Bot이 실행) ---
 
