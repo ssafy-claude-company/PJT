@@ -348,11 +348,11 @@ async def run() -> None:
             # 자연스러운 진행). 그 외(메인·임의 채널)는 '[Request] To: @봇' 형식만 흐름을 시작한다 — 봇이 들어가 있는
             # 아무 채널의 잡담이 작업을 트리거하지 않게(안전). 평문 트리거를 '등록 프로젝트 채널'로만 한정한 게 핵심.
             if not isinstance(req, Request):
-                if is_project and (message.content or "").strip():
+                if (is_project or is_main) and (message.content or "").strip():
                     req = Request(to_id=None, kind=Kind.WORK, body=message.content.strip(),
                                   from_id=message.author.id, message_id=str(message.id))
                 else:
-                    log.info("  → 무시(메인·임의 채널은 '[Request] To: @봇' 형식만; 평문 개입은 등록 프로젝트 채널에서만). 받은 형식이 아님.")
+                    log.info("  → 무시(임의 채널은 '[Request] To: @봇' 형식만 — 평문은 메인·등록 프로젝트 채널에서만). 받은 형식이 아님.")
                     return
             if str(message.id) in seen:      # 같은 메시지 두 번 처리 금지(세션 내 재전달 가드)
                 return
@@ -381,7 +381,8 @@ async def run() -> None:
     for ch in recover_channels:
         try:
             # 등록 프로젝트 채널은 '평문도 개입'이므로 평문까지 복구 후보로 읽는다(on_message와 동일 규칙).
-            recent = await guide.read_thread(ch, limit=30, include_plain=(ch in sysm.projects))
+            recent = await guide.read_thread(ch, limit=30,
+                                             include_plain=(ch in sysm.projects or ch == cfg.channel_id))
         except Exception:
             continue                     # 사라진/접근 불가 채널은 건너뜀
         pending = find_pending_request(recent, known)
@@ -460,7 +461,14 @@ async def run() -> None:
             return
         period = int(os.environ.get("ORGANT_CANARY_PERIOD", "300"))
         while True:
+            wall0 = time.time()
             await asyncio.sleep(period)
+            # 컨테이너 일시정지(suspend) 감지: sleep 한 번에 벽시계가 주기의 3배 이상 점프했으면
+            # 프로세스가 통째로 얼었다 깨어난 것 — 소켓·게이트웨이가 전부 죽어 있으므로 즉시 자가
+            # 재기동한다(래퍼 부활 + 부팅 복구). 라이브 관측: 유휴 6시간 정지로 봇 전체가 침묵.
+            if time.time() - wall0 > period * 3:
+                log.error("컨테이너 일시정지 후 재개 감지(시계 점프 %.0fs) — 자가 재기동", time.time() - wall0)
+                os._exit(43)
             try:
                 # 앵커 1개를 edit(제로폭 토글로 내용 변화 보장) — 새 메시지를 만들지 않는다.
                 canary["flip"] = not canary["flip"]
