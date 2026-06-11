@@ -707,13 +707,37 @@ def test_프로젝트_레지스트리_영속과_중복방지(tmp_path):
     assert s2.projects[9999]["workspace"] == "/ws2"
 
 
-def test_단일흐름_진행중_명령은_큐잉():
+def test_신규끼리_같은리더는_큐_다른리더는_병렬_큐는_접수안내():
+    """[신규×신규 완화] 신규 요청은 고유 스코프라 서로 직렬화되지 않는다 — 직렬의 근거는 스코프가
+    아니라 전역 점유(같은 리더)다. 같은 리더면 큐(+'⏸ 접수됨' 안내 즉시 표시 — 침묵하는 큐 금지),
+    다른 리더면 새 프로젝트 둘이 동시에 뜬다(라이브: 두 리더 병렬 의도가 main 직렬에 좌절+무표시)."""
     g = FakeGuide()
-    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"})
-    s.active_flows["main"] = Flow(g, 500, 1, 11, {11: "L"})    # 같은 스코프(main) 활성 흐름
-    out = asyncio.run(s.handle_user_input(500, 11, "두번째 명령", root_id=None))
-    assert out["mode"] == "queued"                    # 버리지 않고 큐에 적재
-    assert s.queue and s.queue[0][2] == "두번째 명령"
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "기획"},
+            workspace="/tmp/ws-x")
+    gate = asyncio.Event()
+    started = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        started.append(oid)
+        await gate.wait()
+        flow.current = None
+        return "ok"
+    s.run_turn = fake_run_turn
+
+    async def scenario():
+        t1 = asyncio.ensure_future(s.handle_user_input(500, 11, "첫 신규", root_id="r1"))
+        await asyncio.sleep(0.05)
+        out2 = await s.handle_user_input(500, 11, "같은 리더 신규", root_id="r2")
+        assert out2["mode"] == "queued"                       # 같은 리더 → 점유로 큐
+        assert any(c[0] == "post" and "⏸ 접수됨" in str(c[3]) for c in g.calls)   # 침묵하지 않는다
+        t3 = asyncio.ensure_future(s.handle_user_input(500, 12, "다른 리더 신규", root_id="r3"))
+        await asyncio.sleep(0.05)
+        assert started == [11, 12]                            # 다른 리더는 동시 진행(병렬)
+        gate.set()
+        await t1
+        await t3
+        assert started.count(11) == 2                         # 큐는 종료 후 드레인으로 실행됨
+    asyncio.run(scenario())
 
 
 def test_턴한도_미완이면_같은세션으로_이어서_완료():

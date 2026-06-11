@@ -1036,7 +1036,10 @@ class Sys:
 
     async def handle_user_input(self, channel_id, leader_id, user_text, root_id=None) -> dict:
         proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'(이어지는 작업)
-        scope_key = proj["id"] if proj else "main"  # 신규 요청은 'main' 직렬(동시 신규 생성 충돌 방지)
+        # [신규×신규 병렬 완화] 신규 요청도 고유 스코프로 동시 진행한다 — 과거 'main' 직렬은 등록
+        # 경합 방지용이었으나 전역 점유·스코프 선점·원자 등록 이후 근거가 소멸(라이브: 서로 다른
+        # 리더에게 보낸 두 신규가 직렬돼 병렬 의도가 좌절). 같은 리더면 전역 점유가 자연 직렬화한다.
+        scope_key = proj["id"] if proj else f"new-{int(time.time() * 1000)}"
         live = {k: f for k, f in self.active_flows.items() if not f.done}
         # 이 흐름을 이끌 봇(전망치): 명시 To(리더 재지정 포함)가 로스터에 있으면 그 봇, 아니면 등록 리더.
         # 게이트에서 미리 계산해야 '리더가 타 흐름 참여 중'을 흐름을 띄우기 전에 거를 수 있다.
@@ -1051,6 +1054,16 @@ class Sys:
             self.queue.append((channel_id, leader_id, user_text, root_id))
             self._log("queued", text=user_text[:80], depth=len(self.queue), scope=scope_key,
                       lead_busy=bool(self.engaged.busy_elsewhere(prospective_lead, scope_key)))
+            # [Rule/Status — 침묵하는 큐 금지] 접수 사실을 즉시 보이게 한다(라이브: 큐에 든 요청이
+            # 아무 표시 없이 조용해 사용자가 '못 들은 것'으로 체감). 묻기 전에 보여야 한다.
+            try:
+                await self.guide.post(
+                    channel_id, 0,
+                    f"⏸ 접수됨 — 대기열 {len(self.queue)}번째. 담당 동료가 진행 중인 작업을 마치면 "
+                    f"자동으로 시작합니다(따로 다시 보내지 않으셔도 됩니다).",
+                    reply_to=root_id)
+            except Exception:
+                pass
             return {"mode": "queued", "queued": len(self.queue)}
         # 세션 초기화는 '새 최상위 요청'에만 한다 — 기존 프로젝트 '개입(이어서/수정)'에선 건너뛴다.
         # [근본] 개입은 진행 중이던 팀·위임·owner를 '이어가야' 하는데, 세션을 지우면 리더와 동료가 그 기억을
@@ -1062,7 +1075,7 @@ class Sys:
         # 프로젝트 간 기억 교차 오염이 '구조적으로' 불가능(병렬 동시 흐름에서도 안전). 새 요청은
         # 고유 스코프로 시작하므로 '이미 했다' 앵커링도 구조적으로 차단(리셋 불필요). 같은 프로젝트
         # 개입은 그 프로젝트 스코프 파일을 resume — 기억이 이어진다.
-        session_scope = proj["id"] if proj else f"new-{int(time.time())}"
+        session_scope = proj["id"] if proj else scope_key   # 신규는 흐름 스코프=세션 스코프(단일 정체성)
         if proj:
             self._log("intervention_keep_sessions", project=proj["id"])
         # 이전 흐름의 런타임 채용(예비→직군) 라벨 원복 — dict는 그대로 두고 내용만 갱신(빌더 클로저가 참조 중).
