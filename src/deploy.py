@@ -68,6 +68,41 @@ def _check_live(url, tries=6):
     return None
 
 
+def _verify_live_assets(url, workspace, limit=12, tries=3, wait=6, fetch=None):
+    """[구조 검증 — 스테일 배포 차단] '배포 성공'을 선언하기 전에, 라이브가 **방금 만든 그 파일**을
+    서빙하는지 바이트 대조로 증명한다. URL 200은 '서버가 떠 있다'까지만 보증한다 — 옛 빌드가
+    캐시/이전 배포로 서빙되는데 '배포 완료'로 보고되던 부류(라이브 관측: 클라 수정이 라이브에
+    안 보임 → 사용자 재보고)를 도구 레벨에서 원천 차단한다. 대조 대상 = 클라이언트가 실제로 받는
+    public/* 정적 파일(서버 코드는 비서빙이라 대조 불가). public/ 없는 산출물(순수 API 서버 등)은
+    생략. 직후 전파 지연을 감안해 재시도 후에도 다르면 불일치 목록을 반환(비면 통과)."""
+    pub = Path(workspace) / "public"
+    if not pub.is_dir():
+        return []
+    if fetch is None:
+        def fetch(u):
+            req = urllib.request.Request(u, headers={"Cache-Control": "no-cache"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return r.read()
+    names = sorted(p.name for p in pub.iterdir() if p.is_file())[:limit]
+    bad = []
+    for attempt in range(tries):
+        bad = []
+        for nm in names:
+            local = (pub / nm).read_bytes()
+            try:
+                live = fetch(f"{url.rstrip('/')}/{nm}")
+            except Exception as e:
+                bad.append(f"{nm}(조회 실패: {str(e)[:60]})")
+                continue
+            if live != local:
+                bad.append(f"{nm}(라이브 {len(live)}B ≠ 산출물 {len(local)}B)")
+        if not bad:
+            return []
+        if attempt < tries - 1:
+            time.sleep(wait)      # 새 인스턴스/엣지 전파 직후의 일시 불일치 — 잠시 뒤 재대조
+    return bad
+
+
 def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="singapore"):
     """workspace를 name repo로 push하고 Render 웹서비스로 배포 → 결과 문자열(라이브 URL 포함)."""
     ws = Path(workspace)
@@ -150,7 +185,17 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
         if status == "live":
             served = _check_live(url)          # 라이브 URL이 '실제로 응답'하는지까지 확인
             if served:
-                return f"배포 성공 ✅ 라이브(HTTP {served} 확인): {url}  (repo: {repo_url})"
+                # [완료 = 증명된 완료] 응답(200)만으론 부족하다 — 라이브가 '방금 만든 그 파일'을
+                # 서빙하는지까지 바이트 대조로 확인해야 '배포 성공'을 말할 수 있다(스테일 배포가
+                # 완료로 보고되던 구멍의 도구 레벨 차단). 불일치면 이 호출 자체가 실패라서,
+                # 리더는 구조적으로 이 상태를 '완료'로 보고할 수 없다.
+                stale = _verify_live_assets(url, workspace)
+                if stale:
+                    return (f"배포 실패(스테일 서빙): Render는 live지만 라이브 파일이 산출물과 다릅니다 — "
+                            f"{', '.join(stale[:4])}. 옛 빌드가 서빙 중일 수 있습니다 — 캐시 헤더·빌드 "
+                            f"로그를 확인하고 다시 배포하세요(이 상태로 '완료' 보고 금지).")
+                return (f"배포 성공 ✅ 라이브(HTTP {served} + 산출물 바이트 일치 확인): {url}  "
+                        f"(repo: {repo_url})")
             return f"배포 실패: Render는 live인데 {url} 가 응답하지 않음(서버 기동 실패 가능) — 로그 확인 필요."
         if status in _TERMINAL_FAIL:
             return f"배포 실패(Render {status}) — 빌드 로그 확인 필요. 예정 URL: {url}"

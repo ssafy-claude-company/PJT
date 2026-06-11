@@ -2218,3 +2218,27 @@ def test_Task_체크포인트_전이마다_영속_마감시_해제(tmp_path):
     f.current.owner_incomplete = False
     asyncio.run(t["complete_task"].handler({"result": "끝"}))
     assert s.projects[500]["open_task"] is None                    # 마감 즉시 해제(유령 복원 방지)
+
+
+def test_배포검증_라이브가_산출물과_다르면_성공선언_불가(tmp_path):
+    """[완료 = 증명된 완료] deploy는 URL 응답(200)만으론 성공을 말할 수 없다 — 라이브가 '방금 만든
+    그 파일'을 서빙하는지 바이트 대조까지 통과해야 한다. 스테일 배포(옛 빌드 서빙)가 '배포 완료'로
+    보고되던 부류(라이브 관측 — 사용자 재보고로 발견)의 도구 레벨 차단."""
+    from src.deploy import _verify_live_assets
+    pub = tmp_path / "public"
+    pub.mkdir()
+    (pub / "app.js").write_bytes(b"NEW BUILD v2")
+    (pub / "index.html").write_bytes(b"<html>v2</html>")
+    live = {"app.js": b"OLD BUILD v1", "index.html": b"<html>v2</html>"}
+
+    def fetch(u):
+        return live[u.rsplit("/", 1)[-1]]
+    bad = _verify_live_assets("https://x.example", str(tmp_path), tries=2, wait=0, fetch=fetch)
+    assert len(bad) == 1 and "app.js" in bad[0] and "≠" in bad[0]      # 스테일 파일 정확히 적발
+    live["app.js"] = b"NEW BUILD v2"                                    # 전파 완료 시나리오
+    assert _verify_live_assets("https://x.example", str(tmp_path), tries=1, wait=0, fetch=fetch) == []
+    def fetch_fail(u):
+        raise OSError("timeout")
+    bad2 = _verify_live_assets("https://x.example", str(tmp_path), tries=1, wait=0, fetch=fetch_fail)
+    assert len(bad2) == 2 and "조회 실패" in bad2[0]                    # 조회 불가도 성공 선언 불가
+    assert _verify_live_assets("https://x.example", str(tmp_path / "없음"), fetch=fetch) == []  # public 없음=생략
