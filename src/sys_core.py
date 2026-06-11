@@ -181,16 +181,24 @@ class Sys:
         self._roster_labels[int(mid)] = role
         self._save_jobs()
 
-    def _register_project(self, channel_id, name, workspace, leader) -> str:
+    def _register_project(self, channel_id, name, workspace, leader, purpose="") -> str:
         """프로젝트를 1급 엔티티로 등록 → 식별번호 P-XXX 부여. 같은 채널이나 같은 이름이 이미
-        있으면 재사용(중복 방지). 등록 채널에 다시 명령이 오면 '개입'으로 라우팅된다."""
+        있으면 재사용(중복 방지). 등록 채널에 다시 명령이 오면 '개입'으로 라우팅된다.
+        purpose = 프로젝트를 탄생시킨 **사용자 원문**(docs Project.md의 '방향성') — 개입마다
+        주입돼, 마지막 미완 Task만 보고 마감하는 시야 협착을 막는다(라이브 관측: '이어서 진행해'가
+        아트 Task 하나만 닫고 멀티·배포가 남은 프로젝트를 끝났다고 보고)."""
         ch = int(channel_id)
         if ch in self.projects:
+            if purpose and not self.projects[ch].get("purpose"):
+                self.projects[ch]["purpose"] = purpose[:700]
+                self._save_projects()
             return self.projects[ch]["id"]
         # 같은 이름이 이미 있으면 식별번호를 '그대로 유지'하고 채널만 현재 것으로 이동(증가/중복 금지)
         for c, p in list(self.projects.items()):
             if p.get("name") == name:
                 p["channel"], p["workspace"] = ch, workspace
+                if purpose and not p.get("purpose"):
+                    p["purpose"] = purpose[:700]
                 self.projects[ch] = p
                 if c != ch:
                     del self.projects[c]
@@ -201,7 +209,8 @@ class Sys:
         self._proj_n += 1
         pid = f"P-{self._proj_n:03d}"
         self.projects[ch] = {"id": pid, "name": name, "channel": ch,
-                             "workspace": workspace, "leader": leader, "summary": ""}
+                             "workspace": workspace, "leader": leader, "summary": "",
+                             "purpose": purpose[:700]}
         self._save_projects()
         self._sync_topic(ch)
         return pid
@@ -1011,7 +1020,9 @@ class Sys:
         # (asyncio 단일 스레드 — 게이트 검사~여기까지 await 없음). start_root의 재등록은 멱등.
         self.engaged.engage(lead, scope_key)
         flow.comm.attach_engagement(self.engaged, scope_key)
-        flow.register_project = lambda ch, name: self._register_project(ch, name, flow.workspace, flow.leader)
+        flow.register_project = lambda ch, name: self._register_project(
+            ch, name, flow.workspace, flow.leader,
+            purpose=self._origin_request)   # 프로젝트의 존재 이유 = 그 흐름을 시작시킨 사용자 원문
         # '기억'(직업 고정): 예비가 recruit로 직군을 받으면 그 직업을 다음 흐름에도 유지하도록 로스터 라벨에 반영
         # — 흐름 시작 때 _roster_labels로 원복되므로, 여기에 기록해야 채용한 직업이 지속된다(1봇 1직업의 연속성).
         flow.persist_role = self._persist_job   # 채용한 직군을 메모리+디스크(jobs.json)에 영속(재시작에도 유지)
@@ -1042,9 +1053,16 @@ class Sys:
                     f"끝내세요: 남은 부분을 owner에게 request(Work)로 맡기고(이미 정해진 팀·owner 존중 — 가로채 혼자 "
                     f"마무리 금지), run으로 검증한 뒤 complete_task로 **이 블록**을 마감하세요. 만약 사용자가 **명백히 "
                     f"다른 새 작업**을 원한 거면, 이 Task를 먼저 적절히 마무리(complete_task)한 뒤 새 Task를 여세요(당신 판단).\n\n")
-            # [Project.Context 주입 — docs Project.md "Organts는 Context를 숙지한다"] 직전 흐름의 마감
-            # 요약을 리더에게 참고로 준다. 기록만 되고 읽는 곳이 없던 단절(감사 발견)의 복원 — 특히
-            # 리클레임/세션 유실 후의 차가운 시작에서 프로젝트의 핵심 결정·방향성이 이어진다.
+            # [Project.Context 주입 — docs Project.md "Organts는 Context를 숙지한다"] ① 프로젝트 목표
+            # (사용자 원문 — 존재 이유)와 ② 직전 흐름의 마감 요약을 리더에게 준다. 목표가 없으면
+            # '마지막 미완 Task 마감 = 프로젝트 끝'으로 시야가 좁아진다(라이브 관측: 아트 Task만 닫고
+            # 멀티·배포가 남은 프로젝트를 종료 보고). 기록만 되고 읽는 곳이 없던 단절(감사 발견)의 복원.
+            purpose_note = ""
+            if (proj.get("purpose") or "").strip():
+                purpose_note = (
+                    f"[프로젝트 목표 — 사용자 원문(이 프로젝트의 존재 이유)] {proj['purpose'].strip()}\n"
+                    f"(이번 개입·복원 Task를 마감해도 **이 목표에 남은 부분이 있으면 새 Task로 이어가거나, "
+                    f"남은 일을 보고 끝에 명시**하세요 — Task 하나의 마감이 프로젝트의 끝이 아닙니다)\n\n")
             ctx_note = ""
             if (proj.get("summary") or "").strip():
                 ctx_note = (f"[프로젝트 최근 맥락 — 직전 흐름의 마감 보고] {proj['summary'].strip()}\n"
@@ -1052,6 +1070,7 @@ class Sys:
             body = (
                 f"[프로젝트 {proj['id']} 개입 — 기존 산출물 수정] 이미 작업공간·산출물이 있습니다. create_project 다시 만들지 마세요.\n"
                 f"사용자가 보고한 요청/증상: {user_text}\n\n"
+                f"{purpose_note}"
                 f"{ctx_note}"
                 f"{resume_note}"
                 f"[이어지는 작업 — 처음부터 다시 짜지 말 것(중요)] 당신은 이 프로젝트에서 일한 **이전 세션 맥락을 그대로 "

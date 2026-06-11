@@ -2159,3 +2159,28 @@ def test_프로젝트_Context가_개입프롬프트에_주입(tmp_path):
     s.projects[100]["summary"] = ""
     asyncio.run(s.handle_user_input(100, 11, "또 개선해", root_id=None))
     assert "프로젝트 최근 맥락" not in bodies[1]                             # 빈 요약이면 블록 없음
+
+
+def test_프로젝트_목표원문_등록·개입주입(tmp_path):
+    """[Project.Context 완성] 프로젝트 등록 때 '그 흐름을 시작시킨 사용자 원문'을 purpose로 영속하고,
+    이후 모든 개입 프롬프트에 [프로젝트 목표]로 주입한다 — 재개 흐름이 마지막 미완 Task만 닫고
+    '멀티·배포가 남은 프로젝트'를 종료 보고하던 시야 협착(라이브 관측)의 구조적 차단."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"},
+            workspace="/tmp/ws-x", session_dir=str(tmp_path))
+    bodies = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        bodies.append(body)
+        if flow.register_project and not flow.project_id:
+            flow.workspace = str(tmp_path)
+            flow.project_id = flow.register_project(900, "세포게임")   # 리더가 create_project 한 셈
+        flow.current = None
+        return "1차 작업 완료"
+    s.run_turn = fake_run_turn
+    원문 = "온라인 세포 키우기 게임 만들어줘 스페이스바 분열·먹이·지뢰·멀티까지"
+    asyncio.run(s.handle_user_input(500, 11, 원문, root_id=None))
+    assert s.projects[900].get("purpose") == 원문                    # 원문이 영속됨
+    asyncio.run(s.handle_user_input(900, 11, "이어서 진행해", root_id=None))
+    assert "[프로젝트 목표" in bodies[1] and "지뢰·멀티" in bodies[1]  # 개입마다 목표 주입
+    assert "Task 하나의 마감이 프로젝트의 끝이 아닙니다" in bodies[1]
