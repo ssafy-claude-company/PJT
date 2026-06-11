@@ -332,6 +332,22 @@ class Sys:
                 f"지금: {who} · 위임 {done}건 완주 · 세그먼트 {max(1, flow.leader_segment)}\n"
                 f"마지막 활동: {idle}초 전")
 
+    def _similar_projects(self, text) -> str:
+        """새 요청과 기존 프로젝트(이름+목표 원문)의 토큰 겹침으로 유사 후보를 찾는다 — 임계는
+        '겹친 토큰 3개 이상 또는 요청 토큰의 30%'. 정답을 정하지 않는다(신설/재사용은 리더 판단),
+        리더가 몰라서 중복 신설하는 일만 막는다."""
+        toks = {t for t in re.split(r"[^0-9A-Za-z가-힣]+", str(text or "")) if len(t) >= 2}
+        if not toks:
+            return ""
+        out = []
+        for p in self.projects.values():
+            base = f"{p.get('name', '')} {p.get('purpose', '')}"
+            ptoks = {t for t in re.split(r"[^0-9A-Za-z가-힣]+", base) if len(t) >= 2}
+            inter = toks & ptoks
+            if len(inter) >= max(3, int(len(toks) * 0.3)):
+                out.append(f"{p['id']} '{p.get('name', '')}'")
+        return " / ".join(out[:3])
+
     def _checkpoint_open_task(self, flow) -> None:
         """[크래시-세이프 Task 스냅샷] 흐름 '도중' Task 전이마다 미완 Task를 레지스트리에 영속한다 —
         종전엔 흐름 '종료' 시에만 써서, 동면(컨테이너 정지)·강제종료처럼 마감 코드가 못 도는 죽음이면
@@ -714,7 +730,12 @@ class Sys:
 
         def _take(m):
             job = (m.group("job") or "").strip()
-            body = (m.group("body") or "").strip()[:1500]
+            body = (m.group("body") or "").strip()
+            if len(body) > 1500:
+                # 하드캡은 '줄 단위'로 — 문장 중간 절단은 양질 데이터를 지키려던 장치가 데이터를
+                # 훼손하는 역설(절단된 반쪽 원칙이 매 턴 주입됨). 마지막 완전한 줄까지만 남긴다.
+                cut = body[:1500]
+                body = cut[:cut.rfind("\n")] if "\n" in cut else cut
             if job and body:
                 self.role_profiles[job] = body
                 absorbed.append((job, body))
@@ -754,12 +775,20 @@ class Sys:
         jobs = self.pick_distill_jobs()
         return jobs[0] if jobs else None
 
+    # [위생 증류 발동선] 기준이 이 길이를 넘으면 새 경험이 없어도 '정리 전용' 수면 대상 — 기준은
+    # 매 턴 주입되므로 비대=주의 분산이고, 하드캡 절단 사고 전에 전문가 스스로 통합·다이어트하게 한다.
+    _HYGIENE_AT = int(os.environ.get("ORGANT_HYGIENE_AT", "1100"))
+
     def pick_distill_jobs(self):
-        """증류 후보 직군들을 '경험 많은 순'으로 모두 준다 — [병렬] 일부 전문가가 흐름에 묶여
-        있어도 한가한 다음 전문가가 자기계발할 수 있게(수면 사이클이 가용한 첫 후보를 고른다)."""
+        """증류 후보 직군들 — ① 경험이 쌓인 직군(많은 순) ② 기준이 비대해진 직군(위생 증류,
+        경험 0이어도). [병렬] 일부 전문가가 흐름에 묶여 있어도 가용한 다음 후보가 자기계발한다."""
         cands = sorted(((len(v), k) for k, v in self.role_experience.items()
                         if len(v) >= self._DISTILL_MIN), reverse=True)
-        return [k for _, k in cands]
+        jobs = [k for _, k in cands]
+        for job, prof in self.role_profiles.items():
+            if job not in jobs and len(prof or "") > self._HYGIENE_AT:
+                jobs.append(job)               # 정리 전용 수면 — 쌓기가 아니라 솎아내기
+        return jobs
 
     def _bot_of_job(self, job):
         """그 직군을 보유한 봇(겸직 포함)을 찾는다 — 증류는 그 직군의 전문가 본인이 한다."""
@@ -776,7 +805,8 @@ class Sys:
         (회사가 일하는 중에도 한가한 직원은 자기계발 — 전역 점유 장부로 흐름과의 겹침을 차단)."""
         mid = self._bot_of_job(job)
         exp = self.role_experience.get(job) or []
-        if mid is None or len(exp) < self._DISTILL_MIN:
+        hygiene = len(self.role_profiles.get(job) or "") > self._HYGIENE_AT   # 정리 전용 수면 자격
+        if mid is None or (len(exp) < self._DISTILL_MIN and not hygiene):
             return False
         if self.engaged.holder(mid) is not None:
             return False                                  # 그 전문가가 흐름 참여 중 → 이번 주기 스킵
@@ -798,12 +828,20 @@ class Sys:
             organt = self.organt_builder(mid, server, "member", flow, state_tag=f"distill_{mid}")
         except TypeError:
             organt = self.organt_builder(mid, server, "member", flow)   # 구형 빌더 호환(테스트 등)
+        # [수면의 본질 = 정리(인간 수면의 기억 통합·솎아냄)] 더 많이 아는 게 아니라 더 선명하게.
+        # LLM 특성: 기준은 매 턴 프롬프트에 주입되므로 길이=주의 분산 — 양질 소수 원칙이 효력의 조건.
+        # 구조가 예산(원칙 수·길이)을 강제하고, 무엇을 남길지는 전문가가 정한다(자기정의 보존).
+        raw = ("\n".join(f"- {e}" for e in exp) if exp
+               else "(이번 수면은 새 경험 없음 — **정리 전용**: 기존 기준의 중복을 합치고 군더더기를 빼 더 선명하게)")
         prompt = (
             f"[자기계발 시간 — 직무 기준 증류] 당신은 '{job}' 전문가입니다. 도구를 쓰지 말고 텍스트로만 답하세요.\n\n"
             f"현재 직무 기준:\n{cur}\n\n"
-            f"최근 실작업에서 쌓인 경험(원석):\n" + "\n".join(f"- {e}" for e in exp) + "\n\n"
-            f"위 경험 중 '앞으로도 반복 적용될 일반화 가치'가 있는 교훈만 골라 직무 기준에 녹여, 개선된 "
-            f"기준 전체(5~10줄)를 작성하세요. 일회성 디테일·특정 프로젝트 한정 사항은 버리세요. "
+            f"최근 실작업에서 쌓인 경험(원석):\n{raw}\n\n"
+            f"수면의 본질은 '쌓기'가 아니라 '정리'입니다 — 전문가의 힘은 긴 규칙집이 아니라 소수의 깊은 "
+            f"원칙입니다. 일반화 가치가 있는 교훈만 골라 기준에 녹이되:\n"
+            f"- 새 교훈이 기존 원칙과 겹치면 **별도 추가가 아니라 기존 원칙에 합쳐** 더 일반적인 한 원칙으로.\n"
+            f"- **예산: 원칙 최대 8개, 각 2줄 이내, 전체 1,000자 이내** — 넘치면 가장 덜 일반적인 원칙을 버리세요.\n"
+            f"- 일회성 디테일·특정 프로젝트 한정 사항은 버리세요.\n"
             f"반드시 아래 형식만으로 답하세요:\n[직무기준] {job}\n(개선된 기준 줄들)\n[/직무기준]"
         )
         try:
@@ -1124,6 +1162,15 @@ class Sys:
             self._log("intervention", project=proj["id"], text=user_text[:60])
         else:
             flow.workspace = self.workspace
+            # [공급 원칙 — 유사 프로젝트 알림] 같은 요청의 재전송이 리더의 이름 짓기 운(한글/영문)에
+            # 따라 '기존 이어가기 vs 신설'로 갈리던 비결정성(라이브: 동일 원문 → P-006 중복 신설).
+            # 판단은 리더 몫, 정보는 구조가 — 신설 전에 알아야 할 사실을 결정 지점에 공급한다.
+            sim = self._similar_projects(user_text)
+            if sim:
+                body = (f"[유사 프로젝트 존재 — 신설 전에 판단] {sim}\n"
+                        f"이 요청이 위 프로젝트의 연장·개선이면 **새 프로젝트를 만들지 말고** create_project에 "
+                        f"**그 프로젝트와 같은 이름**을 써서 재사용하세요(작업공간·채널·배포 슬롯이 이어집니다). "
+                        f"명백히 다른 작품일 때만 새 이름으로 신설하세요.\n\n") + body
         if root_id is not None:
             flow.start_root(root_id)
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")

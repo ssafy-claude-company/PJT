@@ -2348,3 +2348,66 @@ def test_이어가기_본문에_팀·소유_시스템사실_재주입(tmp_path):
     assert "[시스템 기록 — 현재 Task T-1]" in cont
     assert "Owner: 백엔드" in cont and "측정가능 g" in cont
     assert "[프로젝트 팀 전체]" in cont and "구성원이 아닙니다" in cont
+
+
+def test_수면은_정리자_예산과_통합지시_위생증류(tmp_path):
+    """[수면 = 정리자(인간 수면의 통합·솎아냄)] ① 증류 프롬프트에 구조 예산(원칙 최대 8개·1,000자)과
+    '추가가 아니라 통합' 지시가 들어간다. ② 기준이 비대(>1,100자)하면 새 경험이 없어도 '정리 전용'
+    수면이 발동한다 — 더 많이가 아니라 더 선명하게."""
+    prompts = []
+
+    class FakeOrgant:
+        async def handle(self, prompt):
+            prompts.append(prompt)
+            return "[직무기준] QA\n핵심 원칙으로 통합·정리됨\n[/직무기준]"
+
+    def builder(mid, server, role, flow=None, state_tag=None):
+        return FakeOrgant()
+
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=builder, bot_info={21: "QA"},
+            session_dir=str(tmp_path))
+    s.role_profiles["QA"] = "- 비대한 원칙\n" * 140         # 1,260자(>1,100 발동선, 경험은 0)
+    assert "QA" in s.pick_distill_jobs()                     # 위생 증류 후보로 떠오름
+    assert asyncio.run(s.distill_role("QA")) is True         # 경험 0이어도 정리 전용 수면 실행
+    p = prompts[0]
+    assert "정리 전용" in p                                   # 새 경험 없음 → 다이어트 모드 명시
+    assert "원칙 최대 8개" in p and "1,000자" in p            # 구조 예산
+    assert "기존 원칙에 합쳐" in p                            # 기본 동사 = 통합(추가 아님)
+    assert s.role_profiles["QA"] == "핵심 원칙으로 통합·정리됨"  # 다이어트 반영
+
+
+def test_기준_하드캡은_줄단위_절단(tmp_path):
+    """절단 사고 방지 — 1,500자 초과 기준은 문장 중간이 아니라 마지막 완전한 줄까지만 흡수한다
+    (반쪽 원칙이 매 턴 주입되는 데이터 오염 차단)."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "QA"},
+            session_dir=str(tmp_path))
+    long_line = "- " + "가" * 120
+    body = "\n".join(long_line for _ in range(20))           # 2,400자+
+    asyncio.run(s._absorb_role_profiles(f"[직무기준] QA\n{body}\n[/직무기준]"))
+    saved = s.role_profiles["QA"]
+    assert len(saved) <= 1500
+    assert saved.endswith(long_line)                          # 마지막이 '완전한 줄'
+
+
+def test_유사프로젝트_존재시_신설전_정보공급(tmp_path):
+    """[공급 원칙] 새 요청이 기존 프로젝트와 유사하면 리더 프롬프트에 그 사실을 공급한다 —
+    같은 요청의 재전송이 이름 짓기 운에 따라 중복 신설되던 비결정성(라이브 P-006)의 교정.
+    판단(재사용/신설)은 리더 몫, 정보만 구조가."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"},
+            workspace="/tmp/ws-x", session_dir=str(tmp_path))
+    s.projects = {900: {"id": "P-005", "name": "공공데이터 웹사이트", "channel": 900,
+                        "workspace": "/tmp/x", "leader": 11, "summary": "",
+                        "purpose": "공공 데이터를 하나 받아와서 이를 활용한 웹 사이트 만들어줘"}}
+    bodies = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        bodies.append(body)
+        flow.current = None
+        return "ok"
+    s.run_turn = fake_run_turn
+    asyncio.run(s.handle_user_input(500, 11, "공공 데이터를 받아와서 활용한 웹 사이트 만들어줘", root_id=None))
+    assert "[유사 프로젝트 존재" in bodies[0] and "P-005" in bodies[0]
+    assert "같은 이름" in bodies[0]                           # 재사용 경로 안내
+    asyncio.run(s.handle_user_input(501, 11, "스네이크 게임 만들어줘", root_id=None))
+    assert "[유사 프로젝트 존재" not in bodies[1]             # 무관한 요청엔 없음
