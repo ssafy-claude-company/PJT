@@ -289,7 +289,8 @@ async def run() -> None:
         log.warning("직무 기준 로드 실패 — 빈 상태로 가동(첫 작업 때 작성됨)")
 
     print(f"SYS 가동 — 리더={bot_info[leader_id]}({leader_id}), 팀={list(bot_info.values())}")
-    print(f"#{channel.name} 에서 User 입력 대기 중 — 그냥 말 걸어도 됩니다(Ctrl+C 종료)")
+    print(f"#{channel.name} 에서 User 입력 대기 중 — 메인 채널은 '[Request] To: @봇' 형식, "
+          f"등록 프로젝트 채널은 평문도 개입으로 받습니다(Ctrl+C 종료)")
 
     # 같은 메시지를 이 세션에서 두 번 처리하지 않는 가드(디스코드 재전달 등). 재시작 간 '완료 여부'는
     # 채널에 [Response]가 달렸는지로 판단한다(아래 부팅 복구) — 그래서 영속 dedup 파일은 쓰지 않는다.
@@ -348,11 +349,13 @@ async def run() -> None:
             # 자연스러운 진행). 그 외(메인·임의 채널)는 '[Request] To: @봇' 형식만 흐름을 시작한다 — 봇이 들어가 있는
             # 아무 채널의 잡담이 작업을 트리거하지 않게(안전). 평문 트리거를 '등록 프로젝트 채널'로만 한정한 게 핵심.
             if not isinstance(req, Request):
-                if (is_project or is_main) and (message.content or "").strip():
+                # 평문 트리거는 '등록 프로젝트 채널'만 — 메인(#test)·임의 채널은 [Request] 형식만.
+                # (메인 평문 허용을 검토했으나 사용자 결정으로 제외: 잡담이 흐름을 오발사할 위험이 큼.)
+                if is_project and (message.content or "").strip():
                     req = Request(to_id=None, kind=Kind.WORK, body=message.content.strip(),
                                   from_id=message.author.id, message_id=str(message.id))
                 else:
-                    log.info("  → 무시(임의 채널은 '[Request] To: @봇' 형식만 — 평문은 메인·등록 프로젝트 채널에서만). 받은 형식이 아님.")
+                    log.info("  → 무시(메인·임의 채널은 '[Request] To: @봇' 형식만; 평문 개입은 등록 프로젝트 채널에서만). 받은 형식이 아님.")
                     return
             if str(message.id) in seen:      # 같은 메시지 두 번 처리 금지(세션 내 재전달 가드)
                 return
@@ -381,8 +384,7 @@ async def run() -> None:
     for ch in recover_channels:
         try:
             # 등록 프로젝트 채널은 '평문도 개입'이므로 평문까지 복구 후보로 읽는다(on_message와 동일 규칙).
-            recent = await guide.read_thread(ch, limit=30,
-                                             include_plain=(ch in sysm.projects or ch == cfg.channel_id))
+            recent = await guide.read_thread(ch, limit=30, include_plain=(ch in sysm.projects))
         except Exception:
             continue                     # 사라진/접근 불가 채널은 건너뜀
         pending = find_pending_request(recent, known)
