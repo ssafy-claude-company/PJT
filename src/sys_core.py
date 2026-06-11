@@ -75,6 +75,7 @@ class Sys:
         # Discord(sys-roles)에 영속돼 이후 모든 작업 프롬프트에 자기검수 기준으로 주입된다.
         # QA·백엔드·프론트·런타임 채용 직군 모두 같은 메커니즘 하나로 '각자의 일'이 고도화된다.
         self.role_profiles: Dict[str, str] = {}
+        self.role_experience: Dict[str, list] = {}   # 직군별 '일하며 쌓인 경험' 최근 요점(Skill 강화 v1)
         self.profiles_path = (os.path.join(session_dir, "role_profiles.json") if session_dir else None)
         self._load_profiles()
         self._proj_n = 0
@@ -324,6 +325,8 @@ class Sys:
         try:
             data = json.load(open(self.profiles_path, encoding="utf-8"))
             self.role_profiles.update({k: v for k, v in (data.get("profiles") or {}).items() if v})
+            self.role_experience.update({k: list(v)[-self._EXP_KEEP:]
+                                         for k, v in (data.get("experience") or {}).items() if v})
         except Exception:
             pass
 
@@ -333,7 +336,8 @@ class Sys:
         try:
             tmp = f"{self.profiles_path}.tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"profiles": self.role_profiles}, f, ensure_ascii=False, indent=2)
+                json.dump({"profiles": self.role_profiles, "experience": self.role_experience},
+                          f, ensure_ascii=False, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, self.profiles_path)
@@ -447,6 +451,13 @@ class Sys:
                 notes.append(f"[당신의 직무 기준 — {j} 전문가의 자기검수 기준. 이 기준을 충족한 산출물만 인도하세요]\n{p}")
             else:
                 missing.append(j)
+            exp = self.role_experience.get(j)
+            if exp:
+                notes.append(f"[당신의 최근 경험 — {j} 직군이 실제 작업에서 얻은 교훈. 같은 함정을 반복하지 마세요]\n"
+                             + "\n".join(f"- {e}" for e in exp[-6:]))
+        if jobs:
+            notes.append("[경험 남기기] 이번 작업에서 직군 차원의 교훈(함정·효과적이었던 방법)을 얻었다면 보고 끝에 "
+                         f"`[경험] {jobs[0]}` / 교훈 1~2줄 / `[/경험]` 블록으로 남기세요(다음 작업에 주입됩니다). 없으면 생략.")
         if missing:
             notes.append(
                 f"[직무 기준 작성 — 이번 한 번만] 당신 직군 '{missing[0]}'의 직무 기준이 아직 없습니다. "
@@ -640,13 +651,15 @@ class Sys:
             wd.cancel()
 
     _PROFILE_RE = re.compile(r"\[직무기준\]\s*(?P<job>[^\n]+)\n(?P<body>.*?)\n?\[/직무기준\]", re.S)
+    _EXP_RE = re.compile(r"\[경험\]\s*(?P<job>[^\n]+)\n(?P<body>.*?)\n?\[/경험\]", re.S)
+    _EXP_KEEP = 12   # 직군별 최근 경험 보존 줄 수(누적 상한 — 압축은 '기억 증류' 고도화의 몫)
 
     async def _absorb_role_profiles(self, text: str) -> str:
         """보고 속 [직무기준] 블록을 흡수한다 — 메모리·Discord(sys-roles)에 영속하고 본문에서 제거.
         직군 전문가가 자기 기준을 한 번 쓰면 이후 모든 작업에 주입되는 '직무 기억'의 수집 지점."""
-        if not text or "[직무기준]" not in text:
+        if not text or ("[직무기준]" not in text and "[경험]" not in text):
             return text
-        absorbed = []
+        absorbed, learned = [], []
 
         def _take(m):
             job = (m.group("job") or "").strip()
@@ -656,12 +669,26 @@ class Sys:
                 absorbed.append((job, body))
             return ""
 
-        out = self._PROFILE_RE.sub(_take, text).strip()
-        if absorbed:
+        def _learn(m):
+            job = (m.group("job") or "").strip()
+            body = (m.group("body") or "").strip()[:600]
+            if job and body:
+                lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+                cur = self.role_experience.setdefault(job, [])
+                cur.extend(lines)
+                del cur[:-self._EXP_KEEP]   # 최근 N줄만(압축은 기억 증류의 몫)
+                learned.append((job, len(lines)))
+            return ""
+
+        out = self._PROFILE_RE.sub(_take, text)
+        out = self._EXP_RE.sub(_learn, out).strip()
+        if absorbed or learned:
             self._save_profiles()   # 디스크 영속(사용자 디스코드를 시스템 데이터로 오염시키지 않음)
             for job, body in absorbed:
                 self._log("role_profile_saved", job=job, size=len(body))
-        return out or "(직무 기준이 등록되었습니다.)"
+            for job, n in learned:
+                self._log("role_experience_saved", job=job, lines=n)
+        return out or "(직무 기준/경험이 기록되었습니다.)"
 
     async def _drain_inflight(self, flow) -> str:
         """완주 중인 위임(detach 포함)이 있으면 끝까지 기다리고, 도착한 위임 결과를 이어가기 리더에게

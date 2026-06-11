@@ -1687,3 +1687,27 @@ def test_세션_교차오염_차단_다른프로젝트_개입은_리셋(tmp_path
     asyncio.run(s.handle_user_input(200, 11, "B 개입", root_id=None))     # 다른 프로젝트 → 리셋
     assert not (tmp_path / "organt_state_11.json").exists()
     assert s._last_scope() == "P-00B"
+
+
+def test_Skill강화_경험_흡수_주입_상한(tmp_path):
+    """[Skill 강화 v1] 보고의 [경험] 블록을 흡수해 직군별로 누적(상한 유지)·디스크 영속하고,
+    다음 작업 프롬프트에 '최근 경험'으로 주입한다 — '일하며 쌓인 경험'이 다음 작업의
+    '일하기 전 학습'이 되는 순환(압축은 기억 증류 고도화의 몫)."""
+    import json as _json
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "QA"},
+            session_dir=str(tmp_path))
+    out = asyncio.run(s._absorb_role_profiles(
+        "검증 완료.\n[경험] QA\n소켓 e2e는 서버 기동 1.5초 대기 후가 안정적\n[/경험]"))
+    assert out == "검증 완료."                                   # 본문에서 블록 제거
+    assert "1.5초" in s.role_experience["QA"][0]                 # 누적
+    saved = _json.load(open(tmp_path / "role_profiles.json", encoding="utf-8"))
+    assert "1.5초" in saved["experience"]["QA"][0]               # 디스크 영속
+    for i in range(20):                                          # 상한(_EXP_KEEP) 유지
+        asyncio.run(s._absorb_role_profiles(f"r\n[경험] QA\n교훈{i}\n[/경험]"))
+    assert len(s.role_experience["QA"]) == s._EXP_KEEP
+    p = s._prompt("b", Kind.WORK, "member", 11, 11)
+    assert "최근 경험" in p and "교훈19" in p                     # 다음 작업에 주입
+    assert "[경험] QA" in p                                      # 경험 남기기 안내
+    s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "QA"},
+             session_dir=str(tmp_path))
+    assert s2.role_experience["QA"]                              # 재기동 복원
