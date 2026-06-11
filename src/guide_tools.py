@@ -25,7 +25,7 @@ import anyio
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from .communication import CommError, CommunicationManager, RedoLimitExceeded
+from .communication import BusyInOtherFlow, CommError, CommunicationManager, RedoLimitExceeded
 from .protocol import Kind, TaskStatus
 
 _DEBUG = bool(os.environ.get("ORGANT_DEBUG"))
@@ -46,7 +46,8 @@ FLOW_TOOLS = [REQUEST_TOOL, RECRUIT_TOOL, RUN_TOOL]
 # 리더(코디네이터) 흐름 도구: 조율만(run 없음) — 구현·실행은 owner/QA가 한다.
 COORD_TOOLS = [REQUEST_TOOL, RECRUIT_TOOL]
 LEADER_TOOLS = [f"mcp__guide__{n}" for n in
-                ("create_project", "create_task", "set_goal", "complete_task", "deploy", "vote", "meet")]
+                ("create_project", "create_task", "set_goal", "complete_task", "deploy", "vote", "meet",
+                 "compete")]
 
 # run 툴 안전 차단: 파괴/탈출/저장소·시스템 경로/네트워크 외 명령은 막는다(npm·node·curl·python은 허용).
 _RUN_DENY = ("rm -rf", "rm -r ", "sudo", "shutdown", "reboot", "mkfs", "dd if=", ":(){",
@@ -116,6 +117,68 @@ def _jobs_of(label) -> List[str]:
 
 def _job_tokens(name: str):
     return {t.casefold() for t in (name or "").split() if t}
+
+
+def _free_alternatives(flow, me_id, to) -> str:
+    """[전역 점유] 타 흐름에 점유된 to 대신 '지금 가용한 같은 직군 동료'와 채용 옵션을 안내문으로.
+    재시도(폴링) 대신 구조적 선택지를 줘서, 점유 거부가 막다른 길이 아니라 분기점이 되게 한다."""
+    eng, scope = flow.comm.engagement, flow.comm.scope
+    jobs = {_norm_job(j) for j in _jobs_of(flow._info(to) or "")} - {""}
+    alts = []
+    for b in flow.pool:
+        if b in (to, me_id) or _is_spare(flow, b):
+            continue
+        if jobs and not (jobs & {_norm_job(j) for j in _jobs_of(flow._info(b) or "")}):
+            continue
+        if eng is not None and scope is not None and eng.busy_elsewhere(b, scope):
+            continue
+        alts.append(f"{flow._info(b)}(id {b})")
+    spares = [s for s in flow.pool if _is_spare(flow, s)]
+    parts = []
+    if alts:
+        parts.append("지금 가용한 같은 직군 동료: " + ", ".join(alts[:4]))
+    if spares:
+        parts.append(f"또는 recruit(role=…)로 예비 {len(spares)}명 중 채용")
+    return ("; ".join(parts) if parts else
+            "지금은 같은 직군의 가용 동료가 없습니다 — 다른 직군 동료로 진행 가능한 부분을 먼저 하거나, "
+            "불가하면 그 사정을 보고에 남기세요")
+
+
+async def _fork_collect(flow, me_id, members, body_of, kind=Kind.INFO):
+    """[병렬 Info fork-join] '독립 의견 수집'(표결·회의 1라운드)을 동시에 돈다 — Communication.md
+    13–14행("여럿(병렬)은 이 제약을 완화하는 Feature로 둔다")의 구현. 완화는 정확히 이 구간뿐:
+    - 가지(branch)는 comm 프레임을 열지 않는다 → 가지 봇은 '활성'이 아니므로 request가 규약
+      에러로 자연 차단된다(가지의 중첩 요청 금지가 프롬프트가 아니라 구조로 강제 — 답만 한다).
+    - 회사 풀 관점은 전역 점유로 일관: 수집 동안 가지 봇은 점유돼 타 흐름이 못 집어가고, 끝나면
+      즉시 풀로 돌아간다. 타 흐름 점유/이 흐름에서 위임 보유 중인 멤버는 건너뛴다(부분 조인 —
+      일부 멤버 때문에 수집 전체가 막히지 않는다).
+    - 행 안전: 각 가지는 워커 침묵 워치독이 종결을 보장 → 조인이 영원히 안 닫히는 일이 구조적으로
+      없다. 동시 폭은 ORGANT_FORK_FAN(기본 3)으로 묶는다(토큰 속도 운영 노브, 1이면 직렬과 동일).
+    kind: 가지의 작업 종류 — Info(의견 수집, 기본)면 훅이 가지의 선구현(Write/Edit)을 종전대로
+    차단하고, Work(경쟁 구현)면 구현을 허용한다(flow.fork_kind로 프레임 없는 가지에 게이트 연결).
+    반환: 멤버 순서 보존 [(member, res|None, 제외/실패 사유)]."""
+    eng, scope = flow.comm.engagement, flow.comm.scope
+    sem = asyncio.Semaphore(max(1, int(os.environ.get("ORGANT_FORK_FAN", "3"))))
+
+    async def _branch(m):
+        if flow.comm.is_busy(m):
+            return (m, None, "(이 흐름에서 진행 중인 위임 보유 — 이번 수집에서 제외)")
+        if eng is not None and scope is not None and eng.busy_elsewhere(m, scope):
+            return (m, None, f"(타 흐름({eng.holder(m)}) 참여 중 — 이번 수집에서 제외)")
+        if eng is not None and scope is not None:
+            eng.engage(m, scope)
+        flow.fork_kind[m] = kind
+        try:
+            async with sem:
+                return (m, await flow.wake(m, body_of(m), kind), "")
+        except Exception as e:
+            return (m, None, f"(수집 실패: {e})")
+        finally:
+            flow.fork_kind.pop(m, None)
+            if eng is not None and scope is not None and not flow.comm.is_busy(m):
+                eng.release(m, scope)
+
+    return list(await asyncio.gather(*(_branch(m) for m in members)))
 
 
 def _find_variant_job(name: str, existing) -> Optional[str]:
@@ -239,6 +302,8 @@ class Flow:
         self.inflight_tasks = set()    # 진행 중 위임의 '완주 태스크'들 — CLI가 도구 호출을 포기해도 위임은
                                        #   계속 완주하며(중첩 가능), SYS가 이어가기 전에 이들의 완주를 기다린다
         self.detached_results = []     # 포기당한(detached) 위임의 완주 결과 — 이어가기 리더에게 전달
+        self.write_lease = {}          # [경쟁 구현] 행위자→샌드박스: 훅이 리스 밖 Write/Edit를 거부
+        self.fork_kind = {}            # [fork 수집] 행위자→Kind: 프레임 없는 가지에도 선구현 게이트 적용
         self.log = None                # (event, **fields) 콜백 — SYS가 주입(flow.jsonl 영속)
 
     def start_root(self, root_id):
@@ -384,6 +449,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         # 검증→점유는 await 없이 인접 실행 → 형제 요청과 경합하지 않음(원자적).
         try:
             flow.comm.check_request(me_id, to, kind)
+        except BusyInOtherFlow as e:
+            # [전역 점유] 규약 위반이 아니라 '그 동료가 지금 다른 흐름에서 일하는 중' — 무서운 '거부'
+            # 대신 가용 대안(같은 직군 동료·채용)을 안내한다. 같은 동료 재시도(폴링)는 금지 문구로 차단.
+            if flow.log:
+                flow.log("req_busy_elsewhere", frm=me_id, to=to, holder=str(e.holder_scope or ""),
+                         kind=str(getattr(kind, "value", kind)), seg=flow.leader_segment)
+            _dbg(f"{tag} ⏸점유:타 흐름({e.holder_scope})")
+            return _ok(f"[동료 점유] {flow._info(to) or to}는 지금 다른 흐름({e.holder_scope})에서 일하는 "
+                       f"중입니다 — 같은 동료에게 재시도하며 기다리지 마세요(폴링 금지). "
+                       f"{_free_alternatives(flow, me_id, to)}.")
         except CommError as e:
             if flow.log:   # 관측: 거부 시점의 베턴 상태(alive)·요청자를 영속 기록 → 원인 규명
                 flow.log("req_rejected", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),
@@ -993,9 +1068,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         tools.append(complete_task)
 
         @tool("vote",
-              "팀 표결(구조적 합의): 선택지를 두고 멤버 전원의 선택+근거를 한 번에 수집·집계한다. "
-              "question=안건, options='선택지1;선택지2;...', members=쉼표구분(비우면 현재 Task 팀 전원). "
-              "1:1 Info를 여러 번 도는 대신 합의를 구조화 — 결과(집계+근거)를 보고 리더가 확정한다.",
+              "팀 표결(구조적 합의): 선택지를 두고 멤버 전원의 선택+근거를 **동시에**(독립·앵커링 방지) "
+              "수집·집계한다. question=안건, options='선택지1;선택지2;...', members=쉼표구분(비우면 현재 "
+              "Task 팀 전원). 1:1 Info를 여러 번 도는 대신 합의를 구조화 — 결과(집계+근거)를 보고 리더가 확정한다.",
               {"question": str, "options": str, "members": str})
         async def vote(args):
             if flow.current is None:
@@ -1008,31 +1083,28 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             voters = [v for v in voters if v != me_id and not _is_spare(flow, v)]
             if not voters:
                 return _ok("오류: 표결할 멤버가 없습니다.")
+            if (any(not x.done() for x in getattr(flow, "inflight_tasks", ()))
+                    and flow.comm.alive != me_id and not flow.comm.done):
+                return _ok("[대기] 직전 위임이 아직 진행 중입니다 — 표결은 그 결과를 받은 뒤 여세요.")
+            if flow.comm.done or flow.comm.alive != me_id:
+                return _ok(f"지금은 표결을 열 수 없습니다(활성={flow.comm.alive}) — 진행 중인 요청의 "
+                           f"응답을 받은 뒤 다시 시도하세요.")
             question = str(args.get("question", "")).strip()
 
             detached = {"on": False}
 
             async def _run_vote():
+                # [병렬 fork-join] 표는 서로 '독립'(앵커링 방지)이라 동시 수집이 의미를 바꾸지 않고
+                # 시간만 줄인다 — 수집이 싸지면 표결을 아껴 쓰지 않게 된다(협동 빈도↑ = 품질).
+                def body_of(v):
+                    return (f"[표결 — 독립 의견] 안건: {question}\n선택지: {' / '.join(opts)}\n"
+                            f"동료들의 표는 보이지 않습니다(앵커링 방지). 당신의 전문가 관점에서 "
+                            f"하나를 고르고 근거를 2줄 이내로. 반드시 형식: [표] 선택지명\n근거")
                 tally, reasons = {o: 0 for o in opts}, []
-                for v in voters:
-                    if flow.comm.done or flow.comm.alive != me_id:
-                        break
-                    try:
-                        frame = flow.comm.request(me_id, v, "vote", Kind.INFO)
-                    except CommError as e:   # 같은 턴의 병렬 도구와 베턴 경합 — 크래시 대신 중단 기록
-                        reasons.append(f"(중단 — 베턴 경합: {str(e)[:60]})")
-                        break
-                    body = (f"[표결] 안건: {question}\n선택지: {' / '.join(opts)}\n"
-                            f"당신의 전문가 관점에서 하나를 고르고 근거를 2줄 이내로. 반드시 형식: "
-                            f"[표] 선택지명\n근거")
-                    try:
-                        res = await flow.wake(v, body, Kind.INFO)
-                    except Exception as e:
-                        res = f"(표결 실패: {e})"
-                    try:
-                        flow.comm.respond(v, "accept", res)
-                    except CommError:
-                        pass
+                for v, res, note in await _fork_collect(flow, me_id, voters, body_of):
+                    if res is None:
+                        reasons.append(f"{flow._info(v) or v}: {note}")
+                        continue
                     m = re.search(r"\[표\]\s*([^\n]+)", res or "")
                     pick = (m.group(1).strip() if m else "")
                     chosen = next((o for o in opts if o in pick or pick in o), None)
@@ -1067,9 +1139,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         tools.append(vote)
 
         @tool("meet",
-              "라운드로빈 회의: 주제를 두고 멤버들이 서로의 발언을 보며 라운드를 돌아 토론한다(회의록 반환). "
-              "topic=주제, members=쉼표구분(비우면 현재 Task 팀 전원), rounds=라운드 수(기본 2). "
-              "1:1 중계 없이 실제 다자 토론을 구조화 — 회의록을 보고 리더가 수렴·확정한다.",
+              "라운드로빈 회의: 1라운드는 전원의 '독립 의견'을 동시에 수집하고(앵커링 방지), 2라운드부터 "
+              "서로의 발언을 보며 직렬로 토론한다(회의록 반환). topic=주제, members=쉼표구분(비우면 현재 "
+              "Task 팀 전원), rounds=라운드 수(기본 2). 1:1 중계 없이 실제 다자 토론을 구조화 — 회의록을 "
+              "보고 리더가 수렴·확정한다.",
               {"topic": str, "members": str, "rounds": str})
         async def meet(args):
             if flow.current is None:
@@ -1079,6 +1152,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             members = [m for m in members if m != me_id and not _is_spare(flow, m)]
             if not members:
                 return _ok("오류: 회의할 멤버가 없습니다.")
+            if (any(not x.done() for x in getattr(flow, "inflight_tasks", ()))
+                    and flow.comm.alive != me_id and not flow.comm.done):
+                return _ok("[대기] 직전 위임이 아직 진행 중입니다 — 회의는 그 결과를 받은 뒤 여세요.")
+            if flow.comm.done or flow.comm.alive != me_id:
+                return _ok(f"지금은 회의를 열 수 없습니다(활성={flow.comm.alive}) — 진행 중인 요청의 "
+                           f"응답을 받은 뒤 다시 시도하세요.")
             topic = str(args.get("topic", "")).strip()
             try:
                 rounds = max(1, min(3, int(str(args.get("rounds", "2")).strip() or "2")))
@@ -1087,7 +1166,21 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
 
             async def _run_meet():
                 minutes = []
-                for r in range(1, rounds + 1):
+                # 1라운드 = 독립 의견 fork(동시 수집) — 첫 입장은 서로를 안 보는 게 앵커링 없는
+                # 진짜 다양성이고, 동시 수집이라 회의 비용도 준다(회의가 싸져야 자주 연다 = 협동성).
+                def body_r1(m):
+                    return (f"[회의 1라운드 — 독립 의견] 주제: {topic}\n(이 라운드에선 동료 발언이 "
+                            f"보이지 않습니다 — 앵커링 방지)\n당신({flow._info(m)})의 전문 관점 "
+                            f"입장을 3~5줄로, 근거와 함께.")
+                for m, res, note in await _fork_collect(flow, me_id, members, body_r1):
+                    line = f"[1R] {flow._info(m) or m}: {(res or note or '').strip()[:400]}"
+                    minutes.append(line)
+                    await _note(f"[회의] {line[:300]}")
+                    if res is not None and m in flow.current.team and m != flow.leader:
+                        flow.current.participated.add(m)        # 회의 발언 = 실질 협의 인정
+                # 2라운드+ = 직렬 상호 토론(서로의 발언을 보며 동의/반박/보완) — 품질의 원천인
+                # 순차 문맥은 병렬화 대상이 아니다(여기는 종전 그대로).
+                for r in range(2, rounds + 1):
                     for m in members:
                         if flow.comm.done or flow.comm.alive != me_id:
                             break
@@ -1135,6 +1228,87 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     inner.add_done_callback(_hand)
                 raise
         tools.append(meet)
+
+        @tool("compete",
+              "[중요 작업 — 경쟁 구현] 같은 Goal을 두 동료가 '독립·동시에' 각자 샌드박스에 구현하고, "
+              "당신(리더)이 두 산출물을 비교해 판정한다(다양성→선택=품질 — 토큰이 그 구간 2배이니 민감하거나 "
+              "중요한 작업에만). members='동료1,동료2'(정확히 2명, 같은 직군 권장), body=구현 브리프. "
+              "반환된 두 샌드박스를 Read/run으로 직접 비교한 뒤, 승자에게 request(Work)로 '본 작업공간 "
+              "반영'을 맡겨 마무리하세요.",
+              {"members": str, "body": str})
+        async def compete(args):
+            if flow.current is None:
+                return _ok("오류: 진행 중인 Task가 없습니다. create_task 먼저 여세요.")
+            goal = (flow.current.status.goal or "").strip()
+            if not goal:
+                return _ok("경쟁 구현 거부: 이 Task의 Goal이 아직 확정되지 않았습니다 — 먼저 협의"
+                           "(request(Info)/vote/meet) 후 set_goal로 확정하세요(선분배 금지는 경쟁에도 동일).")
+            cand = _uniq([c for c in _resolve_members(args.get("members", ""), flow, flow.current.team)
+                          if c != me_id and not _is_spare(flow, c)])
+            if len(cand) != 2:
+                return _ok(f"경쟁 구현은 정확히 2명을 지정하세요(members='id1,id2' — 같은 직군 권장). "
+                           f"현재 지정: {len(cand)}명. 인원이 부족하면 recruit로 채용해 Task에 합류시킨 뒤 다시.")
+            if (any(not x.done() for x in getattr(flow, "inflight_tasks", ()))
+                    and flow.comm.alive != me_id and not flow.comm.done):
+                return _ok("[대기] 직전 위임이 아직 진행 중입니다 — 경쟁 구현은 그 결과를 받은 뒤 여세요.")
+            if flow.comm.done or flow.comm.alive != me_id:
+                return _ok(f"지금은 경쟁 구현을 열 수 없습니다(활성={flow.comm.alive}).")
+            if not getattr(flow, "workspace", None):
+                return _ok("경쟁 구현 불가: 작업공간이 설정되지 않았습니다.")
+            brief = str(args.get("body", "")).strip()
+            task_id = flow.current.task_id
+
+            async def _run_compete():
+                # 샌드박스 + 쓰기 리스: 두 경쟁자는 각자 폴더에만 쓴다(훅이 구조적으로 강제) —
+                # 같은 파일을 두 사람이 고치는 충돌·덮어쓰기(재작업 토큰 낭비)가 불가능하다.
+                boxes = {}
+                for c in cand:
+                    box = os.path.join(flow.workspace, "_compete", f"{task_id}-{c}")
+                    os.makedirs(box, exist_ok=True)
+                    boxes[c] = box
+                    flow.write_lease[c] = box
+
+                def body_of(c):
+                    return (f"[경쟁 구현 — 독립 작업] 이 Task의 Goal: {goal}\n브리프: {brief}\n\n"
+                            f"동료와 협의 없이 **혼자** 완성하세요(독립성이 목적 — 필요한 가정은 보고에 "
+                            f"명시). 산출물은 반드시 당신의 샌드박스 **{boxes[c]}** 안에만 작성하세요"
+                            f"(프로젝트 기존 파일은 Read로 참고만 — 밖에 쓰면 구조적으로 거부됩니다). "
+                            f"완성 후 run으로 동작을 확인하고 구현 요약·실행 방법을 보고하세요.")
+                try:
+                    collected = await _fork_collect(flow, me_id, cand, body_of, kind=Kind.WORK)
+                finally:
+                    for c in cand:                     # 리스 해제 — 이후 정상 위임에 영향 없게
+                        flow.write_lease.pop(c, None)
+                lines = []
+                for c, res, note in collected:
+                    if res is not None and c in flow.current.team and c != flow.leader:
+                        flow.current.participated.add(c)   # 경쟁 참여 = 실질 협의 인정
+                    lines.append(f"◆ {flow._info(c) or c} → {boxes[c]}\n{(res or note or '').strip()[:500]}")
+                await _note(f"[경쟁 구현] {flow._names(cand)} 완료 — 리더 판정 대기")
+                return _ok("[경쟁 구현 결과 — 판정은 당신(리더)의 몫]\n" + "\n\n".join(lines)
+                           + "\n\n다음 순서: ① 두 샌드박스를 Read/run으로 직접 비교·검증 ② 우수안 선택 "
+                           "③ **승자에게 request(Work)로 '샌드박스 산출물을 본 작업공간에 반영'을 위임**해 "
+                           "마무리하세요(패자 안의 장점이 있으면 반영 지시에 포함 — 교차 융합).")
+
+            inner = asyncio.ensure_future(_run_compete())
+            flow.inflight_tasks.add(inner)
+            inner.add_done_callback(flow.inflight_tasks.discard)
+            try:
+                return await asyncio.shield(inner)
+            except asyncio.CancelledError:
+                if not inner.done():
+                    if flow.log:
+                        flow.log("delegation_detached", to="compete", seg=flow.leader_segment)
+
+                    def _hand(t):
+                        try:
+                            flow.detached_results.append(
+                                f"경쟁 구현 완료 → {t.result()['content'][0]['text'][:400]}")
+                        except Exception:
+                            pass
+                    inner.add_done_callback(_hand)
+                raise
+        tools.append(compete)
 
         @tool("deploy",
               "검증을 마친 산출물을 실제로 공개 배포한다(GitHub push + Render 웹서비스 생성/갱신). "

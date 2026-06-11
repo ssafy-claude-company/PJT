@@ -67,7 +67,8 @@ def test_leader는_project_task_도구():
     # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit·run)+리더 셋업·배포 도구.
     assert names == {"request", "recruit", "run",
                      "create_project", "create_task", "set_goal", "complete_task", "deploy",
-                     "vote", "meet"}   # Discord 심화 대화(Feat 3단계): 표결·라운드로빈 회의
+                     "vote", "meet",   # Discord 심화 대화(Feat 3단계): 표결·라운드로빈 회의
+                     "compete"}        # 중요 작업 경쟁 구현(병렬 Work fork + 쓰기 리스)
 
 
 def test_리더_등록툴이_전부_허용목록에_있음():
@@ -1744,13 +1745,13 @@ def test_수면_기억증류_경험이_기준으로_압축(tmp_path):
 
 
 def test_vote_표결_집계와_협의인정():
-    """[Discord 심화 대화] vote는 멤버 전원의 선택·근거를 한 호출로 수집·집계한다 — 표결 참여는
-    set_goal 협의로 인정되고, 베턴은 멤버별 프레임으로 정상 왕복(집계 후 리더 활성)."""
+    """[Discord 심화 대화] vote는 멤버 전원의 선택·근거를 한 호출로(독립·동시) 수집·집계한다 —
+    표결 참여는 set_goal 협의로 인정되고, 집계 후에도 리더가 활성(단일활성 형식 유지)."""
     g = FakeGuide()
     f = _flow(g)
 
     async def wake(to, b, k):
-        assert "[표결]" in b and "선택지" in b
+        assert "[표결" in b and "선택지" in b and "독립" in b   # 표는 독립 수집(앵커링 방지)
         return "[표] Canvas\n성능과 단순성"
     f.wake = wake
     t = _tools(f, 11, "leader")
@@ -1762,38 +1763,42 @@ def test_vote_표결_집계와_협의인정():
     assert f.comm.alive == 11                                  # 베턴 복귀(단일활성 일관)
 
 
-def test_meet_라운드로빈_회의록():
-    """[Discord 심화 대화] meet는 멤버들이 서로의 발언을 보며 라운드를 도는 다자 토론을 구조화한다
-    — 발언이 회의록으로 누적되고(다음 발언자에게 전달), 참여는 협의로 인정된다."""
+def test_meet_1라운드_독립fork_2라운드부터_문맥토론():
+    """[Discord 심화 대화 × 병렬] meet 1라운드는 전원의 '독립 의견'을 동시에 수집한다(서로의 발언을
+    보지 않음 — 앵커링 방지·회의 비용 절감). 2라운드부터는 직전 발언들을 보며 직렬로 토론한다
+    (품질의 원천인 순차 문맥은 유지). 참여는 협의로 인정되고 베턴은 리더로 복귀한다."""
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "QA"})
     f.start_root("root")
     seen = []
 
     async def wake(to, b, k):
-        seen.append((to, "아직 발언 없음" in b))
+        seen.append((to, b))
         return f"{to}의 입장: 근거와 함께"
     f.wake = wake
     t = _tools(f, 11, "leader")
     asyncio.run(t["create_task"].handler({"members": "12,13"}))
-    r = asyncio.run(t["meet"].handler({"topic": "저장 방식", "members": "", "rounds": "1"}))
+    r = asyncio.run(t["meet"].handler({"topic": "저장 방식", "members": "", "rounds": "2"}))
     txt = r["content"][0]["text"]
     assert "[회의록]" in txt and "12의 입장" in txt and "13의 입장" in txt
-    assert seen[0][1] is True and seen[1][1] is False          # 둘째 발언자는 첫 발언을 봄
+    r1 = [b for _, b in seen if "1라운드" in b]
+    r2 = [b for _, b in seen if "2라운드" in b]
+    assert len(r1) == 2 and all("독립 의견" in b and "지금까지의 발언" not in b for b in r1)
+    assert len(r2) == 2 and all("[1R]" in b for b in r2)       # 2라운드는 1라운드 발언을 본다
     assert {12, 13} <= f.current.participated
     assert f.comm.alive == 11
 
 
 def test_병렬_다른프로젝트는_동시진행_같은스코프는_큐(tmp_path):
     """[병렬 작업 v1] 흐름 내 단일활성(베턴)은 불변 — 완화는 '다른 프로젝트의 흐름 동시 진행'만.
-    같은 스코프는 직렬 큐, 동시 상한(ORGANT_MAX_FLOWS)도 존중. 종료 시 큐에서 비충돌 항목을 드레인."""
+    같은 스코프는 직렬 큐. 동시 진행은 '리더가 서로 다른 봇'일 때 성립한다(전역 점유 — 한 직원은
+    한 번에 한 흐름). 종료 시 큐에서 비충돌 항목을 드레인."""
     g = FakeGuide()
-    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"},
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "기획"},
             workspace="/tmp/ws-x", session_dir=str(tmp_path))
-    s.max_flows = 2
     s.projects = {
         100: {"id": "P-00A", "name": "a", "channel": 100, "workspace": str(tmp_path), "leader": 11, "summary": ""},
-        200: {"id": "P-00B", "name": "b", "channel": 200, "workspace": str(tmp_path), "leader": 11, "summary": ""},
+        200: {"id": "P-00B", "name": "b", "channel": 200, "workspace": str(tmp_path), "leader": 12, "summary": ""},
     }
     gate_a = asyncio.Event()
     order = []
@@ -1809,9 +1814,9 @@ def test_병렬_다른프로젝트는_동시진행_같은스코프는_큐(tmp_pa
     async def scenario():
         t_a = asyncio.ensure_future(s.handle_user_input(100, 11, "A 작업", root_id=None))
         await asyncio.sleep(0.05)
-        t_b = asyncio.ensure_future(s.handle_user_input(200, 11, "B 작업", root_id=None))
+        t_b = asyncio.ensure_future(s.handle_user_input(200, 12, "B 작업", root_id=None))
         await asyncio.sleep(0.05)
-        assert "A 작업" in order[0] and "B 작업" in order[1]   # B는 A 진행 중에도 동시 진입(다른 프로젝트)
+        assert "A 작업" in order[0] and "B 작업" in order[1]   # B는 A 진행 중에도 동시 진입(다른 프로젝트·다른 리더)
         r_a2 = await s.handle_user_input(100, 11, "A 추가", root_id=None)
         assert r_a2["mode"] == "queued"                # 같은 스코프(P-00A)는 큐
         gate_a.set()
@@ -1851,3 +1856,272 @@ def test_같은스코프_동시진입_레이스_봉쇄(tmp_path):
         await t2
         assert len(runs) == 2                       # 종료 후 드레인으로 둘째 실행
     asyncio.run(scenario())
+
+
+# ───────────────── 전역 점유(Engagement) — '흐름 수 상한'을 대체하는 구조적 병렬 안전 ─────────────────
+
+
+def test_전역점유_타흐름_동료는_Kind불문_차단_응답시_즉시해제():
+    """한 직원(봇)은 한 시점에 한 흐름에만 참여한다 — Work는 물론 Info도 타 흐름 점유 중엔 차단
+    (같은 봇이 두 채널에서 동시에 일하는 '이중 존재' 방지; 흐름 안의 Info는 종전대로). 응답을
+    마친 봇은 그 즉시 회사 풀로 돌아가 다른 흐름이 쓸 수 있다."""
+    import pytest
+    from src.communication import BusyInOtherFlow, CommunicationManager, Engagement
+    eng = Engagement()
+    a = CommunicationManager(0)
+    a.attach_engagement(eng, "P-A")
+    b = CommunicationManager(0)
+    b.attach_engagement(eng, "P-B")
+    a.request(0, 11, "ra", Kind.WORK)                  # A 리더 점유
+    a.request(11, 13, "r1", Kind.WORK)                 # 13은 A에서 작업 중
+    b.request(0, 12, "rb", Kind.WORK)                  # 리더가 다르면 흐름은 동시 진행
+    assert eng.holder(11) == "P-A" and eng.holder(13) == "P-A" and eng.holder(12) == "P-B"
+    with pytest.raises(BusyInOtherFlow):
+        b.check_request(12, 13, Kind.WORK)
+    with pytest.raises(BusyInOtherFlow):
+        b.check_request(12, 13, Kind.INFO)
+    a.respond(13, "accept")                            # 응답 완료 → 즉시 해제
+    assert eng.holder(13) is None
+    b.request(12, 13, "r2", Kind.INFO)                 # 이제 B가 쓸 수 있다
+    assert eng.holder(13) == "P-B"
+    b.respond(13, "accept")
+    a.respond(11, "accept")
+    b.respond(12, "accept")
+    assert eng.holder(11) is None and eng.holder(12) is None   # 흐름 종료 → 전원 해제
+
+
+def test_전역점유_상신_강제정리도_해제대칭():
+    """escalate(타임아웃·복구의 강제 close)도 respond와 같은 지점에서 점유를 해제한다 —
+    복구 경로에서 봇이 '바쁨'으로 영구히 굳는 누수가 구조적으로 없다."""
+    from src.communication import CommunicationManager, Engagement
+    eng = Engagement()
+    a = CommunicationManager(0)
+    a.attach_engagement(eng, "P-A")
+    a.request(0, 11, "ra", Kind.WORK)
+    a.request(11, 13, "r1", Kind.WORK)
+    a.escalate("타임아웃 정리")
+    assert eng.holder(13) is None and eng.holder(11) == "P-A"   # 13만 풀리고 리더는 계속
+    a.escalate("종료 정리")
+    assert a.done and eng.holder(11) is None                    # origin 복귀 → 전원 해제
+
+
+def test_전역점유_유령점유_자가치유():
+    """장부는 인메모리 + 조회 시 스코프 생존 검사 — 끝난/죽은 흐름의 점유는 holder() 조회 순간
+    스스로 지워진다(예외로 해제가 누락돼도 봇이 영구 '바쁨'으로 굳지 않음)."""
+    from src.communication import Engagement
+    eng = Engagement(is_live=lambda s: s == "LIVE")
+    eng.engage(7, "DEAD")
+    assert eng.holder(7) is None                       # 죽은 스코프 → 자가 치유
+    assert not eng.busy_elsewhere(7, "LIVE")
+    eng.engage(7, "LIVE")
+    assert eng.busy_elsewhere(7, "OTHER") and not eng.busy_elsewhere(7, "LIVE")
+    eng.release_scope("LIVE")
+    assert eng.holder(7) is None
+
+
+def test_전역점유_같은리더_두프로젝트는_자연직렬_해제시_드레인(tmp_path):
+    """같은 봇이 리더인 두 프로젝트는 흐름 수 상한 없이도 자연히 직렬화된다(한 직원은 한 번에 한
+    흐름) — 임의 숫자 cap을 대체하는 구조적 안전. 점유가 풀리면(흐름 종료) 큐가 이어서 실행된다.
+    (max_flows 기본 0=무제한에서도 모든 것이 큐로 가지 않음을 함께 증명 — 게이트는 '>0일 때만' 상한.)"""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"},
+            workspace="/tmp/ws-x", session_dir=str(tmp_path))
+    s.projects = {
+        100: {"id": "P-00A", "name": "a", "channel": 100, "workspace": str(tmp_path), "leader": 11, "summary": ""},
+        200: {"id": "P-00B", "name": "b", "channel": 200, "workspace": str(tmp_path), "leader": 11, "summary": ""},
+    }
+    gate_a = asyncio.Event()
+    order = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        order.append(body)
+        if "A 작업" in body:
+            await gate_a.wait()
+        flow.current = None
+        return "ok"
+    s.run_turn = fake_run_turn
+
+    async def scenario():
+        t_a = asyncio.ensure_future(s.handle_user_input(100, 11, "A 작업", root_id=None))
+        await asyncio.sleep(0.05)
+        assert s.engaged.holder(11) == "P-00A"         # 예약 블록에서 리더 선점
+        r_b = await s.handle_user_input(200, 11, "B 작업", root_id=None)
+        assert r_b["mode"] == "queued"                 # 다른 프로젝트라도 같은 리더면 큐(자연 직렬)
+        gate_a.set()
+        await t_a                                      # A 종료 → 점유 해제 → 드레인이 B 실행
+        assert any("B 작업" in b for b in order)
+        assert s.engaged.holder(11) is None
+    asyncio.run(scenario())
+
+
+def test_request도구_타흐름점유는_거부아닌_대안안내():
+    """타 흐름이 점유한 동료에게 request하면 무서운 '규약 거부'가 아니라 [동료 점유] + 지금 가용한
+    같은 직군 동료·채용 안내(+재시도 금지)가 온다. 점유가 풀리면 같은 요청이 즉시 통한다."""
+    from src.communication import Engagement
+    eng = Engagement()
+    fa = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 13: "QA"})
+    fa.comm.attach_engagement(eng, "P-A")
+    fa.start_root("ra")
+    fa.comm.request(11, 13, "r1", Kind.WORK)           # 13은 A에서 작업 중
+    fb = Flow(FakeGuide(), channel_id=600, guild_id=1, leader_id=12,
+              bot_info={12: "기획", 13: "QA", 14: "QA", 15: "예비"})
+    fb.comm.attach_engagement(eng, "P-B")
+    fb.start_root("rb")
+    woken = []
+
+    async def wake(to, b, k):
+        woken.append(to)
+        return "확인했습니다"
+    fb.wake = wake
+    t = {x.name: x for x in make_guide_tools(fb, 12, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "13,14"}))
+    r = asyncio.run(t["request"].handler({"to_id": "13", "kind": "Info", "body": "QA 가능?"}))
+    txt = r["content"][0]["text"]
+    assert "[동료 점유]" in txt and "P-A" in txt        # 어느 흐름이 점유 중인지
+    assert "14" in txt and "재시도" in txt              # 가용한 같은 직군(14) 안내 + 폴링 금지
+    assert woken == []                                  # 점유된 동료를 깨우지 않았다
+    fa.comm.respond(13, "accept")                       # A에서 응답 → 즉시 회사 풀로
+    asyncio.run(t["request"].handler({"to_id": "13", "kind": "Info", "body": "이제 QA 가능?"}))
+    assert woken == [13]                                # 풀리면 같은 동료에게 즉시 통한다
+
+
+def test_수면증류_흐름참여_전문가는_스킵_가용하면_진행(tmp_path):
+    """[병렬×수면] 증류 조건은 '시스템 유휴'가 아니라 '그 전문가 유휴' — 흐름에 묶인 전문가는
+    스킵하고(전체-유휴 조건이면 장기 프로젝트 중 증류가 영영 굶는다), 한가해지면 진행한다.
+    증류가 끝나면 점유도 해제된다."""
+    calls = []
+
+    class FakeOrgant:
+        async def handle(self, prompt):
+            calls.append(prompt)
+            return "[직무기준] QA\n빠른 재현 → 최소 수정 → 회귀 확인\n[/직무기준]"
+
+    def builder(mid, server, role, flow=None, state_tag=None):
+        return FakeOrgant()
+
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=builder, bot_info={21: "QA"},
+            session_dir=str(tmp_path))
+    s.role_experience["QA"] = [f"경험{i}" for i in range(5)]
+    f = Flow(FakeGuide(), channel_id=1, guild_id=1, leader_id=21, bot_info={21: "QA"})
+    s.active_flows["P-X"] = f                          # 살아있는 흐름이
+    s.engaged.engage(21, "P-X")                        # 그 전문가를 점유 중
+    assert asyncio.run(s.distill_role("QA")) is False and calls == []   # → 스킵
+    s.active_flows.pop("P-X")                          # 흐름 종료(유령 점유는 자가 치유)
+    assert asyncio.run(s.distill_role("QA")) is True and len(calls) == 1  # 유휴 → 증류
+    assert s.engaged.holder(21) is None                # 증류 점유도 해제됨
+
+
+# ───────────────── 병렬 Info fork-join — 표결·회의 1라운드 '독립 의견'의 동시 수집 ─────────────────
+
+
+def test_표결_동시수집_점유와_해제():
+    """[병렬 fork-join] 표결은 멤버들을 '동시에' 깨워 독립 의견을 모은다(겹침 실측) — 수집 동안
+    가지 봇은 전역 점유돼 타 흐름이 못 집어가고, 조인 후 즉시 회사 풀로 돌아간다."""
+    from src.communication import Engagement
+    eng = Engagement()
+    f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드", 13: "QA"})
+    f.comm.attach_engagement(eng, "P-A")
+    f.start_root("root")
+    running = {"now": 0, "peak": 0, "held": []}
+
+    async def wake(to, b, k):
+        assert "[표결" in b and "독립" in b
+        running["now"] += 1
+        running["peak"] = max(running["peak"], running["now"])
+        running["held"].append(eng.holder(to))     # 수집 중 점유 확인
+        await asyncio.sleep(0.02)
+        running["now"] -= 1
+        return "[표] Canvas\n성능 근거"
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    r = asyncio.run(t["vote"].handler({"question": "렌더?", "options": "Canvas;SVG", "members": ""}))
+    txt = r["content"][0]["text"]
+    assert "Canvas: 2표" in txt
+    assert running["peak"] == 2                    # 진짜 동시 수집(직렬이면 1)
+    assert running["held"] == ["P-A", "P-A"]       # 가지 봇은 수집 동안 점유 중
+    assert eng.holder(12) is None and eng.holder(13) is None   # 조인 후 즉시 해제
+    assert f.comm.alive == 11                      # 베턴은 리더 그대로(단일활성 형식 유지)
+
+
+def test_표결_동시폭은_운영노브로_직렬화_가능(monkeypatch):
+    """ORGANT_FORK_FAN=1이면 fork 수집이 종전의 직렬과 동일하게 돈다(토큰 속도 운영 노브)."""
+    monkeypatch.setenv("ORGANT_FORK_FAN", "1")
+    f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드", 13: "QA"})
+    f.start_root("root")
+    running = {"now": 0, "peak": 0}
+
+    async def wake(to, b, k):
+        running["now"] += 1
+        running["peak"] = max(running["peak"], running["now"])
+        await asyncio.sleep(0.02)
+        running["now"] -= 1
+        return "[표] SVG\n근거"
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    asyncio.run(t["vote"].handler({"question": "렌더?", "options": "Canvas;SVG", "members": ""}))
+    assert running["peak"] == 1                    # 노브로 완전 직렬
+
+
+def test_표결_타흐름점유_멤버는_부분조인으로_제외():
+    """[병렬 fork-join] 타 흐름이 점유한 멤버는 수집에서 빠지고 사유가 기록된다 — 일부 멤버 때문에
+    표결 전체가 막히거나 행으로 굳지 않는다(부분 조인). 남의 점유는 건드리지 않는다."""
+    from src.communication import Engagement
+    eng = Engagement()
+    f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드", 13: "QA"})
+    f.comm.attach_engagement(eng, "P-A")
+    f.start_root("root")
+    eng.engage(13, "P-B")                          # 13은 다른 흐름에서 작업 중
+    woken = []
+
+    async def wake(to, b, k):
+        woken.append(to)
+        return "[표] SVG\n근거"
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    r = asyncio.run(t["vote"].handler({"question": "렌더?", "options": "Canvas;SVG", "members": ""}))
+    txt = r["content"][0]["text"]
+    assert woken == [12]                           # 점유 멤버는 깨우지 않음
+    assert "SVG: 1표" in txt and "P-B" in txt      # 부분 집계 + 제외 사유 표기
+    assert eng.holder(13) == "P-B"                 # 남의 점유 보존
+
+
+def test_경쟁구현_동시_샌드박스_리스_판정은_리더(tmp_path):
+    """[중요 작업 — 경쟁 구현] 같은 Goal을 2명이 '독립·동시에'(Work fork) 각자 샌드박스에 구현한다.
+    수집 동안 쓰기 리스·fork_kind(Work)가 걸리고 조인 후 풀린다. 판정과 '본 작업공간 반영' 위임은
+    리더의 몫으로 안내된다 — 다양성→선택이 품질이 되는 구간만 병렬화."""
+    import os as _os
+    f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "프론트엔드", 13: "프론트엔드"})
+    f.start_root("root")
+    f.workspace = str(tmp_path)
+    seen, running = [], {"now": 0, "peak": 0}
+
+    async def wake(to, b, k):
+        running["now"] += 1
+        running["peak"] = max(running["peak"], running["now"])
+        seen.append((to, f.write_lease.get(to), str(getattr(k, "value", k)).lower(), "샌드박스" in b))
+        await asyncio.sleep(0.02)
+        running["now"] -= 1
+        return f"{to} 구현 완료 — 샌드박스에 server.js 작성·run 확인"
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    r0 = asyncio.run(t["compete"].handler({"members": "12,13", "body": "스킬 시스템"}))
+    assert "Goal" in r0["content"][0]["text"]                  # Goal 미확정이면 거부(선분배 금지 동일)
+    f.current.status.goal = "QER 스킬 32종이 동작"
+    r = asyncio.run(t["compete"].handler({"members": "12,13", "body": "스킬 시스템"}))
+    txt = r["content"][0]["text"]
+    assert running["peak"] == 2                                # 진짜 동시 구현
+    for to, lease, kk, box_in_body in seen:
+        assert lease and lease.endswith(f"-{to}") and kk == "work" and box_in_body
+        assert _os.path.isdir(lease)                           # 샌드박스 실제 생성
+    assert f.write_lease == {} and f.fork_kind == {}           # 조인 후 리스·표식 해제
+    assert "[경쟁 구현 결과" in txt and "판정" in txt and "request(Work)" in txt
+    assert {12, 13} <= f.current.participated
+    assert f.comm.alive == 11                                  # 베턴은 리더(단일활성 형식 유지)

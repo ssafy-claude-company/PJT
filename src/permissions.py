@@ -74,14 +74,35 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                              reason="작업공간 밖 경로", path=path, tool_use_id=tool_use_id)
                 return _deny(f"작업공간 밖 경로에는 쓸 수 없습니다: {path}")
 
+        # 2.5) [쓰기 리스 — 경쟁 구현 샌드박스] 병렬 가지에 리스가 배정된 행위자는 그 안에만 쓴다 —
+        #      경쟁자끼리·본 작업물과의 파일 충돌(덮어쓰기→재작업 토큰 낭비)이 구조적으로 불가능.
+        if tool in ("Write", "Edit") and flow is not None and actor is not None:
+            lease = (getattr(flow, "write_lease", None) or {}).get(actor)
+            path = tool_input.get("file_path") or tool_input.get("path")
+            if lease and path:
+                cwd = data.get("cwd") or os.getcwd()
+                tgt = path if os.path.isabs(path) else os.path.join(cwd, path)
+                if not _within(lease, tgt):
+                    audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                                 reason="쓰기 리스 밖", path=path, tool_use_id=tool_use_id)
+                    return _deny(f"[쓰기 리스] 당신의 산출물은 배정된 샌드박스 안에만 씁니다: {lease} "
+                                 f"(시도한 경로: {path}) — 프로젝트 기존 파일은 Read로 참고만 하고, "
+                                 f"구현은 샌드박스에 완성하세요.")
+
         # 3) 구현(Write/Edit)은 'Work 위임 맥락'에서만 — 협의(Info)로 깨워진 동료의 선구현 차단.
         #    나를 깨운 베턴 프레임(top, to=나)이 Work면 통과, Info면 거부. → 리더(origin Work)·
         #    Work 위임받은 owner는 구현 가능, Info 협의 중 동료는 '제안(Response)'만. 구조적으로
         #    '협의 → 합의(set_goal) → 위임(Work) → 구현(Write)' 순서를 강제(선구현 불가).
+        #    fork 수집 가지(표결·회의 1라운드)는 comm 프레임을 열지 않으므로 flow.fork_kind가 같은
+        #    게이트를 잇는다 — Info 가지의 선구현도 동일 차단(Work 가지=경쟁 구현은 통과).
         if tool in ("Write", "Edit") and flow is not None and actor is not None:
+            fk = (getattr(flow, "fork_kind", None) or {}).get(actor)
             stack = flow.comm.open_requests
             top = stack[-1] if stack else None
-            if top is not None and top.to_id == actor and not _is_work_kind(top.kind):
+            woke_info = ((fk is not None and not _is_work_kind(fk))
+                         or (fk is None and top is not None and top.to_id == actor
+                             and not _is_work_kind(top.kind)))
+            if woke_info:
                 audit.record("tool_denied", actor=actor, role=role, tool=tool,
                              reason="협의(Info) 중 선구현", tool_use_id=tool_use_id)
                 return _deny("협의(Info) 단계에서는 구현(파일 작성)을 할 수 없습니다 — 제안은 "

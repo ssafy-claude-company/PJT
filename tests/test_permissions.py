@@ -235,3 +235,35 @@ def test_개입_리더_단독run_독식_차단():
     f2.project_team = [11, 12]; f2.tasks = []; f2._info = lambda i: "백엔드"
     assert _run(make_pre_tool_use_hook(FakeAudit(), run_allowed, actor=11, flow=f2),
                 "mcp__guide__run", {"command": "ls"}) == {}
+
+
+def test_쓰기리스_샌드박스밖_차단_안은_허용():
+    """[경쟁 구현 — 쓰기 리스] 리스가 배정된 행위자는 자기 샌드박스 안에만 쓴다 — 경쟁자 간·본
+    작업물과의 파일 충돌(덮어쓰기→재작업)이 구조적으로 불가능. 리스 없는 행위자는 종전대로."""
+    a = FakeAudit()
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK), (11, 12, Kind.WORK)),
+                      current=_FakeTask(owner=12, goal="g"), leader=11)
+    flow.write_lease = {12: "/ws/_compete/t-12"}
+    hook = make_pre_tool_use_hook(a, ALLOWED, actor=12, flow=flow)
+    out = _run(hook, "Write", {"file_path": "server.js"})              # /ws/server.js — 리스 밖
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "쓰기 리스 밖"
+    assert _run(hook, "Write", {"file_path": "_compete/t-12/server.js"}) == {}   # 리스 안 허용
+    f2 = _FakeFlow2(_comm_with((0, 11, Kind.WORK), (11, 13, Kind.WORK)),
+                    current=_FakeTask(owner=13, goal="g"), leader=11)
+    assert _run(make_pre_tool_use_hook(FakeAudit(), ALLOWED, actor=13, flow=f2),
+                "Write", {"file_path": "server.js"}) == {}             # 리스 없으면 작업공간 전체
+
+
+def test_fork가지_Info수집은_선구현차단_Work가지는_허용():
+    """fork 수집 가지는 comm 프레임을 열지 않으므로 flow.fork_kind가 선구현 게이트를 잇는다 —
+    표결·회의 1라운드(Info 가지)의 Write는 종전과 동일하게 차단, 경쟁 구현(Work 가지)은 허용."""
+    a = FakeAudit()
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=_FakeTask(owner=0, goal="g"), leader=11)
+    flow.fork_kind = {12: Kind.INFO}                          # 표결/회의 1R 수집 중
+    out = _run(make_pre_tool_use_hook(a, ALLOWED, actor=12, flow=flow), "Write", {"file_path": "x.js"})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "협의(Info) 중 선구현"
+    flow.fork_kind = {12: Kind.WORK}                          # 경쟁 구현 가지
+    assert _run(make_pre_tool_use_hook(FakeAudit(), ALLOWED, actor=12, flow=flow),
+                "Write", {"file_path": "x.js"}) == {}

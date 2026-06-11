@@ -492,18 +492,21 @@ async def run() -> None:
                 canary["misses"] = 0
 
     async def _sleep_cycle():
-        """수면(기억 증류): 시스템이 유휴일 때, 경험이 충분히 쌓인 직군의 전문가를 깨워 '경험→직무
-        기준'으로 압축한다(자기계발 시간 보강 — Feature.md). 흐름이 활성이면 건너뛴다(단일흐름 존중),
-        주기당 한 직군만(비용 제어)."""
+        """수면(기억 증류): 경험이 충분히 쌓인 직군의 전문가를 깨워 '경험→직무 기준'으로 압축한다
+        (자기계발 시간 보강 — Feature.md). [병렬] '시스템 전체 유휴'가 아니라 **그 전문가 봇이
+        유휴**일 때 — 회사가 일하는 중에도 흐름에 묶이지 않은 직원은 자기계발한다(겹침은 전역
+        점유 장부가 차단; 전체-유휴 조건이면 장기 프로젝트 중 증류가 영영 굶는다). 시도는 주기당
+        한 직군만(비용 제어)."""
         period = int(os.environ.get("ORGANT_SLEEP_PERIOD", "600"))
         while True:
             await asyncio.sleep(period)
             try:
-                if sysm.active_flow is not None:
-                    continue
-                job = sysm.pick_distill_job()
-                if job:
+                for job in sysm.pick_distill_jobs():
+                    mid = sysm._bot_of_job(job)
+                    if mid is None or sysm.engaged.holder(mid) is not None:
+                        continue                     # 그 전문가는 흐름 참여 중 → 다음 후보
                     await sysm.distill_role(job)
+                    break
             except Exception:
                 log.error("수면(증류) 사이클 오류:\n%s", traceback.format_exc())
 

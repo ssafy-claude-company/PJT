@@ -15,7 +15,7 @@ import re
 import time
 from typing import Dict, Optional
 
-from .communication import CommError
+from .communication import CommError, Engagement
 from .guide_tools import Flow, TaskRef, build_guide_server, make_guide_tools
 from .protocol import Kind, Request, TaskStatus, format_response
 
@@ -64,10 +64,14 @@ class Sys:
         # 워커 타임아웃(turn_timeout=8분)보다 넉넉히 커야 워커 1회 행→복구를 '무진행'으로 오인하지 않는다.
         self.idle_timeout = int(os.environ.get("ORGANT_IDLE_TIMEOUT", "720"))   # 기본 12분(>8분 워커 타임아웃)
         # [병렬 작업(Feat 4단계)] 흐름 '안'의 단일활성(베턴)은 불변 — 완화는 '서로 다른 프로젝트'의
-        # 흐름 동시 진행만. 같은 스코프(프로젝트/신규)는 직렬 큐. 상한 ORGANT_MAX_FLOWS(기본 2)로
-        # 토큰 동시 사용을 묶는다(1로 두면 종전과 동일한 완전 직렬).
+        # 흐름 동시 진행만. 같은 스코프(프로젝트/신규)는 직렬 큐. 흐름 간 안전은 임의 숫자 상한이
+        # 아니라 **전역 점유 장부(Engagement)** 가 보장한다: 한 봇은 한 시점에 한 흐름에만 참여
+        # (리더 포함 — 같은 리더의 프로젝트들은 자연히 직렬). 동시 작업량의 자연 한도 = 직원 수.
+        # ORGANT_MAX_FLOWS는 토큰 동시 사용을 묶고 싶을 때만 쓰는 운영 노브(기본 0=무제한,
+        # 1=종전과 동일한 완전 직렬).
         self.active_flows: Dict[str, Flow] = {}   # scope(P-XXX|main) → 진행 중 Flow
-        self.max_flows = int(os.environ.get("ORGANT_MAX_FLOWS", "2"))
+        self.max_flows = int(os.environ.get("ORGANT_MAX_FLOWS", "0"))
+        self.engaged = Engagement(is_live=self._scope_live)   # 봇 단위 전역 점유(흐름 간 배타성)
         self.queue = []                        # 진행 중 들어온 명령(순차 처리 대기)
         self.flow_log = []
         self.flow_log_path = (os.path.join(session_dir, "flow.jsonl") if session_dir else None)
@@ -92,6 +96,14 @@ class Sys:
             if not f.done:
                 return f
         return None
+
+    def _scope_live(self, scope) -> bool:
+        """점유 장부의 유령 자가 치유용: 그 스코프의 흐름이 아직 살아 있는가.
+        '__distill__'(수면 증류)은 흐름이 아닌 짧은 점유라 항상 살아있다고 본다(finally에서 해제)."""
+        if scope == "__distill__":
+            return True
+        f = self.active_flows.get(str(scope))
+        return f is not None and not f.done
 
     def _load_projects(self):
         """디스크에서 프로젝트 레지스트리 복원 — 프로세스가 끝나도 '원래 작업'에 개입 가능.
@@ -686,8 +698,15 @@ class Sys:
 
     def pick_distill_job(self):
         """증류가 필요한 직군 하나를 고른다 — 경험이 가장 많이 쌓인 직군부터(없으면 None)."""
-        cands = [(len(v), k) for k, v in self.role_experience.items() if len(v) >= self._DISTILL_MIN]
-        return max(cands)[1] if cands else None
+        jobs = self.pick_distill_jobs()
+        return jobs[0] if jobs else None
+
+    def pick_distill_jobs(self):
+        """증류 후보 직군들을 '경험 많은 순'으로 모두 준다 — [병렬] 일부 전문가가 흐름에 묶여
+        있어도 한가한 다음 전문가가 자기계발할 수 있게(수면 사이클이 가용한 첫 후보를 고른다)."""
+        cands = sorted(((len(v), k) for k, v in self.role_experience.items()
+                        if len(v) >= self._DISTILL_MIN), reverse=True)
+        return [k for _, k in cands]
 
     def _bot_of_job(self, job):
         """그 직군을 보유한 봇(겸직 포함)을 찾는다 — 증류는 그 직군의 전문가 본인이 한다."""
@@ -700,11 +719,25 @@ class Sys:
         """[수면 — 기억 증류] 직군의 '최근 경험'을 그 전문가 봇이 직무 기준으로 압축한다.
         시스템은 내용을 정하지 않는다(전문가 자기정의 원칙) — 일반화 가치가 있는 교훈만 기준에
         흡수시키고, 증류된 경험 로그는 비운다. 증류 대화는 별도 세션(state_tag)이라 작업 기억을
-        오염시키지 않으며, 흐름이 없을 때만 호출된다(수면 사이클)."""
+        오염시키지 않는다. [병렬] '시스템 전체 유휴'가 아니라 **그 전문가 봇이 유휴**일 때 증류한다
+        (회사가 일하는 중에도 한가한 직원은 자기계발 — 전역 점유 장부로 흐름과의 겹침을 차단)."""
         mid = self._bot_of_job(job)
         exp = self.role_experience.get(job) or []
         if mid is None or len(exp) < self._DISTILL_MIN:
             return False
+        if self.engaged.holder(mid) is not None:
+            return False                                  # 그 전문가가 흐름 참여 중 → 이번 주기 스킵
+        self.engaged.engage(mid, "__distill__")           # 증류 중 흐름이 이 봇을 집어가지 않게 점유
+        try:
+            return await self._distill_role_inner(job, mid, exp)
+        finally:
+            self.engaged.release(mid, "__distill__")
+            # 증류 점유 때문에 큐로 밀린 요청이 있으면 이어서 처리(흐름 종료 드레인과 같은 판정).
+            item = self._pop_runnable_queued()
+            if item is not None:
+                asyncio.ensure_future(self.handle_user_input(*item))
+
+    async def _distill_role_inner(self, job, mid, exp) -> bool:
         cur = self.role_profiles.get(job, "(아직 없음)")
         flow = Flow(self.guide, 0, self.guild_id, mid, self.bot_info)   # 도구 형식용 빈 흐름(깨우기 없음)
         server = build_guide_server(flow, mid, "member")
@@ -914,10 +947,19 @@ class Sys:
         proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'(이어지는 작업)
         scope_key = proj["id"] if proj else "main"  # 신규 요청은 'main' 직렬(동시 신규 생성 충돌 방지)
         live = {k: f for k, f in self.active_flows.items() if not f.done}
-        # [병렬] 같은 스코프가 진행 중이거나 동시 상한에 닿으면 큐(버리지 않음) — 흐름 내 규약은 불변.
-        if scope_key in live or len(live) >= self.max_flows:
+        # 이 흐름을 이끌 봇(전망치): 명시 To(리더 재지정 포함)가 로스터에 있으면 그 봇, 아니면 등록 리더.
+        # 게이트에서 미리 계산해야 '리더가 타 흐름 참여 중'을 흐름을 띄우기 전에 거를 수 있다.
+        prospective_lead = (leader_id if (leader_id and leader_id in self.bot_info)
+                            else (proj["leader"] if proj else leader_id))
+        # [병렬] 큐로 보내는 세 조건(버리지 않음 — 흐름 내 규약은 불변): ① 같은 스코프 진행 중(직렬)
+        # ② 운영 노브 상한(설정 시에만) ③ 리더가 타 흐름 점유 중(한 직원은 한 번에 한 흐름 — 같은
+        # 리더의 프로젝트들은 자연 직렬이 되고, 이것이 임의 흐름 수 상한을 대체하는 구조적 안전이다).
+        if (scope_key in live
+                or (self.max_flows > 0 and len(live) >= self.max_flows)
+                or self.engaged.busy_elsewhere(prospective_lead, scope_key)):
             self.queue.append((channel_id, leader_id, user_text, root_id))
-            self._log("queued", text=user_text[:80], depth=len(self.queue), scope=scope_key)
+            self._log("queued", text=user_text[:80], depth=len(self.queue), scope=scope_key,
+                      lead_busy=bool(self.engaged.busy_elsewhere(prospective_lead, scope_key)))
             return {"mode": "queued", "queued": len(self.queue)}
         # 세션 초기화는 '새 최상위 요청'에만 한다 — 기존 프로젝트 '개입(이어서/수정)'에선 건너뛴다.
         # [근본] 개입은 진행 중이던 팀·위임·owner를 '이어가야' 하는데, 세션을 지우면 리더와 동료가 그 기억을
@@ -951,6 +993,11 @@ class Sys:
         # (개입 복원 등 await 사이) 같은 채널의 연속 메시지가 둘 다 게이트를 통과해 '같은 프로젝트에
         # 흐름 2개'가 생길 수 있다(작업공간·베턴 이중화). 병렬 도입 전부터 있던 창을 함께 봉쇄.
         self.active_flows[scope_key] = flow
+        # [전역 점유 — 리더 선점] 같은 sync 블록에서 리더를 장부에 등록 + 흐름의 comm을 장부에 연결.
+        # 다른 프로젝트의 동시 시작이 같은 리더를 집어가는 레이스가 구조적으로 불가능해진다
+        # (asyncio 단일 스레드 — 게이트 검사~여기까지 await 없음). start_root의 재등록은 멱등.
+        self.engaged.engage(lead, scope_key)
+        flow.comm.attach_engagement(self.engaged, scope_key)
         flow.register_project = lambda ch, name: self._register_project(ch, name, flow.workspace, flow.leader)
         # '기억'(직업 고정): 예비가 recruit로 직군을 받으면 그 직업을 다음 흐름에도 유지하도록 로스터 라벨에 반영
         # — 흐름 시작 때 _roster_labels로 원복되므로, 여기에 기록해야 채용한 직업이 지속된다(1봇 1직업의 연속성).
@@ -1067,10 +1114,18 @@ class Sys:
         except Exception as e:                     # 리더가 죽어도 흐름은 닫고 보고한다
             result = f"(리더 처리 중 오류: {e})"
         # 배포 강제: 배포 가능한 산출물인데 deploy를 안 불렀으면 리더에게 '배포만' 한 번 더(누락 방지).
-        result = await self._ensure_deploy(flow, lead, result)
+        # 여기부터 마감 꼬리는 어떤 실패에도 끊기면 안 된다 — 끊기면 스코프·전역 점유가 유령으로
+        # 남아 그 프로젝트(와 그 리더의 다른 프로젝트)가 영영 큐에 갇힌다(병렬에서 반경 확대).
+        try:
+            result = await self._ensure_deploy(flow, lead, result)
+        except Exception as e:
+            self._log("ensure_deploy_failed", err=str(e)[:80])
         # 리더의 반환값 = 사용자에게 가는 Response(=보고). origin 프레임을 닫아 시작점 복귀.
-        await self.guide.post(flow.user_channel, lead, format_response(result),
-                              reply_to=flow.root_id)
+        try:
+            await self.guide.post(flow.user_channel, lead, format_response(result),
+                                  reply_to=flow.root_id)
+        except Exception as e:
+            self._log("final_post_failed", err=str(e)[:80])
         self._close_flow(flow, lead, result)
         flow.done, flow.final = True, result
         # 안전망: 리더가 complete_task로 명시적으로 닫지 않은 현재 Task는 '중단'으로 표시한다
@@ -1107,16 +1162,32 @@ class Sys:
         self._log("flow_done", project=flow.project_channel is not None,
                   tasks=len(flow.tasks), comm_done=flow.comm.done)
         self.active_flows.pop(scope_key, None)
-        # 큐 드레인: 지금 시작 가능한(스코프 비충돌) 첫 명령을 이어서 처리.
+        # [전역 점유 해제 안전망] 이 흐름의 모든 점유를 일괄 해제 — 정상 경로는 respond/escalate가
+        # 대칭으로 풀지만, 예외·강제 종료로 남은 점유가 있어도 여기서 회사 풀로 돌려보낸다.
+        self.engaged.release_scope(scope_key)
+        # 큐 드레인: 지금 시작 가능한(스코프 비충돌·리더 가용) 첫 명령을 이어서 처리.
+        item = self._pop_runnable_queued()
+        if item is not None:
+            return await self.handle_user_input(*item)
+        return {"mode": "flow", "flow": flow}
+
+    def _pop_runnable_queued(self):
+        """큐에서 '지금 시작 가능한' 첫 항목을 꺼낸다(없으면 None) — 시작 가능 = 스코프 비충돌 +
+        운영 상한 여유 + 그 흐름을 이끌 봇이 타 흐름에 점유돼 있지 않음(게이트와 같은 판정).
+        흐름 종료와 수면 증류 종료(점유 해제 시점들)가 공용으로 쓴다."""
+        live = {k for k, f in self.active_flows.items() if not f.done}
         for i, item in enumerate(list(self.queue)):
             ch = int(item[0])
             p = self.projects.get(ch)
             k = p["id"] if p else "main"
-            live = {kk for kk, ff in self.active_flows.items() if not ff.done}
-            if k not in live and len(live) < self.max_flows:
+            lead_q = (item[1] if (item[1] and item[1] in self.bot_info)
+                      else (p["leader"] if p else item[1]))
+            if (k not in live
+                    and (self.max_flows <= 0 or len(live) < self.max_flows)
+                    and not self.engaged.busy_elsewhere(lead_q, k)):
                 self.queue.pop(i)
-                return await self.handle_user_input(*item)
-        return {"mode": "flow", "flow": flow}
+                return item
+        return None
 
     # --- 진짜 입구: 채널의 유저 형식 Request를 읽어 라우팅 ---
 
