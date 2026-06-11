@@ -1608,22 +1608,20 @@ def test_직무기준_주입과_초안요청():
     assert "엣지·경계값을 시뮬로" in p13 and "[직무기준] QA" in p13   # 겸직: 보유분 주입+부족분 요청
 
 
-def test_직무기준_흡수_영속_본문제거():
-    """보고 속 [직무기준] 블록은 SYS가 흡수한다 — 메모리·가이드(save_role_profile)로 영속하고
-    본문에서는 제거돼 요청자에게 깨끗한 보고만 전달된다."""
-    class _G(FakeGuide):
-        def __init__(self):
-            super().__init__()
-            self.saved = {}
-
-        async def save_role_profile(self, gid, job, text):
-            self.saved[job] = text
-
-    g = _G()
-    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"})
+def test_직무기준_흡수_영속_본문제거(tmp_path):
+    """보고 속 [직무기준] 블록은 SYS가 흡수한다 — 메모리·디스크(role_profiles.json)로 영속하고
+    본문에서는 제거돼 요청자에게 깨끗한 보고만 전달된다(사용자 디스코드를 오염시키지 않음).
+    재기동 시 디스크에서 복원되고, 리클레임으로 잃으면 전문가가 첫 작업 때 다시 쓴다(자가 재생)."""
+    import json as _json
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
+            session_dir=str(tmp_path))
     out = asyncio.run(s._absorb_role_profiles(
         "구현·검증 완료 보고입니다.\n[직무기준] QA\n실플레이 시나리오를 끝까지 재현한다\n경계값을 직접 친다\n[/직무기준]"))
     assert out == "구현·검증 완료 보고입니다."                  # 본문에서 블록 제거
     assert "실플레이 시나리오" in s.role_profiles["QA"]         # 메모리 흡수
-    assert "경계값" in g.saved["QA"]                            # 가이드 영속 호출
+    saved = _json.load(open(tmp_path / "role_profiles.json", encoding="utf-8"))
+    assert "경계값" in saved["profiles"]["QA"]                  # 디스크 영속
     assert any(e["event"] == "role_profile_saved" for e in s.flow_log)
+    s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
+             session_dir=str(tmp_path))
+    assert "실플레이 시나리오" in s2.role_profiles["QA"]        # 재기동 복원

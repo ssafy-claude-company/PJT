@@ -75,6 +75,8 @@ class Sys:
         # Discord(sys-roles)에 영속돼 이후 모든 작업 프롬프트에 자기검수 기준으로 주입된다.
         # QA·백엔드·프론트·런타임 채용 직군 모두 같은 메커니즘 하나로 '각자의 일'이 고도화된다.
         self.role_profiles: Dict[str, str] = {}
+        self.profiles_path = (os.path.join(session_dir, "role_profiles.json") if session_dir else None)
+        self._load_profiles()
         self._proj_n = 0
         self._load_projects()
 
@@ -313,6 +315,30 @@ class Sys:
         self._log("open_task_restored", project=proj.get("id"), task=snap["task_id"],
                   owner=int(snap.get("owner") or 0))
         return snap
+
+    def _load_profiles(self):
+        """디스크(role_profiles.json)에서 직무 기준을 복원한다. 리클레임으로 사라지면 그만 —
+        각 직군 전문가가 첫 작업 때 다시 작성한다(자가 재생; 사용자 디스코드를 오염시키지 않음)."""
+        if not self.profiles_path or not os.path.exists(self.profiles_path):
+            return
+        try:
+            data = json.load(open(self.profiles_path, encoding="utf-8"))
+            self.role_profiles.update({k: v for k, v in (data.get("profiles") or {}).items() if v})
+        except Exception:
+            pass
+
+    def _save_profiles(self):
+        if not self.profiles_path:
+            return
+        try:
+            tmp = f"{self.profiles_path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"profiles": self.role_profiles}, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.profiles_path)
+        except Exception:
+            pass
 
     def _log(self, event, **f):
         rec = {"event": event, "ts": time.time(), **f}
@@ -611,14 +637,10 @@ class Sys:
             return ""
 
         out = self._PROFILE_RE.sub(_take, text).strip()
-        fn = getattr(self.guide, "save_role_profile", None)
-        for job, body in absorbed:
-            self._log("role_profile_saved", job=job, size=len(body))
-            if fn and self.guild_id:
-                try:
-                    await fn(self.guild_id, job, body)
-                except Exception:
-                    pass
+        if absorbed:
+            self._save_profiles()   # 디스크 영속(사용자 디스코드를 시스템 데이터로 오염시키지 않음)
+            for job, body in absorbed:
+                self._log("role_profile_saved", job=job, size=len(body))
         return out or "(직무 기준이 등록되었습니다.)"
 
     async def _drain_inflight(self, flow) -> str:
