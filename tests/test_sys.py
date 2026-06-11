@@ -2457,3 +2457,50 @@ def test_이름충돌_다른작품은_하이재킹_금지_자동고유화(tmp_pa
     pid3 = s._register_project(300, "public-data-website", "/ws/c", 11,
                                purpose="공공 대기질 미세먼지 데이터 사이트 개선해줘")
     assert pid3 == pid1 and s.projects[300]["id"] == pid1      # 재사용(이동)
+
+
+def test_배포_진행중_재호출은_대기_새배포_트리거_금지():
+    """[배포 폴링 차단] 빌드가 길어지면 리더가 deploy를 재호출해 '점검'하려 하는데, 재호출은 새
+    배포를 또 트리거(빌드 리셋)하는 자기 영속 루프가 된다(라이브: [안내][배포] 1분 간격 도배 +
+    같은 턴 4연발). 흐름당 동시 1회 — 진행 중 재호출·병렬 호출은 [대기]로 즉답한다."""
+    import src.guide_tools as gt
+    f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L"})
+    f.start_root("root")
+    f.workspace = "/tmp/ws-x"
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    calls = {"n": 0}
+    gate = asyncio.Event()
+
+    def fake_deploy_sync(ws, name, *a):
+        calls["n"] += 1
+        return f"배포 성공 ✅ {name}"
+
+    async def scenario(monkey_ds):
+        import src.deploy as dp
+        orig = dp.deploy_sync
+        dp.deploy_sync = monkey_ds
+        try:
+            import anyio
+
+            async def slow_to_thread(fn, *a):
+                await gate.wait()                      # 1번째 배포를 잡아둔 채
+                return fn(*a)
+            orig_run = anyio.to_thread.run_sync
+            anyio.to_thread.run_sync = slow_to_thread
+            try:
+                import os as _os
+                _os.environ.setdefault("GH_PAT", "x"); _os.environ.setdefault("GH_USER", "x")
+                _os.environ.setdefault("RENDER_KEY", "x"); _os.environ.setdefault("RENDER_OWNER", "x")
+                t1 = asyncio.ensure_future(t["deploy"].handler({"name": "site"}))
+                await asyncio.sleep(0.02)
+                r2 = await t["deploy"].handler({"name": "site"})       # 진행 중 재호출
+                assert "[대기]" in r2["content"][0]["text"]            # 새 배포 트리거 없이 즉답
+                gate.set()
+                out = await t1
+                assert "배포 성공" in out["content"][0]["text"]
+                assert calls["n"] == 1                                 # 실제 배포는 1회뿐
+            finally:
+                anyio.to_thread.run_sync = orig_run
+        finally:
+            dp.deploy_sync = orig
+    asyncio.run(scenario(fake_deploy_sync))

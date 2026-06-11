@@ -1298,6 +1298,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               "Node 앱이어야 하고 서버는 process.env.PORT를 사용해야 함. run 검증을 끝낸 뒤 마지막에 호출.",
               {"name": str})
         async def deploy(args):
+            # [배포 폴링 차단] 재호출은 '점검'이 아니라 새 배포 트리거(git push+빌드 리셋)다 — 빌드가
+            # 길어지면 리더가 1분마다 deploy를 다시 불러 빌드를 계속 리셋하는 자기 영속 루프 + 같은 턴
+            # 병렬 4연발이 라이브 관측됨([안내][배포] 도배). 흐름당 동시 1회만, 진행 중엔 [대기].
+            if getattr(flow, "deploy_inflight", False):
+                return _ok("[대기] 배포가 이미 진행 중입니다 — deploy를 다시 부르지 마세요(재호출은 점검이 "
+                           "아니라 **새 배포를 또 트리거**해 빌드를 계속 리셋합니다). 진행 중인 배포의 "
+                           "성공/실패 결과가 곧 이 도구의 응답으로 돌아옵니다 — 그때 판단하세요.")
             name = deploy_service_name(flow, args.get("name", ""))   # 프로젝트별 결정적 서비스명
             gh, ghu = os.environ.get("GH_PAT"), os.environ.get("GH_USER")
             rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")
@@ -1306,7 +1313,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             if not getattr(flow, "workspace", None):
                 return _ok("배포 불가: 작업공간이 없습니다.")
             from .deploy import deploy_sync
-            result = await anyio.to_thread.run_sync(deploy_sync, flow.workspace, name, gh, ghu, rk, owner)
+            flow.deploy_inflight = True
+            try:
+                result = await anyio.to_thread.run_sync(deploy_sync, flow.workspace, name, gh, ghu, rk, owner)
+            finally:
+                flow.deploy_inflight = False
             flow.deployed = result                 # 배포 호출됨 기록(SYS의 배포 강제가 중복 안 하게)
             await _note(f"[배포] {result}")
             return _ok(result)

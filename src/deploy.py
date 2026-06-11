@@ -173,7 +173,7 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
         url = svc.get("serviceDetails", {}).get("url", "")
 
     # 6) '방금 트리거한 배포'가 live 될 때까지 폴링(옛 배포의 live를 거짓 성공으로 읽지 않도록)
-    deadline = time.time() + 240
+    deadline = time.time() + 480   # 빌드 8분까지 동행 — '트리거됨' 비종결 반환(폴링 초대) 최소화
     status = "?"
     while time.time() < deadline:
         if dep_id:
