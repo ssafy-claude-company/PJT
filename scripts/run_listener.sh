@@ -21,6 +21,11 @@ export ORGANT_SKIP_RECOVERY="${ORGANT_SKIP_RECOVERY-0}"
 # 행 감지는 CLI가 아니라 SYS의 침묵 워치독(turn_timeout/idle_timeout, 활동 기반)이 담당한다.
 export MCP_TOOL_TIMEOUT="${MCP_TOOL_TIMEOUT:-14400000}"   # 4h(ms) — 정상 긴 위임을 안 끊게
 export MCP_TIMEOUT="${MCP_TIMEOUT:-120000}"               # MCP 서버 시작 대기 2m(ms)
+# 카나리아 주기 단축(300→120s): 컨테이너 동면(세션 비활성 → 박스째 정지) 후 해동되면 시계점프
+# 감지로 자가 재시작하는데, 그 '박제 시간'(해동→감지)을 최대 5분→2분으로 줄인다(라이브 관측:
+# 2시간 동면 후 사용자가 박제된 '진행' 상태를 먼저 목격). 동면 자체는 환경 본성이라 막을 수 없고,
+# 피해(작업물·요청)는 영속+부팅복구가 0으로 만든다 — 이 값은 '깨어난 뒤 어색한 시간'만 줄인다.
+export ORGANT_CANARY_PERIOD="${ORGANT_CANARY_PERIOD:-120}"
 # 이어가기 예산: 낭비(폴링·churn)는 구조적으로 차단돼 있어, 한도는 '큰 작업을 자르는 일'만 없게 넉넉히.
 # (라이브 관측: 결함수정 개입이 생산적 세그먼트 7개 필요 — 기본 6으로 마감 직전에 끊김)
 export ORGANT_MAX_CONTINUE="${ORGANT_MAX_CONTINUE:-12}"
