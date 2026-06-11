@@ -1819,3 +1819,35 @@ def test_병렬_다른프로젝트는_동시진행_같은스코프는_큐(tmp_pa
         await t_b
         assert any("A 추가" in b for b in order)       # 드레인으로 실행됨
     asyncio.run(scenario())
+
+
+def test_같은스코프_동시진입_레이스_봉쇄(tmp_path):
+    """[안정성] 같은 프로젝트 채널에 메시지 2개가 '동시에' 도착해도 흐름은 1개만 생긴다 —
+    스코프 선점이 첫 await 이전이라 두 번째는 반드시 큐로(개입 복원 await 사이로 끼어들던
+    중복 진입 창 봉쇄)."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"},
+            workspace="/tmp/ws-x", session_dir=str(tmp_path))
+    s.projects = {100: {"id": "P-00A", "name": "a", "channel": 100,
+                        "workspace": str(tmp_path), "leader": 11, "summary": ""}}
+    gate = asyncio.Event()
+    runs = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        runs.append(body)
+        await gate.wait()
+        flow.current = None
+        return "ok"
+    s.run_turn = fake_run_turn
+
+    async def scenario():
+        t1 = asyncio.ensure_future(s.handle_user_input(100, 11, "첫 메시지", root_id=None))
+        t2 = asyncio.ensure_future(s.handle_user_input(100, 11, "둘째 메시지", root_id=None))
+        await asyncio.sleep(0.05)
+        assert len(runs) == 1                       # 흐름은 하나만 떴다
+        assert len(s.queue) == 1                    # 둘째는 큐
+        gate.set()
+        await t1
+        await t2
+        assert len(runs) == 2                       # 종료 후 드레인으로 둘째 실행
+    asyncio.run(scenario())

@@ -1017,7 +1017,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 for v in voters:
                     if flow.comm.done or flow.comm.alive != me_id:
                         break
-                    frame = flow.comm.request(me_id, v, "vote", Kind.INFO)
+                    try:
+                        frame = flow.comm.request(me_id, v, "vote", Kind.INFO)
+                    except CommError as e:   # 같은 턴의 병렬 도구와 베턴 경합 — 크래시 대신 중단 기록
+                        reasons.append(f"(중단 — 베턴 경합: {str(e)[:60]})")
+                        break
                     body = (f"[표결] 안건: {question}\n선택지: {' / '.join(opts)}\n"
                             f"당신의 전문가 관점에서 하나를 고르고 근거를 2줄 이내로. 반드시 형식: "
                             f"[표] 선택지명\n근거")
@@ -1091,7 +1095,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         body = (f"[회의 {r}라운드] 주제: {topic}\n지금까지의 발언:\n{log_txt}\n\n"
                                 f"당신({flow._info(m)})의 차례입니다 — 앞 발언에 동의/반박/보완하며 "
                                 f"당신 전문 관점의 입장을 3~5줄로. 맹목적 동의 금지(근거 필수).")
-                        frame = flow.comm.request(me_id, m, "meet", Kind.INFO)
+                        try:
+                            frame = flow.comm.request(me_id, m, "meet", Kind.INFO)
+                        except CommError as e:
+                            minutes.append(f"(회의 중단 — 베턴 경합: {str(e)[:60]})")
+                            break
                         try:
                             res = await flow.wake(m, body, Kind.INFO)
                         except Exception as e:

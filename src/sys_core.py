@@ -124,7 +124,7 @@ class Sys:
                     "projects": {str(k): v for k, v in self.projects.items()}}
             # 원자적 저장: 임시파일에 다 쓰고 flush+fsync 후 교체 → 쓰는 도중 프로세스가 죽어도
             # 원본 projects.json이 '반쪽(깨진 JSON)'으로 남지 않는다(개입 레지스트리 유실 방지).
-            tmp = f"{self.projects_path}.tmp"
+            tmp = f"{self.projects_path}.tmp-{time.monotonic_ns()}"   # 병렬 흐름 동시 저장 경합 방지
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
                 f.flush()
@@ -155,7 +155,7 @@ class Sys:
         try:
             jobs = {str(k): v for k, v in self._roster_labels.items()
                     if v and not str(v).startswith("예비")}
-            tmp = f"{self.jobs_path}.tmp"
+            tmp = f"{self.jobs_path}.tmp-{time.monotonic_ns()}"   # 병렬 흐름 동시 저장 경합 방지
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"jobs": jobs}, f, ensure_ascii=False, indent=2)
                 f.flush()
@@ -346,7 +346,7 @@ class Sys:
         if not self.profiles_path:
             return
         try:
-            tmp = f"{self.profiles_path}.tmp"
+            tmp = f"{self.profiles_path}.tmp-{time.monotonic_ns()}"   # 병렬 흐름 동시 저장 경합 방지
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"profiles": self.role_profiles, "experience": self.role_experience},
                           f, ensure_ascii=False, indent=2)
@@ -947,6 +947,10 @@ class Sys:
         lead = proj["leader"] if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
         flow.session_scope = session_scope
+        # [선점 — 레이스 봉쇄] 게이트 통과 직후·첫 await 이전에 스코프를 점유한다. 등록이 늦으면
+        # (개입 복원 등 await 사이) 같은 채널의 연속 메시지가 둘 다 게이트를 통과해 '같은 프로젝트에
+        # 흐름 2개'가 생길 수 있다(작업공간·베턴 이중화). 병렬 도입 전부터 있던 창을 함께 봉쇄.
+        self.active_flows[scope_key] = flow
         flow.register_project = lambda ch, name: self._register_project(ch, name, flow.workspace, flow.leader)
         # '기억'(직업 고정): 예비가 recruit로 직군을 받으면 그 직업을 다음 흐름에도 유지하도록 로스터 라벨에 반영
         # — 흐름 시작 때 _roster_labels로 원복되므로, 여기에 기록해야 채용한 직업이 지속된다(1봇 1직업의 연속성).
@@ -959,7 +963,10 @@ class Sys:
             flow.project_name = proj.get("name")   # 배포 슬롯 유도(프로젝트별 결정적 서비스명)
             # 미완 Task 되살리기: 저장된 '진행 중' Task가 있으면 같은 블록·스레드·owner로 재부착(flow.current).
             # → 사용자가 Task명을 부르지 않아도 담당자가 '그 일'을 이어가게 한다(사용자 요청 반영).
-            resumed = await self._restore_open_task(flow, proj)
+            try:
+                resumed = await self._restore_open_task(flow, proj)
+            except Exception:
+                resumed = None   # 복원 실패는 흐름 자체를 막지 않는다(스코프 유령화 방지)
             resume_note = ""
             if resumed:
                 resume_note = (
@@ -1002,7 +1009,6 @@ class Sys:
             flow.start_root(root_id)
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")
         flow.log = self._log                       # 관측: req_sent 등을 flow.jsonl로 영속
-        self.active_flows[scope_key] = flow
         flow.last_activity = time.monotonic()
 
         async def _run_leader():
@@ -1075,7 +1081,10 @@ class Sys:
         if flow.current is not None:
             flow.current.status.status = "중단"
             flow.current.status.result = (result or "")[:500]
-            await flow.refresh(flow.current)
+            try:
+                await flow.refresh(flow.current)   # Discord 실패가 마감 꼬리를 끊지 않게(유령 스코프 방지)
+            except Exception:
+                pass
             open_task_snap = self._task_snapshot(flow, flow.current)
             flow.current = None
         # 프로젝트 요약 + 미완 Task 영속 갱신(다음 개입 때 맥락·이어가기 대상으로 제공).
