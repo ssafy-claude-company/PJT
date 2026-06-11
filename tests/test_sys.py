@@ -1641,3 +1641,49 @@ def test_create_project는_전용_작업공간을_분리한다():
         assert f.workspace.endswith("cell-grow-game")            # 슬러그 폴더
         import os as _os
         assert _os.path.isdir(f.workspace)                       # 실제 생성됨
+
+
+def test_배포명은_프로젝트별_결정적(monkeypatch):
+    """[멀티 프로젝트] 등록 프로젝트의 배포 서비스명은 '프로젝트'에서 결정적으로 유도된다 —
+    DEPLOY_NAME 고정이 모든 작품을 한 슬롯에 덮어쓰게 하던 단일 작품 가정 제거. 에이전트
+    임의 명명은 등록 프로젝트에서 무시되고, 미등록 흐름만 env→인자→기본 순."""
+    from src.guide_tools import deploy_service_name
+    monkeypatch.setenv("DEPLOY_NAME", "todo-organt-demo")
+    f = _flow(FakeGuide())
+    f.project_id, f.project_name = "P-003", "Cell Grow Game"
+    assert deploy_service_name(f, "agent-random-name") == "organt-cell-grow-game"   # 인자 무시
+    f.project_name = "세포 키우기"                                                   # 한글 → 식별번호 폴백
+    assert deploy_service_name(f) == "organt-p-003"
+    f2 = _flow(FakeGuide())                                                          # 미등록 흐름
+    assert deploy_service_name(f2, "x") == "todo-organt-demo"                        # env 폴백 유지
+    monkeypatch.delenv("DEPLOY_NAME")
+    assert deploy_service_name(f2, "My App!") == "my-app"
+
+
+def test_세션_교차오염_차단_다른프로젝트_개입은_리셋(tmp_path):
+    """[멀티 프로젝트] 직전 흐름과 '다른 프로젝트'에 개입하면 세션을 초기화한다 — 전역 세션
+    파일에 남은 타 프로젝트 기억이 끼어드는 교차 오염 차단. 같은 프로젝트 연속 개입만 유지."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"},
+            workspace="/tmp/ws-x", session_dir=str(tmp_path))
+    s.projects = {
+        100: {"id": "P-00A", "name": "a", "channel": 100, "workspace": str(tmp_path), "leader": 11, "summary": ""},
+        200: {"id": "P-00B", "name": "b", "channel": 200, "workspace": str(tmp_path), "leader": 11, "summary": ""},
+    }
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        flow.current = None
+        return "ok"
+    s.run_turn = fake_run_turn
+
+    def seed():
+        (tmp_path / "organt_state_11.json").write_text("{}")
+    seed()
+    asyncio.run(s.handle_user_input(100, 11, "A 개입", root_id=None))     # 직전 스코프 없음 → 리셋됨
+    assert s._last_scope() == "P-00A"
+    seed()
+    asyncio.run(s.handle_user_input(100, 11, "A 재개입", root_id=None))   # 같은 프로젝트 → 세션 유지
+    assert (tmp_path / "organt_state_11.json").exists()
+    asyncio.run(s.handle_user_input(200, 11, "B 개입", root_id=None))     # 다른 프로젝트 → 리셋
+    assert not (tmp_path / "organt_state_11.json").exists()
+    assert s._last_scope() == "P-00B"

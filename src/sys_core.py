@@ -350,6 +350,26 @@ class Sys:
             except OSError:
                 pass
 
+    def _scope_path(self):
+        return os.path.join(str(self.session_dir), "last_scope.json") if self.session_dir else None
+
+    def _last_scope(self):
+        """직전 흐름의 프로젝트 스코프(P-XXX 또는 None) — 세션 교차 오염 판정용."""
+        p = self._scope_path()
+        try:
+            return json.load(open(p, encoding="utf-8")).get("scope") if p and os.path.exists(p) else None
+        except Exception:
+            return None
+
+    def _set_last_scope(self, scope):
+        p = self._scope_path()
+        if not p:
+            return
+        try:
+            json.dump({"scope": scope}, open(p, "w", encoding="utf-8"))
+        except Exception:
+            pass
+
     def _reset_sessions(self):
         """새 최상위 요청마다 에이전트 세션(resume용 session_id)을 초기화한다.
         이전 요청의 '이미 끝냈다/작업중' 맥락이 새 요청에 달라붙어 no-op 하는 앵커링을
@@ -782,7 +802,8 @@ class Sys:
         deployable = bool(ws) and os.path.exists(os.path.join(ws, "package.json"))
         gh, ghu = os.environ.get("GH_PAT"), os.environ.get("GH_USER")
         rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")
-        name = os.environ.get("DEPLOY_NAME")
+        from .guide_tools import deploy_service_name
+        name = deploy_service_name(flow)   # [멀티 프로젝트] 프로젝트별 결정적 서비스명(env 고정 제거)
         if flow.deployed or not (deployable and name and gh and ghu and rk and owner):
             return result
         try:
@@ -824,8 +845,18 @@ class Sys:
         # 위임(예: 장도현→김민준)을 무시하고, 팀을 일부만 다시 부르고, 혼자 검토·마무리하던' 행동의 근본 원인이다.
         # 개입 본문엔 새 요청/증상이 명시되므로 '이미 했다' 앵커링도 생기지 않는다(앵커링 방지 목적은 새 요청에만
         # 유효). 컨테이너 리클레임으로 세션 파일이 이미 사라졌으면 어차피 새로 시작하니 무해하다(그건 별개 유실).
+        # [멀티 프로젝트] 봇 세션 파일은 전역이라, 직전 흐름이 '다른 프로젝트'였다면 그 기억이 이번
+        # 개입에 끼어든다(교차 오염). 마지막 스코프를 추적해 다르면 초기화한다 — 같은 프로젝트의
+        # 연속 개입만 세션을 잇는다(프로젝트별 세션 영속은 '기억 증류' 고도화의 몫).
+        scope = proj["id"] if proj else None
+        prev_scope = self._last_scope()
         if not proj:
             self._reset_sessions()   # 새 요청 → 세션 초기화(이전 '이미 했다' 앵커링 차단)
+        elif prev_scope is not None and prev_scope != scope:
+            # 직전 흐름이 '확실히 다른 프로젝트'였을 때만 리셋 — 모르면(None: 부팅/리클레임 직후 등)
+            # 기존대로 유지(불필요한 기억 소실 방지; 리클레임이면 세션 파일이 이미 없어 무해).
+            self._reset_sessions()
+            self._log("reset_sessions_cross_project", prev=prev_scope, now=scope)
         else:
             self._log("intervention_keep_sessions", project=proj["id"])
         # 이전 흐름의 런타임 채용(예비→직군) 라벨 원복 — dict는 그대로 두고 내용만 갱신(빌더 클로저가 참조 중).
@@ -851,6 +882,7 @@ class Sys:
             flow.project_channel = int(channel_id)   # 기존 채널 재사용 → create_project는 no-op
             flow.workspace = proj["workspace"]
             flow.project_id, flow.intervention = proj["id"], proj
+            flow.project_name = proj.get("name")   # 배포 슬롯 유도(프로젝트별 결정적 서비스명)
             # 미완 Task 되살리기: 저장된 '진행 중' Task가 있으면 같은 블록·스레드·owner로 재부착(flow.current).
             # → 사용자가 Task명을 부르지 않아도 담당자가 '그 일'을 이어가게 한다(사용자 요청 반영).
             resumed = await self._restore_open_task(flow, proj)
@@ -980,6 +1012,7 @@ class Sys:
                 p["summary"] = (result or "")[:300]
                 p["open_task"] = open_task_snap
                 self._save_projects()
+        self._set_last_scope(flow.project_id)   # 이번 흐름의 스코프 기록 — 다음 개입의 오염 판정 기준
         self._log("flow_done", project=flow.project_channel is not None,
                   tasks=len(flow.tasks), comm_done=flow.comm.done)
         self.active_flow = None

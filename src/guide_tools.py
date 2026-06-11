@@ -261,6 +261,22 @@ class Flow:
         return [self._info(i) or str(i) for i in ids]
 
 
+def deploy_service_name(flow, arg_name: str = "") -> str:
+    """배포 서비스명 결정 — [멀티 프로젝트] 등록 프로젝트는 '프로젝트명 슬러그'(없으면 식별번호)로
+    **결정적으로** 정한다: 같은 프로젝트는 늘 같은 서비스, 다른 프로젝트는 다른 서비스(단일
+    DEPLOY_NAME 고정이 모든 작품을 한 슬롯에 덮어쓰게 하던 '단일 작품 가정' 제거 — 라이브에서
+    세포 게임이 아레나 라이브를 덮음). 에이전트 임의 명명 사고도 등록 프로젝트에선 구조적으로
+    불가(인자 무시). 미등록 흐름만 DEPLOY_NAME → 인자 → 기본 순."""
+    pname = getattr(flow, "project_name", None)
+    pid = getattr(flow, "project_id", None)
+    if pname or pid:
+        slug = re.sub(r"[^a-z0-9-]", "-", str(pname or "").lower()).strip("-")[:40]
+        return f"organt-{slug or str(pid).lower()}"
+    return (os.environ.get("DEPLOY_NAME", "").strip()
+            or re.sub(r"[^a-z0-9-]", "-", str(arg_name or "").lower()).strip("-")
+            or "organt-app")
+
+
 def _ok(text):
     return {"content": [{"type": "text", "text": text}]}
 
@@ -849,6 +865,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             if assigned:
                 flow.project_team = _uniq([flow.leader] + assigned)
             # 프로젝트는 내부 레지스트리에만 등록(채널 자체가 프로젝트 식별자 — 채널에 앵커 안 박음).
+            flow.project_name = args["name"]   # 배포 슬롯 유도용(프로젝트별 결정적 서비스명)
             if flow.register_project:
                 flow.project_id = flow.register_project(flow.project_channel, args["name"])
             return _ok(f"project_channel={flow.project_channel} project_id={flow.project_id} "
@@ -981,11 +998,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               "Node 앱이어야 하고 서버는 process.env.PORT를 사용해야 함. run 검증을 끝낸 뒤 마지막에 호출.",
               {"name": str})
         async def deploy(args):
-            # 프로젝트에 정식 서비스명(DEPLOY_NAME)이 설정돼 있으면 그걸로 '고정' — 에이전트가 임의 이름으로
-            # 엉뚱한 새 서비스에 배포하는 사고를 구조적으로 차단(라이브가 안 바뀌는 원인이었음).
-            name = (os.environ.get("DEPLOY_NAME", "").strip()
-                    or re.sub(r"[^a-z0-9-]", "-", str(args.get("name", "")).lower()).strip("-")
-                    or "organt-app")
+            name = deploy_service_name(flow, args.get("name", ""))   # 프로젝트별 결정적 서비스명
             gh, ghu = os.environ.get("GH_PAT"), os.environ.get("GH_USER")
             rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")
             if not (gh and ghu and rk and owner):
