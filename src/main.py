@@ -149,7 +149,11 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
             allowed = allowed + LEADER_TOOLS
             turns = int(os.environ.get("ORGANT_LEADER_TURNS", "500"))
         # state_tag: 증류(수면) 등 '작업 외 대화'는 별도 세션 파일을 써 작업 기억을 오염시키지 않는다.
-        state_path = cfg.audit_log_path.parent / f"organt_state_{state_tag or organt_id}.json"
+        # 흐름이 있으면 세션을 '흐름 스코프'별로 분리 — 프로젝트 간 기억 오염·병렬 흐름 충돌이
+        # 구조적으로 불가능(같은 봇이 두 프로젝트에서 동시에 일해도 기억이 섞이지 않음).
+        scope = getattr(flow, "session_scope", None) if flow is not None else None
+        tag = state_tag or (f"{scope}_{organt_id}" if scope else organt_id)
+        state_path = cfg.audit_log_path.parent / f"organt_state_{tag}.json"
         label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
         # sdk 서버별 도구호출 타임아웃(ms) — CLI가 env(MCP_TOOL_TIMEOUT)보다 우선 적용하는 명시 설정.
         # request(동료 위임)는 동료의 중첩 작업 동안 수십 분 블록되는 게 정상 설계라 사실상 해제해 둔다.

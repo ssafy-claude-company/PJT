@@ -709,7 +709,7 @@ def test_프로젝트_레지스트리_영속과_중복방지(tmp_path):
 def test_단일흐름_진행중_명령은_큐잉():
     g = FakeGuide()
     s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"})
-    s.active_flow = Flow(g, 500, 1, 11, {11: "L"})    # 활성(미완) 흐름
+    s.active_flows["main"] = Flow(g, 500, 1, 11, {11: "L"})    # 같은 스코프(main) 활성 흐름
     out = asyncio.run(s.handle_user_input(500, 11, "두번째 명령", root_id=None))
     assert out["mode"] == "queued"                    # 버리지 않고 큐에 적재
     assert s.queue and s.queue[0][2] == "두번째 명령"
@@ -738,20 +738,23 @@ def test_턴한도_미완이면_같은세션으로_이어서_완료():
 
 
 def test_새요청마다_세션초기화_앵커링차단(tmp_path):
-    """새 최상위 요청 시작 시 organt_state_*.json를 지워 '이미 했다' 앵커링을 구조적으로 막는다."""
+    """새 최상위 요청은 '고유 세션 스코프'로 시작한다 — 이전 흐름의 세션 파일을 아예 읽지 않으므로
+    '이미 했다' 앵커링이 구조적으로 차단된다(과거의 전역 삭제 방식을 스코프 분리가 대체).
+    프로젝트가 등록되면 흐름 마감 때 그 스코프로 승격(리네임)돼 다음 개입이 기억을 잇는다."""
     sd = tmp_path
-    (sd / "organt_state_11.json").write_text("{}")
-    (sd / "organt_state_12.json").write_text("{}")
+    (sd / "organt_state_old-scope_11.json").write_text("{}")        # 이전 흐름의 세션(읽히면 안 됨)
     s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
             workspace="/ws", session_dir=str(sd))
+    captured = {}
 
-    async def fake_rt(flow, oid, body, kind, role):
-        return "done"
-
-    s.run_turn = fake_rt
+    async def fake_run_turn(flow, oid, body, kind, role):
+        captured["scope"] = flow.session_scope
+        flow.current = None
+        return "ok"
+    s.run_turn = fake_run_turn
     asyncio.run(s.handle_user_input(500, 11, "새 요청", root_id=None))
-    assert not list(sd.glob("organt_state_*.json"))   # 세션 파일 초기화됨
-    assert any(e["event"] == "reset_sessions" for e in s.flow_log)
+    assert captured["scope"].startswith("new-")                     # 고유 스코프 — 옛 세션과 무관
+    assert (sd / "organt_state_old-scope_11.json").exists()         # 옛 파일은 건드리지도 않음
 
 
 def test_개입은_세션유지_위임기억보존(tmp_path):
@@ -1661,9 +1664,10 @@ def test_배포명은_프로젝트별_결정적(monkeypatch):
     assert deploy_service_name(f2, "My App!") == "my-app"
 
 
-def test_세션_교차오염_차단_다른프로젝트_개입은_리셋(tmp_path):
-    """[멀티 프로젝트] 직전 흐름과 '다른 프로젝트'에 개입하면 세션을 초기화한다 — 전역 세션
-    파일에 남은 타 프로젝트 기억이 끼어드는 교차 오염 차단. 같은 프로젝트 연속 개입만 유지."""
+def test_세션_스코프분리_프로젝트간_기억오염_구조차단(tmp_path):
+    """[병렬·멀티 프로젝트] 세션 파일이 흐름 스코프별로 분리된다 — 개입은 그 프로젝트 스코프를
+    resume(기억 유지)하고, 다른 프로젝트와는 파일 자체가 달라 교차 오염이 구조적으로 불가능하다
+    (과거의 '다른 프로젝트면 리셋' 가드를 대체 — 병렬 동시 흐름에서도 안전)."""
     g = FakeGuide()
     s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"},
             workspace="/tmp/ws-x", session_dir=str(tmp_path))
@@ -1671,23 +1675,17 @@ def test_세션_교차오염_차단_다른프로젝트_개입은_리셋(tmp_path
         100: {"id": "P-00A", "name": "a", "channel": 100, "workspace": str(tmp_path), "leader": 11, "summary": ""},
         200: {"id": "P-00B", "name": "b", "channel": 200, "workspace": str(tmp_path), "leader": 11, "summary": ""},
     }
+    scopes = []
 
     async def fake_run_turn(flow, oid, body, kind, role):
+        scopes.append(flow.session_scope)
         flow.current = None
         return "ok"
     s.run_turn = fake_run_turn
-
-    def seed():
-        (tmp_path / "organt_state_11.json").write_text("{}")
-    seed()
-    asyncio.run(s.handle_user_input(100, 11, "A 개입", root_id=None))     # 직전 스코프 없음 → 리셋됨
-    assert s._last_scope() == "P-00A"
-    seed()
-    asyncio.run(s.handle_user_input(100, 11, "A 재개입", root_id=None))   # 같은 프로젝트 → 세션 유지
-    assert (tmp_path / "organt_state_11.json").exists()
-    asyncio.run(s.handle_user_input(200, 11, "B 개입", root_id=None))     # 다른 프로젝트 → 리셋
-    assert not (tmp_path / "organt_state_11.json").exists()
-    assert s._last_scope() == "P-00B"
+    asyncio.run(s.handle_user_input(100, 11, "A 개입", root_id=None))
+    asyncio.run(s.handle_user_input(200, 11, "B 개입", root_id=None))
+    asyncio.run(s.handle_user_input(100, 11, "A 재개입", root_id=None))
+    assert scopes == ["P-00A", "P-00B", "P-00A"]                    # 프로젝트별 고정 스코프(기억 유지·격리)
 
 
 def test_Skill강화_경험_흡수_주입_상한(tmp_path):
@@ -1784,3 +1782,40 @@ def test_meet_라운드로빈_회의록():
     assert seen[0][1] is True and seen[1][1] is False          # 둘째 발언자는 첫 발언을 봄
     assert {12, 13} <= f.current.participated
     assert f.comm.alive == 11
+
+
+def test_병렬_다른프로젝트는_동시진행_같은스코프는_큐(tmp_path):
+    """[병렬 작업 v1] 흐름 내 단일활성(베턴)은 불변 — 완화는 '다른 프로젝트의 흐름 동시 진행'만.
+    같은 스코프는 직렬 큐, 동시 상한(ORGANT_MAX_FLOWS)도 존중. 종료 시 큐에서 비충돌 항목을 드레인."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"},
+            workspace="/tmp/ws-x", session_dir=str(tmp_path))
+    s.max_flows = 2
+    s.projects = {
+        100: {"id": "P-00A", "name": "a", "channel": 100, "workspace": str(tmp_path), "leader": 11, "summary": ""},
+        200: {"id": "P-00B", "name": "b", "channel": 200, "workspace": str(tmp_path), "leader": 11, "summary": ""},
+    }
+    gate_a = asyncio.Event()
+    order = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        order.append(body)
+        if "A 작업" in body:
+            await gate_a.wait()                       # A를 잡아둔 채 B 진입을 관찰
+        flow.current = None
+        return "ok"
+    s.run_turn = fake_run_turn
+
+    async def scenario():
+        t_a = asyncio.ensure_future(s.handle_user_input(100, 11, "A 작업", root_id=None))
+        await asyncio.sleep(0.05)
+        t_b = asyncio.ensure_future(s.handle_user_input(200, 11, "B 작업", root_id=None))
+        await asyncio.sleep(0.05)
+        assert "A 작업" in order[0] and "B 작업" in order[1]   # B는 A 진행 중에도 동시 진입(다른 프로젝트)
+        r_a2 = await s.handle_user_input(100, 11, "A 추가", root_id=None)
+        assert r_a2["mode"] == "queued"                # 같은 스코프(P-00A)는 큐
+        gate_a.set()
+        await t_a                                      # A 종료 → 드레인이 'A 추가' 실행
+        await t_b
+        assert any("A 추가" in b for b in order)       # 드레인으로 실행됨
+    asyncio.run(scenario())

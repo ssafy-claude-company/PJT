@@ -63,7 +63,11 @@ class Sys:
         # 멈춘 것(리더 서브프로세스 행 포함 — 리더 턴엔 타임아웃이 없어 생기는 구멍)으로 보고 자동 중단·보고한다.
         # 워커 타임아웃(turn_timeout=8분)보다 넉넉히 커야 워커 1회 행→복구를 '무진행'으로 오인하지 않는다.
         self.idle_timeout = int(os.environ.get("ORGANT_IDLE_TIMEOUT", "720"))   # 기본 12분(>8분 워커 타임아웃)
-        self.active_flow: Optional[Flow] = None
+        # [병렬 작업(Feat 4단계)] 흐름 '안'의 단일활성(베턴)은 불변 — 완화는 '서로 다른 프로젝트'의
+        # 흐름 동시 진행만. 같은 스코프(프로젝트/신규)는 직렬 큐. 상한 ORGANT_MAX_FLOWS(기본 2)로
+        # 토큰 동시 사용을 묶는다(1로 두면 종전과 동일한 완전 직렬).
+        self.active_flows: Dict[str, Flow] = {}   # scope(P-XXX|main) → 진행 중 Flow
+        self.max_flows = int(os.environ.get("ORGANT_MAX_FLOWS", "2"))
         self.queue = []                        # 진행 중 들어온 명령(순차 처리 대기)
         self.flow_log = []
         self.flow_log_path = (os.path.join(session_dir, "flow.jsonl") if session_dir else None)
@@ -80,6 +84,14 @@ class Sys:
         self._load_profiles()
         self._proj_n = 0
         self._load_projects()
+
+    @property
+    def active_flow(self):
+        """호환: 진행 중 흐름이 하나라도 있으면 그 중 하나(없으면 None) — 수면 사이클 등이 사용."""
+        for f in self.active_flows.values():
+            if not f.done:
+                return f
+        return None
 
     def _load_projects(self):
         """디스크에서 프로젝트 레지스트리 복원 — 프로세스가 끝나도 '원래 작업'에 개입 가능.
@@ -354,40 +366,20 @@ class Sys:
             except OSError:
                 pass
 
-    def _scope_path(self):
-        return os.path.join(str(self.session_dir), "last_scope.json") if self.session_dir else None
-
-    def _last_scope(self):
-        """직전 흐름의 프로젝트 스코프(P-XXX 또는 None) — 세션 교차 오염 판정용."""
-        p = self._scope_path()
-        try:
-            return json.load(open(p, encoding="utf-8")).get("scope") if p and os.path.exists(p) else None
-        except Exception:
-            return None
-
-    def _set_last_scope(self, scope):
-        p = self._scope_path()
-        if not p:
-            return
-        try:
-            json.dump({"scope": scope}, open(p, "w", encoding="utf-8"))
-        except Exception:
-            pass
-
-    def _reset_sessions(self):
-        """새 최상위 요청마다 에이전트 세션(resume용 session_id)을 초기화한다.
-        이전 요청의 '이미 끝냈다/작업중' 맥락이 새 요청에 달라붙어 no-op 하는 앵커링을
-        구조적으로 차단한다(수동 rm의 대체). 산출물은 작업공간에 남으므로 맥락은 Read로 복원."""
+    def _reset_sessions(self, scope=None):
+        """세션 파일 초기화 — scope를 주면 그 스코프만, 없으면 전체(운영 청소용).
+        세션이 흐름 스코프별 파일로 분리된 뒤로는 새 요청에 리셋이 필요 없다(고유 스코프로 시작)."""
         if not self.session_dir:
             return
+        pat = f"organt_state_{scope}_*.json" if scope else "organt_state_*.json"
         n = 0
-        for fp in glob.glob(os.path.join(str(self.session_dir), "organt_state_*.json")):
+        for fp in glob.glob(os.path.join(str(self.session_dir), pat)):
             try:
                 os.remove(fp)
                 n += 1
             except OSError:
                 pass
-        self._log("reset_sessions", cleared=n)
+        self._log("reset_sessions", cleared=n, scope=scope)
 
     # 모든 Organt 공통 원칙: 추론보다 검증, 소통으로 규약을 맞춘다.
     _PRINCIPLE = (
@@ -919,32 +911,26 @@ class Sys:
                 break
 
     async def handle_user_input(self, channel_id, leader_id, user_text, root_id=None) -> dict:
-        # 단일흐름 보존: 활성 흐름 중이면 명령을 '큐'에 넣어 끝난 뒤 순차 처리(버리지 않음).
-        if self.active_flow is not None and not self.active_flow.done:
-            self.queue.append((channel_id, leader_id, user_text, root_id))
-            self._log("queued", text=user_text[:80], depth=len(self.queue))
-            return {"mode": "queued", "queued": len(self.queue)}
-
         proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'(이어지는 작업)
+        scope_key = proj["id"] if proj else "main"  # 신규 요청은 'main' 직렬(동시 신규 생성 충돌 방지)
+        live = {k: f for k, f in self.active_flows.items() if not f.done}
+        # [병렬] 같은 스코프가 진행 중이거나 동시 상한에 닿으면 큐(버리지 않음) — 흐름 내 규약은 불변.
+        if scope_key in live or len(live) >= self.max_flows:
+            self.queue.append((channel_id, leader_id, user_text, root_id))
+            self._log("queued", text=user_text[:80], depth=len(self.queue), scope=scope_key)
+            return {"mode": "queued", "queued": len(self.queue)}
         # 세션 초기화는 '새 최상위 요청'에만 한다 — 기존 프로젝트 '개입(이어서/수정)'에선 건너뛴다.
         # [근본] 개입은 진행 중이던 팀·위임·owner를 '이어가야' 하는데, 세션을 지우면 리더와 동료가 그 기억을
         # 통째로 잃고(resume할 session_id가 사라짐) 처음부터 다시 계획한다 — 이게 사용자가 본 '리더가 직전
         # 위임(예: 장도현→김민준)을 무시하고, 팀을 일부만 다시 부르고, 혼자 검토·마무리하던' 행동의 근본 원인이다.
         # 개입 본문엔 새 요청/증상이 명시되므로 '이미 했다' 앵커링도 생기지 않는다(앵커링 방지 목적은 새 요청에만
         # 유효). 컨테이너 리클레임으로 세션 파일이 이미 사라졌으면 어차피 새로 시작하니 무해하다(그건 별개 유실).
-        # [멀티 프로젝트] 봇 세션 파일은 전역이라, 직전 흐름이 '다른 프로젝트'였다면 그 기억이 이번
-        # 개입에 끼어든다(교차 오염). 마지막 스코프를 추적해 다르면 초기화한다 — 같은 프로젝트의
-        # 연속 개입만 세션을 잇는다(프로젝트별 세션 영속은 '기억 증류' 고도화의 몫).
-        scope = proj["id"] if proj else None
-        prev_scope = self._last_scope()
-        if not proj:
-            self._reset_sessions()   # 새 요청 → 세션 초기화(이전 '이미 했다' 앵커링 차단)
-        elif prev_scope is not None and prev_scope != scope:
-            # 직전 흐름이 '확실히 다른 프로젝트'였을 때만 리셋 — 모르면(None: 부팅/리클레임 직후 등)
-            # 기존대로 유지(불필요한 기억 소실 방지; 리클레임이면 세션 파일이 이미 없어 무해).
-            self._reset_sessions()
-            self._log("reset_sessions_cross_project", prev=prev_scope, now=scope)
-        else:
+        # [세션 스코프] 봇 세션 파일을 흐름 스코프별로 분리한다(organt_state_<scope>_<bot>.json) —
+        # 프로젝트 간 기억 교차 오염이 '구조적으로' 불가능(병렬 동시 흐름에서도 안전). 새 요청은
+        # 고유 스코프로 시작하므로 '이미 했다' 앵커링도 구조적으로 차단(리셋 불필요). 같은 프로젝트
+        # 개입은 그 프로젝트 스코프 파일을 resume — 기억이 이어진다.
+        session_scope = proj["id"] if proj else f"new-{int(time.time())}"
+        if proj:
             self._log("intervention_keep_sessions", project=proj["id"])
         # 이전 흐름의 런타임 채용(예비→직군) 라벨 원복 — dict는 그대로 두고 내용만 갱신(빌더 클로저가 참조 중).
         self.bot_info.clear()
@@ -960,6 +946,7 @@ class Sys:
             self._sync_topic(channel_id)   # 토픽(서버 영속)에도 반영 — 리클레임 후 시드로 원복되지 않게
         lead = proj["leader"] if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
+        flow.session_scope = session_scope
         flow.register_project = lambda ch, name: self._register_project(ch, name, flow.workspace, flow.leader)
         # '기억'(직업 고정): 예비가 recruit로 직군을 받으면 그 직업을 다음 흐름에도 유지하도록 로스터 라벨에 반영
         # — 흐름 시작 때 _roster_labels로 원복되므로, 여기에 기록해야 채용한 직업이 지속된다(1봇 1직업의 연속성).
@@ -1015,7 +1002,7 @@ class Sys:
             flow.start_root(root_id)
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")
         flow.log = self._log                       # 관측: req_sent 등을 flow.jsonl로 영속
-        self.active_flow = flow
+        self.active_flows[scope_key] = flow
         flow.last_activity = time.monotonic()
 
         async def _run_leader():
@@ -1099,14 +1086,27 @@ class Sys:
                 p["summary"] = (result or "")[:300]
                 p["open_task"] = open_task_snap
                 self._save_projects()
-        self._set_last_scope(flow.project_id)   # 이번 흐름의 스코프 기록 — 다음 개입의 오염 판정 기준
+        # 신규 흐름이 프로젝트를 등록했으면 세션을 프로젝트 스코프로 '승격'(리네임) — 다음 개입이
+        # 이 흐름의 기억을 그대로 잇는다(흐름 도중엔 스코프 고정이라 회의 기억도 안 끊김).
+        if flow.project_id and session_scope != flow.project_id and self.session_dir:
+            for fp in glob.glob(os.path.join(str(self.session_dir),
+                                             f"organt_state_{session_scope}_*.json")):
+                try:
+                    os.replace(fp, fp.replace(f"_{session_scope}_", f"_{flow.project_id}_"))
+                except OSError:
+                    pass
         self._log("flow_done", project=flow.project_channel is not None,
                   tasks=len(flow.tasks), comm_done=flow.comm.done)
-        self.active_flow = None
-        # 큐에 대기 중인 명령이 있으면 순차로 이어서 처리(단일흐름 유지).
-        if self.queue:
-            nxt = self.queue.pop(0)
-            return await self.handle_user_input(*nxt)
+        self.active_flows.pop(scope_key, None)
+        # 큐 드레인: 지금 시작 가능한(스코프 비충돌) 첫 명령을 이어서 처리.
+        for i, item in enumerate(list(self.queue)):
+            ch = int(item[0])
+            p = self.projects.get(ch)
+            k = p["id"] if p else "main"
+            live = {kk for kk, ff in self.active_flows.items() if not ff.done}
+            if k not in live and len(live) < self.max_flows:
+                self.queue.pop(i)
+                return await self.handle_user_input(*item)
         return {"mode": "flow", "flow": flow}
 
     # --- 진짜 입구: 채널의 유저 형식 Request를 읽어 라우팅 ---
