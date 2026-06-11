@@ -137,21 +137,50 @@ def test_세션저장시_cwd_함께영속(tmp_path):
     assert d["session_id"] == "sid-1" and d["cwd"] == "/tmp/ws"   # build_options(_cfg()).cwd
 
 
-def test_스테일세션은_재시도아닌_새세션_자가치유(monkeypatch, tmp_path):
-    """[자가 치유] 'No conversation found'(resume 대상 부재)는 일시 오류가 아니라 영구 실패 —
-    같은 세션 재시도 12회 헛돌이(라이브 관측) 대신, 세션을 버리고 즉시 새 세션으로 전진한다."""
+def test_사전점검_저장소에없는_세션은_스폰전_폐기(monkeypatch, tmp_path):
+    """[사전 점검 — 결정론] resume 대상이 '이 cwd의' CLI 저장소에 실재하지 않으면(레거시 상태 파일·
+    cwd 불일치·유실) 스폰하기 전에 세션을 폐기하고 새로 시작한다 — 에러 텍스트에 기대지 않으므로
+    'No conversation found' 영구 헛돌이(라이브 12회×2 관측)가 원천 차단된다."""
     import asyncio
     import json as _json
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
     st = tmp_path / "st.json"
-    st.write_text(_json.dumps({"session_id": "dead-sid", "cwd": str(tmp_path)}), encoding="utf-8")
+    st.write_text(_json.dumps({"session_id": "dead-sid"}), encoding="utf-8")   # 레거시(cwd 미기록)
     o = Organt(_cfg(), state_path=str(st))
     assert o.session_id == "dead-sid"
     calls = {"n": 0}
 
     async def fake_run_once(prompt):
         calls["n"] += 1
+        assert o.session_id is None            # 스폰 시점엔 이미 새 출발(스테일 폐기 후)
+        return ("기획 이어서 완료", "sid-new")
+
+    monkeypatch.setattr(o, "_run_once", fake_run_once)
+    out = asyncio.run(o.handle("이어서 진행"))
+    assert out == "기획 이어서 완료" and calls["n"] == 1          # 헛스폰 0회 — 한 번에 전진
+    assert _json.loads(st.read_text(encoding="utf-8"))["session_id"] == "sid-new"
+
+
+def test_마커_안전망_저장소판정을_비껴간_스테일도_새세션(monkeypatch, tmp_path):
+    """[이중 안전망] 저장소엔 파일이 있는데도 CLI가 'No conversation found'를 내는 변종(레이아웃
+    변화 등)은 stderr 마커로 잡아 — 같은 세션 재시도 대신 즉시 새 세션으로 전진한다."""
+    import asyncio
+    import json as _json
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+    store = fake_home / ".claude" / "projects" / "-tmp-ws"      # _cfg().workspace_dir="/tmp/ws"의 슬러그
+    store.mkdir(parents=True)
+    (store / "dead-sid.jsonl").write_text("{}", encoding="utf-8")   # 사전 점검은 통과하게
+    st = tmp_path / "st.json"
+    st.write_text(_json.dumps({"session_id": "dead-sid", "cwd": "/tmp/ws"}), encoding="utf-8")
+    o = Organt(_cfg(), state_path=str(st))
+    calls = {"n": 0}
+
+    async def fake_run_once(prompt):
+        calls["n"] += 1
         if calls["n"] == 1:
-            return ("API Error: No conversation found with session ID: dead-sid", None)
+            return ("API Error: ... [stderr] No conversation found with session ID: dead-sid", None)
         return ("기획 이어서 완료", "sid-new")
 
     async def _no_sleep(*a, **k):
@@ -160,6 +189,6 @@ def test_스테일세션은_재시도아닌_새세션_자가치유(monkeypatch, 
     monkeypatch.setattr(o, "_run_once", fake_run_once)
     monkeypatch.setattr("src.organt.asyncio.sleep", _no_sleep)
     out = asyncio.run(o.handle("이어서 진행"))
-    assert out == "기획 이어서 완료" and calls["n"] == 2          # 1회 실패 → 즉시 새 세션 성공
+    assert out == "기획 이어서 완료" and calls["n"] == 2          # 1회 마커 → 즉시 새 세션 성공
     assert o.session_id == "sid-new"                              # 죽은 세션 폐기·새 세션 영속
     assert _json.loads(st.read_text(encoding="utf-8"))["session_id"] == "sid-new"

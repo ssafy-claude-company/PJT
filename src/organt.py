@@ -149,6 +149,21 @@ class Organt:
         except OSError:
             pass
 
+    def _session_in_store(self) -> bool:
+        """resume 대상 세션이 '현재 cwd의' CLI 세션 저장소에 실재하는가 — 저장소는 cwd 기준 슬러그
+        (~/.claude/projects/<cwd의 '/'→'-'>/<sid>.jsonl). 에러 텍스트에 기대지 않는 결정론 판정
+        (라이브 관측: SDK 예외에는 CLI의 'No conversation found'가 안 실려 마커 감지가 불발했다).
+        레이아웃이 바뀌어 오판해도 결과는 '새 세션 시작'(안전한 저하)일 뿐 — 영구 헛돌이는 없다."""
+        if not self.session_id:
+            return False
+        cwd = str(self.options.cwd or os.getcwd())
+        p = (Path.home() / ".claude" / "projects" / cwd.replace("/", "-")
+             / f"{self.session_id}.jsonl")
+        try:
+            return p.exists()
+        except OSError:
+            return False
+
     def _options_for_call(self) -> ClaudeAgentOptions:
         """직전 세션이 있으면 resume를 붙인 옵션을 만든다."""
         if self.session_id:
@@ -164,33 +179,49 @@ class Organt:
         final_text = ""
         captured_sid: Optional[str] = None
         truncated = False
-        async with ClaudeSDKClient(options=self._options_for_call()) as client:
-            await client.query(prompt)
-            async for msg in client.receive_response():
-                # 메시지 수신도 '활동'이다 — 도구 호출이 없는 긴 모델 생성(거대 파일 하나를 첫 Write로
-                # 만들기 직전의 장문 사고/작성)이 침묵 워치독에 '행'으로 오인되지 않게, 도구 훅(Pre/Post)
-                # 사이의 사각을 메시지 단위 하트비트로 메운다.
-                if self.on_activity:
-                    try:
-                        self.on_activity()
-                    except Exception:
-                        pass
-                sid = getattr(msg, "session_id", None)
-                if sid:
-                    captured_sid = sid
-                if isinstance(msg, AssistantMessage):
-                    t = "".join(b.text for b in msg.content if isinstance(b, TextBlock)).strip()
-                    if t:
-                        final_text = t   # 마지막 비어있지 않은 발화만 유지
-                        if self.narrate:   # 관측: 매 발화(추론)를 기록 — '왜 그 행동을 했나'를 본다
-                            try:
-                                self.narrate(t)
-                            except Exception:
-                                pass
-                elif isinstance(msg, ResultMessage):   # 턴 한도 등으로 끊겼는지
-                    st = (getattr(msg, "subtype", "") or "") + (getattr(msg, "stop_reason", "") or "")
-                    if "max_turns" in st.lower():
-                        truncated = True
+        # stderr 수집: CLI의 실패 사유(예: 'No conversation found')는 stderr로만 나와 SDK 예외
+        # 텍스트에 안 실린다(라이브 관측 — 마커 감지 불발의 원인). 꼬리를 모아 예외에 붙여
+        # '왜 죽었는지'가 항상 에러 텍스트에 남게 한다(스테일 마커·일시오류 판별 모두 강화).
+        err_tail: list = []
+
+        def _collect_stderr(line: str) -> None:
+            if line and len(err_tail) < 20:
+                err_tail.append(str(line).strip())
+
+        opts = dataclasses.replace(self._options_for_call(), stderr=_collect_stderr)
+        try:
+            async with ClaudeSDKClient(options=opts) as client:
+                await client.query(prompt)
+                async for msg in client.receive_response():
+                    # 메시지 수신도 '활동'이다 — 도구 호출이 없는 긴 모델 생성(거대 파일 하나를 첫 Write로
+                    # 만들기 직전의 장문 사고/작성)이 침묵 워치독에 '행'으로 오인되지 않게, 도구 훅(Pre/Post)
+                    # 사이의 사각을 메시지 단위 하트비트로 메운다.
+                    if self.on_activity:
+                        try:
+                            self.on_activity()
+                        except Exception:
+                            pass
+                    sid = getattr(msg, "session_id", None)
+                    if sid:
+                        captured_sid = sid
+                    if isinstance(msg, AssistantMessage):
+                        t = "".join(b.text for b in msg.content if isinstance(b, TextBlock)).strip()
+                        if t:
+                            final_text = t   # 마지막 비어있지 않은 발화만 유지
+                            if self.narrate:   # 관측: 매 발화(추론)를 기록 — '왜 그 행동을 했나'를 본다
+                                try:
+                                    self.narrate(t)
+                                except Exception:
+                                    pass
+                    elif isinstance(msg, ResultMessage):   # 턴 한도 등으로 끊겼는지
+                        st = (getattr(msg, "subtype", "") or "") + (getattr(msg, "stop_reason", "") or "")
+                        if "max_turns" in st.lower():
+                            truncated = True
+        except asyncio.CancelledError:
+            raise                                    # 워치독 취소는 의미 보존(감싸지 않음)
+        except Exception as e:
+            tail = " | ".join(x for x in err_tail[-3:] if x)
+            raise RuntimeError(f"{e}{(' [stderr] ' + tail) if tail else ''}") from e
         if truncated and not _is_transient_api_error(final_text):
             final_text = (final_text + "\n(⚠ 턴 한도 도달 — 작업이 미완일 수 있음)").strip()
         return final_text, captured_sid
@@ -201,6 +232,11 @@ class Organt:
         턴마다의 중간 narration은 버리고 마지막 메시지만 반환(Response가 간결). 직전 세션이
         있으면 resume로 이어간다(State 보존). 일시적 API 오류(429/5xx/529 과부하)는 백오프 재시도.
         """
+        # [사전 점검 — 스테일 resume 차단] 세션이 '이 cwd의' 저장소에 없으면 스폰 전에 폐기한다.
+        # 레거시 상태 파일(cwd 미기록)·cwd 불일치·저장소 유실 전부가 여기서 결정론적으로 걸러져,
+        # 'No conversation found' 영구 헛돌이(라이브 12회×2 관측)가 원천 차단된다.
+        if self.session_id and not self._session_in_store():
+            self._reset_session()
         final_text = ""
         for attempt in range(_MAX_API_RETRY):
             try:
@@ -209,9 +245,8 @@ class Organt:
                 final_text, captured_sid = f"API Error: {e}", None
             if captured_sid:
                 self._save_session_id(captured_sid)
-            # 스테일 세션(resume 대상이 저장소에 없음 — cwd 불일치·유실)은 재시도해도 영원히 같은
-            # 실패다(라이브 관측: 이어가기 12회 전부 8초 헛돌이 후 흐름 미완 종료). 세션을 버리고
-            # **즉시 새 세션으로** 전진한다 — 작업 맥락은 프롬프트의 Task 상태·작업공간 산출물이 보전.
+            # 마커 감지(이중 안전망): 사전 점검이 레이아웃 변화로 못 거른 변종이 stderr 꼬리로 잡히면
+            # 같은 처리 — 세션을 버리고 즉시 새 세션으로 전진(재시도해 봐야 영원히 같은 실패라서).
             if _is_stale_session_error(final_text) and self.session_id:
                 self._reset_session()
                 continue
