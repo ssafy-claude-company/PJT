@@ -67,8 +67,8 @@ def test_leader는_project_task_도구():
     # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit·run)+리더 셋업·배포 도구.
     assert names == {"request", "recruit", "run",
                      "create_project", "create_task", "set_goal", "complete_task", "deploy",
-                     "vote", "meet",   # Discord 심화 대화(Feat 3단계): 표결·라운드로빈 회의
-                     "compete"}        # 중요 작업 경쟁 구현(병렬 Work fork + 쓰기 리스)
+                     "vote", "meet"}   # Discord 심화 대화: 표결·회의(1R 동시 수집). 경쟁 구현은
+                                       # 사용자 판단으로 제거(같은 모델 중복 비교 — 효과는 협업에서)
 
 
 def test_리더_등록툴이_전부_허용목록에_있음():
@@ -2091,37 +2091,33 @@ def test_표결_타흐름점유_멤버는_부분조인으로_제외():
     assert eng.holder(13) == "P-B"                 # 남의 점유 보존
 
 
-def test_경쟁구현_동시_샌드박스_리스_판정은_리더(tmp_path):
-    """[중요 작업 — 경쟁 구현] 같은 Goal을 2명이 '독립·동시에'(Work fork) 각자 샌드박스에 구현한다.
-    수집 동안 쓰기 리스·fork_kind(Work)가 걸리고 조인 후 풀린다. 판정과 '본 작업공간 반영' 위임은
-    리더의 몫으로 안내된다 — 다양성→선택이 품질이 되는 구간만 병렬화."""
-    import os as _os
+def test_fork수집중_신규request와_중첩수집은_대기():
+    """[fork 동시성 가드] fork 중엔 베턴이 리더에 머물러, CLI의 같은 턴 병렬 도구 호출(vote+request,
+    vote+meet)이 수집 가지와 같은 동료를 이중으로 깨울 수 있었다(직렬 vote 시절엔 alive 이동이 자연
+    차단 — 재감사에서 발견). 수집 중 신규 요청/중첩 수집은 '[대기]'로 막히고, 조인 후 즉시 풀린다."""
     f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11,
-             bot_info={11: "L", 12: "프론트엔드", 13: "프론트엔드"})
+             bot_info={11: "L", 12: "백엔드", 13: "QA"})
     f.start_root("root")
-    f.workspace = str(tmp_path)
-    seen, running = [], {"now": 0, "peak": 0}
+    gate = asyncio.Event()
 
     async def wake(to, b, k):
-        running["now"] += 1
-        running["peak"] = max(running["peak"], running["now"])
-        seen.append((to, f.write_lease.get(to), str(getattr(k, "value", k)).lower(), "샌드박스" in b))
-        await asyncio.sleep(0.02)
-        running["now"] -= 1
-        return f"{to} 구현 완료 — 샌드박스에 server.js 작성·run 확인"
+        await gate.wait()
+        return "[표] A\n근거"
     f.wake = wake
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_task"].handler({"members": "12,13"}))
-    r0 = asyncio.run(t["compete"].handler({"members": "12,13", "body": "스킬 시스템"}))
-    assert "Goal" in r0["content"][0]["text"]                  # Goal 미확정이면 거부(선분배 금지 동일)
-    f.current.status.goal = "QER 스킬 32종이 동작"
-    r = asyncio.run(t["compete"].handler({"members": "12,13", "body": "스킬 시스템"}))
-    txt = r["content"][0]["text"]
-    assert running["peak"] == 2                                # 진짜 동시 구현
-    for to, lease, kk, box_in_body in seen:
-        assert lease and lease.endswith(f"-{to}") and kk == "work" and box_in_body
-        assert _os.path.isdir(lease)                           # 샌드박스 실제 생성
-    assert f.write_lease == {} and f.fork_kind == {}           # 조인 후 리스·표식 해제
-    assert "[경쟁 구현 결과" in txt and "판정" in txt and "request(Work)" in txt
-    assert {12, 13} <= f.current.participated
-    assert f.comm.alive == 11                                  # 베턴은 리더(단일활성 형식 유지)
+
+    async def scenario():
+        vote_t = asyncio.ensure_future(t["vote"].handler(
+            {"question": "Q", "options": "A;B", "members": ""}))
+        await asyncio.sleep(0.02)
+        assert f.fork_active == 1
+        r1 = await t["request"].handler({"to_id": "12", "kind": "Info", "body": "딴 질문"})
+        assert "[대기]" in r1["content"][0]["text"]            # 수집 중 신규 요청 차단
+        r2 = await t["meet"].handler({"topic": "T", "members": "", "rounds": "1"})
+        assert "[대기]" in r2["content"][0]["text"]            # 중첩 수집 차단
+        gate.set()
+        out = await vote_t
+        assert "A: 2표" in out["content"][0]["text"]           # 수집은 정상 완주
+        assert f.fork_active == 0                              # 조인 후 가드 해제
+    asyncio.run(scenario())
