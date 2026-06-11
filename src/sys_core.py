@@ -196,6 +196,15 @@ class Sys:
         # 같은 이름이 이미 있으면 식별번호를 '그대로 유지'하고 채널만 현재 것으로 이동(증가/중복 금지)
         for c, p in list(self.projects.items()):
             if p.get("name") == name:
+                # [신원 가드 — 이름은 라벨이지 신원이 아니다] 일반명사 이름("public-data-website")이
+                # 우연히 일치하면 다른 작품이 기존 프로젝트의 채널·작업공간·배포 슬롯을 통째로
+                # 차지했다(라이브: 지진 사이트가 대기질 P-006을 하이재킹). 재사용은 '진짜 같은
+                # 작품'(목표 원문 유사)일 때만 — 다르면 이름을 자동 고유화해 신규 등록한다.
+                if purpose and p.get("purpose") and not self._same_purpose(purpose, p["purpose"]):
+                    name = f"{name}-{self._proj_n + 1}"   # 라벨 충돌 해소(신원 분리)
+                    self._log("project_name_uniquified", asked=p.get("name"), made=name,
+                              existing=p.get("id"))
+                    break
                 p["channel"], p["workspace"] = ch, workspace
                 if purpose and not p.get("purpose"):
                     p["purpose"] = purpose[:700]
@@ -331,6 +340,16 @@ class Sys:
         return (f"● 작업 중 {mins}분째 — “{req}”\n"
                 f"지금: {who} · 위임 {done}건 완주 · 세그먼트 {max(1, flow.leader_segment)}\n"
                 f"마지막 활동: {idle}초 전")
+
+    @staticmethod
+    def _same_purpose(a, b) -> bool:
+        """두 목표 원문이 '같은 작품'을 가리키는지 — 토큰 겹침 50% 이상(짧은 쪽 기준).
+        이름 일치 재사용의 신원 검증용: 라벨이 같아도 작품이 다르면 차지(하이재킹) 금지."""
+        ta = {t for t in re.split(r"[^0-9A-Za-z가-힣]+", str(a or "")) if len(t) >= 2}
+        tb = {t for t in re.split(r"[^0-9A-Za-z가-힣]+", str(b or "")) if len(t) >= 2}
+        if not ta or not tb:
+            return True   # 비교 불능이면 종전 동작(이름 신뢰) 유지
+        return len(ta & tb) >= max(1, int(min(len(ta), len(tb)) * 0.5))
 
     def _similar_projects(self, text) -> str:
         """새 요청과 기존 프로젝트(이름+목표 원문)의 토큰 겹침으로 유사 후보를 찾는다 — 임계는

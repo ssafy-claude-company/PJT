@@ -2435,3 +2435,25 @@ def test_유사프로젝트_존재시_신설전_정보공급(tmp_path):
     assert "같은 이름" in bodies[0]                           # 재사용 경로 안내
     asyncio.run(s.handle_user_input(501, 11, "스네이크 게임 만들어줘", root_id=None))
     assert "[유사 프로젝트 존재" not in bodies[1]             # 무관한 요청엔 없음
+
+
+def test_이름충돌_다른작품은_하이재킹_금지_자동고유화(tmp_path):
+    """[신원 가드] 이름은 라벨이지 신원이 아니다 — 일반명사 이름이 우연히 일치해도 목표 원문이
+    다르면 기존 프로젝트(채널·작업공간·배포 슬롯)를 차지하지 않고 이름을 고유화해 신규 등록한다
+    (라이브: 지진 사이트가 같은 영문명으로 대기질 P-006을 하이재킹). 진짜 연장(원문 유사)은 재사용."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
+            session_dir=str(tmp_path))
+    s._origin_request = "공공 데이터 대기질 미세먼지 사이트 만들어줘"
+    pid1 = s._register_project(100, "public-data-website", "/ws/a", 11,
+                               purpose="공공 데이터 대기질 미세먼지 사이트 만들어줘")
+    # 같은 이름 + '다른 작품'(지진) → 차지 금지, 자동 고유화로 신규 등록
+    pid2 = s._register_project(200, "public-data-website", "/ws/b", 11,
+                               purpose="지진 데이터를 받아 이펙트 화려한 시각화 사이트 만들어줘")
+    assert pid2 != pid1                                        # 신규 식별번호
+    assert s.projects[100]["id"] == pid1                       # 원 프로젝트 무사(채널·ws 보존)
+    assert s.projects[100]["workspace"] == "/ws/a"
+    assert s.projects[200]["name"].startswith("public-data-website-")   # 라벨 고유화
+    # 같은 이름 + '진짜 연장'(원문 유사) → 종전대로 재사용(채널 이동)
+    pid3 = s._register_project(300, "public-data-website", "/ws/c", 11,
+                               purpose="공공 대기질 미세먼지 데이터 사이트 개선해줘")
+    assert pid3 == pid1 and s.projects[300]["id"] == pid1      # 재사용(이동)
