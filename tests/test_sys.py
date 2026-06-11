@@ -2242,3 +2242,55 @@ def test_배포검증_라이브가_산출물과_다르면_성공선언_불가(tm
     bad2 = _verify_live_assets("https://x.example", str(tmp_path), tries=1, wait=0, fetch=fetch_fail)
     assert len(bad2) == 2 and "조회 실패" in bad2[0]                    # 조회 불가도 성공 선언 불가
     assert _verify_live_assets("https://x.example", str(tmp_path / "없음"), fetch=fetch) == []  # public 없음=생략
+
+
+def test_상태가시화_시작게시_종결확정_무알림수정(tmp_path):
+    """[Rule/Status — 상태 가시화] 흐름 시작 시 System Bot(sender=0)이 상태 메시지 1개를 올리고,
+    갱신·종결은 그 메시지의 '수정'으로만 한다(알림 0). 완료 흐름은 '✅ 완료'로, 미완 Task가 남은
+    흐름은 '⏸ 중단'으로 확정된다. edit 능력이 없는 가이드에선 통째로 생략(거짓 계기판 금지)."""
+
+    class EditableGuide(FakeGuide):
+        def __init__(self):
+            super().__init__()
+            self.edits = []
+
+        async def edit_message(self, ch, mid, content):
+            self.edits.append((ch, mid, content))
+
+    g = EditableGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"},
+            workspace="/tmp/ws-x", session_dir=str(tmp_path))
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        flow.current = None
+        return "끝"
+    s.run_turn = fake_run_turn
+    asyncio.run(s.handle_user_input(500, 11, "세포 게임 멀티 마저 해줘", root_id=None))
+    status_posts = [c for c in g.calls if c[0] == "post" and "● 작업 중" in str(c[3])]
+    assert len(status_posts) == 1 and status_posts[0][2] == 0        # System Bot(sender=0)이 1개 게시
+    assert "세포 게임 멀티" in status_posts[0][3]                     # 요청 요약 표기
+    assert g.edits and "✅ 완료" in g.edits[-1][2]                    # 종결은 '수정'으로 확정
+
+    # edit 능력 없는 가이드(기존 FakeGuide) → 상태 메시지 생략(기존 동작 보존)
+    g2 = FakeGuide()
+    s2 = Sys(g2, guild_id=1, organt_builder=None, bot_info={11: "L"},
+             workspace="/tmp/ws-x", session_dir=str(tmp_path))
+    s2.run_turn = fake_run_turn
+    asyncio.run(s2.handle_user_input(500, 11, "작은 일", root_id=None))
+    assert not any("● 작업 중" in str(c[3]) for c in g2.calls if c[0] == "post")
+
+
+def test_상태텍스트_살아있음_신호_구성():
+    """상태 본문은 '무엇을·얼마나·지금 누가·마지막 활동'을 담는다 — 갱신이 멈추면 '마지막 활동'의
+    정체 자체가 박제 신호가 되는 구조(추가 감시 장치 불필요)."""
+    import time as _t
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "기획", 12: "백엔드"})
+    f = Flow(FakeGuide(), channel_id=1, guild_id=1, leader_id=11, bot_info={11: "기획", 12: "백엔드"})
+    f.start_root("r")
+    f.status_req = "온라인 세포 키우기 게임"
+    f.last_activity = _t.monotonic() - 14
+    txt = s._status_text(f, _t.monotonic() - 23 * 60)
+    assert "● 작업 중 23분째" in txt and "온라인 세포" in txt
+    assert "지금: 기획" in txt and "마지막 활동: 14초 전" in txt
+    fin = s._status_text(f, _t.monotonic(), final="⏸ 중단(미완 Task 이어가기 가능)")
+    assert fin.startswith("⏸ 중단") and "온라인 세포" in fin

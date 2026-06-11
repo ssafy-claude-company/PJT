@@ -315,6 +315,23 @@ class Sys:
             "result_so_far": (ref.status.result or "")[:500],
         }
 
+    def _status_text(self, flow, t0, final=None) -> str:
+        """[Rule/Status — 상태 가시화] 흐름 상태 메시지 본문. 묻기 전에 보이는 계기판:
+        무엇이(요청 요약), 얼마나(경과·세그먼트), 지금 누가(베턴 보유자), 살아 있는가(마지막 활동).
+        시스템이 멈추면 이 메시지의 갱신도 멈춰 '마지막 활동'의 정체 자체가 이상 신호가 된다.
+        final이 오면 종결 확정 표기('✅ 완료'/'⏸ 중단')로 닫는다."""
+        req = (getattr(flow, "status_req", "") or "")[:60]
+        if final is not None:
+            return f"{final} {time.strftime('%H:%M')} — “{req}”"
+        mins = int((time.monotonic() - t0) // 60)
+        alive = flow.comm.alive
+        who = flow._info(alive) or ("담당자" if alive == flow.leader else f"<@{alive}>")
+        done = sum(1 for h in flow.comm.history if h[0] == "respond")
+        idle = max(0, int(time.monotonic() - (flow.last_activity or t0)))
+        return (f"● 작업 중 {mins}분째 — “{req}”\n"
+                f"지금: {who} · 위임 {done}건 완주 · 세그먼트 {max(1, flow.leader_segment)}\n"
+                f"마지막 활동: {idle}초 전")
+
     def _checkpoint_open_task(self, flow) -> None:
         """[크래시-세이프 Task 스냅샷] 흐름 '도중' Task 전이마다 미완 Task를 레지스트리에 영속한다 —
         종전엔 흐름 '종료' 시에만 써서, 동면(컨테이너 정지)·강제종료처럼 마감 코드가 못 도는 죽음이면
@@ -1112,6 +1129,31 @@ class Sys:
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")
         flow.log = self._log                       # 관측: req_sent 등을 flow.jsonl로 영속
         flow.last_activity = time.monotonic()
+        # [Rule/Status — 상태 가시화] 흐름 시작과 함께 그 채널에 상태 메시지 1개를 System Bot으로
+        # 올리고, 진행 동안 '수정'으로만 조용히 갱신한다(알림 0 — Guide/Discord.md). 시스템이 멈추면
+        # 갱신도 멈춰 '마지막 활동'의 정체가 사용자에게 박제 신호가 된다(오늘 동면 관측의 직접 해법).
+        # edit 능력이 없는 가이드(테스트 등)에선 통째로 생략 — 갱신 못 하는 거짓 계기판을 안 만든다.
+        flow.status_req = (user_text or "").strip()
+        status_t0 = time.monotonic()
+        status_mid, status_updater = None, None
+        if getattr(self.guide, "edit_message", None):
+            try:
+                status_mid = await self.guide.post(channel_id, 0, self._status_text(flow, status_t0))
+            except Exception:
+                status_mid = None
+            if status_mid:
+                async def _status_updates():
+                    period = int(os.environ.get("ORGANT_STATUS_PERIOD", "60"))
+                    while not flow.done:
+                        await asyncio.sleep(period)
+                        if flow.done:
+                            break
+                        try:
+                            await self.guide.edit_message(channel_id, status_mid,
+                                                          self._status_text(flow, status_t0))
+                        except Exception:
+                            pass               # Discord 순단이 흐름을 건드리지 않게(best-effort)
+                status_updater = asyncio.create_task(_status_updates())
 
         async def _run_leader():
             flow.leader_segment = 1
@@ -1183,6 +1225,16 @@ class Sys:
             self._log("final_post_failed", err=str(e)[:80])
         self._close_flow(flow, lead, result)
         flow.done, flow.final = True, result
+        # [Rule/Status] 종결 확정 — 마지막 수정으로 ✅/⏸를 박고 갱신을 멈춘다(이후 불변).
+        if status_updater is not None:
+            status_updater.cancel()
+        if status_mid is not None:
+            try:
+                mark = "⏸ 중단(미완 Task 이어가기 가능)" if flow.current is not None else "✅ 완료"
+                await self.guide.edit_message(channel_id, status_mid,
+                                              self._status_text(flow, status_t0, final=mark))
+            except Exception:
+                pass
         # 안전망: 리더가 complete_task로 명시적으로 닫지 않은 현재 Task는 '중단'으로 표시한다
         # (허위 완료 금지 — owner가 실제로 안 끝냈을 수 있으므로 '완료'로 둔갑시키지 않음).
         # 동시에, 그 미완 Task를 프로젝트 레지스트리에 스냅샷으로 남겨 '다음 개입'에서 같은 Task로
