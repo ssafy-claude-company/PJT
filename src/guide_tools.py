@@ -46,7 +46,7 @@ FLOW_TOOLS = [REQUEST_TOOL, RECRUIT_TOOL, RUN_TOOL]
 # 리더(코디네이터) 흐름 도구: 조율만(run 없음) — 구현·실행은 owner/QA가 한다.
 COORD_TOOLS = [REQUEST_TOOL, RECRUIT_TOOL]
 LEADER_TOOLS = [f"mcp__guide__{n}" for n in
-                ("create_project", "create_task", "set_goal", "complete_task", "deploy")]
+                ("create_project", "create_task", "set_goal", "complete_task", "deploy", "vote", "meet")]
 
 # run 툴 안전 차단: 파괴/탈출/저장소·시스템 경로/네트워크 외 명령은 막는다(npm·node·curl·python은 허용).
 _RUN_DENY = ("rm -rf", "rm -r ", "sudo", "shutdown", "reboot", "mkfs", "dd if=", ":(){",
@@ -991,6 +991,142 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.current = None
             return _ok(f"task={done_ref.task_id} 완료 마감 (시스템 실행기록 {done_ref.run_count}회 첨부)")
         tools.append(complete_task)
+
+        @tool("vote",
+              "팀 표결(구조적 합의): 선택지를 두고 멤버 전원의 선택+근거를 한 번에 수집·집계한다. "
+              "question=안건, options='선택지1;선택지2;...', members=쉼표구분(비우면 현재 Task 팀 전원). "
+              "1:1 Info를 여러 번 도는 대신 합의를 구조화 — 결과(집계+근거)를 보고 리더가 확정한다.",
+              {"question": str, "options": str, "members": str})
+        async def vote(args):
+            if flow.current is None:
+                return _ok("오류: 진행 중인 Task가 없습니다. create_task 먼저 여세요.")
+            opts = [o.strip() for o in str(args.get("options", "")).split(";") if o.strip()]
+            if len(opts) < 2:
+                return _ok("오류: options에 선택지 2개 이상을 ';'로 구분해 주세요.")
+            voters = _resolve_members(args.get("members", ""), flow, flow.current.team) or \
+                     [m for m in flow.current.team if m != me_id]
+            voters = [v for v in voters if v != me_id and not _is_spare(flow, v)]
+            if not voters:
+                return _ok("오류: 표결할 멤버가 없습니다.")
+            question = str(args.get("question", "")).strip()
+
+            detached = {"on": False}
+
+            async def _run_vote():
+                tally, reasons = {o: 0 for o in opts}, []
+                for v in voters:
+                    if flow.comm.done or flow.comm.alive != me_id:
+                        break
+                    frame = flow.comm.request(me_id, v, "vote", Kind.INFO)
+                    body = (f"[표결] 안건: {question}\n선택지: {' / '.join(opts)}\n"
+                            f"당신의 전문가 관점에서 하나를 고르고 근거를 2줄 이내로. 반드시 형식: "
+                            f"[표] 선택지명\n근거")
+                    try:
+                        res = await flow.wake(v, body, Kind.INFO)
+                    except Exception as e:
+                        res = f"(표결 실패: {e})"
+                    try:
+                        flow.comm.respond(v, "accept", res)
+                    except CommError:
+                        pass
+                    m = re.search(r"\[표\]\s*([^\n]+)", res or "")
+                    pick = (m.group(1).strip() if m else "")
+                    chosen = next((o for o in opts if o in pick or pick in o), None)
+                    if chosen:
+                        tally[chosen] += 1
+                    reasons.append(f"{flow._info(v) or v}: {(pick or '무효')} — {(res or '')[:150]}")
+                    if v in flow.current.team and v != flow.leader:
+                        flow.current.participated.add(v)        # 표결 참여 = 실질 협의 인정
+                board = " / ".join(f"{o}: {n}표" for o, n in tally.items())
+                await _note(f"[표결 결과] {question} → {board}")
+                return _ok(f"[표결 집계] {question}\n{board}\n\n[각자의 선택·근거]\n" + "\n".join(reasons)
+                           + "\n\n(집계는 참고 — 최종 확정은 당신(리더)의 판정입니다.)")
+
+            inner = asyncio.ensure_future(_run_vote())
+            flow.inflight_tasks.add(inner)
+            inner.add_done_callback(flow.inflight_tasks.discard)
+            try:
+                return await asyncio.shield(inner)
+            except asyncio.CancelledError:
+                if not inner.done():
+                    detached["on"] = True
+                    if flow.log:
+                        flow.log("delegation_detached", to="vote", seg=flow.leader_segment)
+
+                    def _hand(t):
+                        try:
+                            flow.detached_results.append(f"표결 완료 → {t.result()['content'][0]['text'][:400]}")
+                        except Exception:
+                            pass
+                    inner.add_done_callback(_hand)
+                raise
+        tools.append(vote)
+
+        @tool("meet",
+              "라운드로빈 회의: 주제를 두고 멤버들이 서로의 발언을 보며 라운드를 돌아 토론한다(회의록 반환). "
+              "topic=주제, members=쉼표구분(비우면 현재 Task 팀 전원), rounds=라운드 수(기본 2). "
+              "1:1 중계 없이 실제 다자 토론을 구조화 — 회의록을 보고 리더가 수렴·확정한다.",
+              {"topic": str, "members": str, "rounds": str})
+        async def meet(args):
+            if flow.current is None:
+                return _ok("오류: 진행 중인 Task가 없습니다. create_task 먼저 여세요.")
+            members = _resolve_members(args.get("members", ""), flow, flow.current.team) or \
+                      [m for m in flow.current.team if m != me_id]
+            members = [m for m in members if m != me_id and not _is_spare(flow, m)]
+            if not members:
+                return _ok("오류: 회의할 멤버가 없습니다.")
+            topic = str(args.get("topic", "")).strip()
+            try:
+                rounds = max(1, min(3, int(str(args.get("rounds", "2")).strip() or "2")))
+            except ValueError:
+                rounds = 2
+
+            async def _run_meet():
+                minutes = []
+                for r in range(1, rounds + 1):
+                    for m in members:
+                        if flow.comm.done or flow.comm.alive != me_id:
+                            break
+                        log_txt = "\n".join(minutes[-8:]) or "(아직 발언 없음)"
+                        body = (f"[회의 {r}라운드] 주제: {topic}\n지금까지의 발언:\n{log_txt}\n\n"
+                                f"당신({flow._info(m)})의 차례입니다 — 앞 발언에 동의/반박/보완하며 "
+                                f"당신 전문 관점의 입장을 3~5줄로. 맹목적 동의 금지(근거 필수).")
+                        frame = flow.comm.request(me_id, m, "meet", Kind.INFO)
+                        try:
+                            res = await flow.wake(m, body, Kind.INFO)
+                        except Exception as e:
+                            res = f"(발언 실패: {e})"
+                        try:
+                            flow.comm.respond(m, "accept", res)
+                        except CommError:
+                            pass
+                        line = f"[{r}R] {flow._info(m) or m}: {(res or '').strip()[:400]}"
+                        minutes.append(line)
+                        await _note(f"[회의] {line[:300]}")
+                        if m in flow.current.team and m != flow.leader:
+                            flow.current.participated.add(m)    # 회의 발언 = 실질 협의 인정
+                return _ok(f"[회의록] 주제: {topic} ({rounds}라운드, {len(members)}명)\n"
+                           + "\n".join(minutes)
+                           + "\n\n(수렴·확정은 당신(리더)의 몫 — 합의점을 정리해 set_goal/결정에 반영하세요.)")
+
+            inner = asyncio.ensure_future(_run_meet())
+            flow.inflight_tasks.add(inner)
+            inner.add_done_callback(flow.inflight_tasks.discard)
+            try:
+                return await asyncio.shield(inner)
+            except asyncio.CancelledError:
+                if not inner.done():
+                    if flow.log:
+                        flow.log("delegation_detached", to="meet", seg=flow.leader_segment)
+
+                    def _hand(t):
+                        try:
+                            flow.detached_results.append(f"회의 완료 → {t.result()['content'][0]['text'][:400]}")
+                        except Exception:
+                            pass
+                    inner.add_done_callback(_hand)
+                raise
+        tools.append(meet)
 
         @tool("deploy",
               "검증을 마친 산출물을 실제로 공개 배포한다(GitHub push + Render 웹서비스 생성/갱신). "

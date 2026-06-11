@@ -66,7 +66,8 @@ def test_leader는_project_task_도구():
     names = {t.name for t in make_guide_tools(f, 11, "leader")}
     # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit·run)+리더 셋업·배포 도구.
     assert names == {"request", "recruit", "run",
-                     "create_project", "create_task", "set_goal", "complete_task", "deploy"}
+                     "create_project", "create_task", "set_goal", "complete_task", "deploy",
+                     "vote", "meet"}   # Discord 심화 대화(Feat 3단계): 표결·라운드로빈 회의
 
 
 def test_리더_등록툴이_전부_허용목록에_있음():
@@ -1742,3 +1743,44 @@ def test_수면_기억증류_경험이_기준으로_압축(tmp_path):
     assert "교훈3" in calls["prompt"] and "기존 기준" in calls["prompt"]
     assert any(e["event"] == "role_distilled" for e in s.flow_log)
     assert s.pick_distill_job() is None                       # 증류 후 대상 없음
+
+
+def test_vote_표결_집계와_협의인정():
+    """[Discord 심화 대화] vote는 멤버 전원의 선택·근거를 한 호출로 수집·집계한다 — 표결 참여는
+    set_goal 협의로 인정되고, 베턴은 멤버별 프레임으로 정상 왕복(집계 후 리더 활성)."""
+    g = FakeGuide()
+    f = _flow(g)
+
+    async def wake(to, b, k):
+        assert "[표결]" in b and "선택지" in b
+        return "[표] Canvas\n성능과 단순성"
+    f.wake = wake
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    r = asyncio.run(t["vote"].handler({"question": "렌더 방식?", "options": "Canvas;SVG", "members": ""}))
+    txt = r["content"][0]["text"]
+    assert "Canvas: 1표" in txt and "SVG: 0표" in txt          # 집계
+    assert 12 in f.current.participated                        # 표결 = 실질 협의 인정
+    assert f.comm.alive == 11                                  # 베턴 복귀(단일활성 일관)
+
+
+def test_meet_라운드로빈_회의록():
+    """[Discord 심화 대화] meet는 멤버들이 서로의 발언을 보며 라운드를 도는 다자 토론을 구조화한다
+    — 발언이 회의록으로 누적되고(다음 발언자에게 전달), 참여는 협의로 인정된다."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "QA"})
+    f.start_root("root")
+    seen = []
+
+    async def wake(to, b, k):
+        seen.append((to, "아직 발언 없음" in b))
+        return f"{to}의 입장: 근거와 함께"
+    f.wake = wake
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    r = asyncio.run(t["meet"].handler({"topic": "저장 방식", "members": "", "rounds": "1"}))
+    txt = r["content"][0]["text"]
+    assert "[회의록]" in txt and "12의 입장" in txt and "13의 입장" in txt
+    assert seen[0][1] is True and seen[1][1] is False          # 둘째 발언자는 첫 발언을 봄
+    assert {12, 13} <= f.current.participated
+    assert f.comm.alive == 11
