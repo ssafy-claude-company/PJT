@@ -5,6 +5,10 @@
 # 토큰(ORGANT_BOT_*/SYSTEM_BOT)은 gitignore된 .env에서 python-dotenv가 로드한다(여기엔 비밀 없음).
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repo 루트(scripts/의 상위) — 클론 위치 무관
 cd "$HERE" || exit 1
+# [중복 기동 잠금] 같은 토큰으로 리스너가 2개 뜨면 게이트웨이 세션이 복제돼 '같은 요청을 두 프로세스가
+# 각각 처리'(흐름·채널·레지스트리 이중화)한다 — 라이브 관측. flock으로 단일 인스턴스를 구조적으로 보장.
+exec 9>/tmp/organt_listener.lock
+flock -n 9 || { echo "이미 실행 중인 리스너가 있습니다 — 중복 기동 거부"; exit 1; }
 [ -d .venv ] && source .venv/bin/activate
 export PYTHONUNBUFFERED=1
 # 부팅 복구 기본 = 실행(0): 재시작 틈새·수신 좀비로 유실된 미응답 요청을 자동으로 구한다(라이브에서
