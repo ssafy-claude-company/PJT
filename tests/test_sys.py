@@ -683,7 +683,7 @@ def test_프로젝트_등록과_채널개입_라우팅():
     asyncio.run(s.handle_user_input(9001, 11, "즉사 버그 고쳐", root_id=None))   # 등록 채널 명령
     fl = captured["flow"]
     assert fl.intervention and fl.project_id == pid                              # 개입으로 인식
-    assert fl.project_channel == 9001 and fl.workspace == "/ws"                  # 기존 맥락 유지
+    assert fl.project_channel == 9001 and fl.workspace == "/ws/스네이크"          # 기존(전용) 맥락 유지
     assert "개입" in captured["body"] and "즉사 버그 고쳐" in captured["body"]
     # 미등록 채널은 일반 신규 흐름(개입 아님)
     asyncio.run(s.handle_user_input(777, 11, "새 일", root_id=None))
