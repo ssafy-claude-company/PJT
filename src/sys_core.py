@@ -315,6 +315,20 @@ class Sys:
             "result_so_far": (ref.status.result or "")[:500],
         }
 
+    def _checkpoint_open_task(self, flow) -> None:
+        """[크래시-세이프 Task 스냅샷] 흐름 '도중' Task 전이마다 미완 Task를 레지스트리에 영속한다 —
+        종전엔 흐름 '종료' 시에만 써서, 동면(컨테이너 정지)·강제종료처럼 마감 코드가 못 도는 죽음이면
+        진행 중 Task의 정체가 유실돼 복구가 '같은 Task 이어가기'가 아니라 '새 Task'로 시작했다
+        (라이브 관측: 093740-1 동결 → 복구가 122245-1 신설, 옛 블록은 '진행' 박제 — 사용자 지적).
+        guide의 전이 지점(create_task/set_goal/owner 확정/complete_task)이 flow.checkpoint_task로 호출."""
+        ch = flow.project_channel
+        if not ch or int(ch) not in self.projects:
+            return
+        p = self.projects[int(ch)]
+        p["open_task"] = (self._task_snapshot(flow, flow.current)
+                          if flow.current is not None else None)
+        self._save_projects()
+
     async def _restore_open_task(self, flow, proj) -> Optional[dict]:
         """프로젝트에 저장된 미완 Task가 있으면 이번 흐름에 그대로 되살린다 — 같은 상태블록·스레드·담당자
         (owner)·팀을 재부착해 '이어가기'가 사용자가 Task명을 부르지 않아도 그 Task를 잇게 한다(담당자가
@@ -1026,6 +1040,7 @@ class Sys:
         # '기억'(직업 고정): 예비가 recruit로 직군을 받으면 그 직업을 다음 흐름에도 유지하도록 로스터 라벨에 반영
         # — 흐름 시작 때 _roster_labels로 원복되므로, 여기에 기록해야 채용한 직업이 지속된다(1봇 1직업의 연속성).
         flow.persist_role = self._persist_job   # 채용한 직군을 메모리+디스크(jobs.json)에 영속(재시작에도 유지)
+        flow.checkpoint_task = lambda: self._checkpoint_open_task(flow)   # Task 전이마다 크래시-세이프 영속
         body = user_text
         if proj:                                     # 기존 프로젝트 개입 — 맥락 유지(재생성 X)
             flow.project_channel = int(channel_id)   # 기존 채널 재사용 → create_project는 no-op

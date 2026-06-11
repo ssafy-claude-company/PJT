@@ -2184,3 +2184,37 @@ def test_프로젝트_목표원문_등록·개입주입(tmp_path):
     asyncio.run(s.handle_user_input(900, 11, "이어서 진행해", root_id=None))
     assert "[프로젝트 목표" in bodies[1] and "지뢰·멀티" in bodies[1]  # 개입마다 목표 주입
     assert "Task 하나의 마감이 프로젝트의 끝이 아닙니다" in bodies[1]
+
+
+def test_Task_체크포인트_전이마다_영속_마감시_해제(tmp_path):
+    """[크래시-세이프 Task 스냅샷] 미완 Task는 흐름 '종료'가 아니라 전이(생성→목표→owner→마감)마다
+    레지스트리에 영속된다 — 동면·강제종료처럼 마감 코드가 못 도는 죽음에도 복구가 '같은 Task'를
+    잇는다(새 Task 둔갑·'진행' 박제 방지 — 라이브 관측의 구조적 차단)."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드"},
+            workspace=str(tmp_path), session_dir=str(tmp_path))
+    s.projects = {500: {"id": "P-00A", "name": "a", "channel": 500, "workspace": str(tmp_path),
+                        "leader": 11, "summary": ""}}
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드"})
+    f.start_root("root")
+    f.project_channel = 500
+    f.workspace = str(tmp_path)
+    f.checkpoint_task = lambda: s._checkpoint_open_task(f)
+
+    async def wake(to, b, k):
+        return "의견: 코어 루프가 끝까지 돌면 성공으로 봅니다"
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    snap = s.projects[500]["open_task"]
+    assert snap and snap["task_id"] == f.current.task_id          # 생성 '즉시' 영속(흐름 종료 전)
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Info", "body": "이 Task 성공기준 의견 줘"}))
+    asyncio.run(t["set_goal"].handler({"purpose": "p", "goal": "측정가능 g"}))
+    assert s.projects[500]["open_task"]["goal"] == "측정가능 g"    # 목표 확정 영속
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현해줘"}))
+    assert s.projects[500]["open_task"]["owner"] == 12             # owner 확정 영속
+    f.current.verified = True                                      # (인도 게이트는 별도 테스트가 커버)
+    f.current.owner_delivered = True
+    f.current.owner_incomplete = False
+    asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert s.projects[500]["open_task"] is None                    # 마감 즉시 해제(유령 복원 방지)

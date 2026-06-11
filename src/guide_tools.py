@@ -143,6 +143,19 @@ def _free_alternatives(flow, me_id, to) -> str:
             "불가하면 그 사정을 보고에 남기세요")
 
 
+def _ckpt(flow):
+    """[크래시-세이프 Task 체크포인트] Task 전이(생성·목표확정·owner 확정·마감)마다 미완 Task를
+    레지스트리에 영속한다 — 종전엔 흐름 '종료'에만 써서, 동면·강제종료처럼 마감 코드가 못 도는
+    죽음이면 진행 중 Task의 정체(블록·스레드·owner·Goal)가 유실돼 복구가 '같은 Task 이어가기'가
+    아니라 '새 Task'로 시작했다(라이브 관측 — 사용자 지적). 콜백은 SYS가 주입(미주입이면 무해)."""
+    fn = getattr(flow, "checkpoint_task", None)
+    if fn:
+        try:
+            fn()
+        except Exception:
+            pass
+
+
 async def _fork_collect(flow, me_id, members, body_of, kind=Kind.INFO):
     """[병렬 Info fork-join] '독립 의견 수집'(표결·회의 1라운드)을 동시에 돈다 — Communication.md
     13–14행("여럿(병렬)은 이 제약을 완화하는 Feature로 둔다")의 구현. 완화는 정확히 이 구간뿐:
@@ -517,6 +530,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.current.owner = to
             flow.current.status.owner = flow._info(to) or f"<@{to}>"
             await flow.refresh(flow.current)
+            _ckpt(flow)                       # 크래시-세이프: owner 확정 영속(복구 때 같은 담당이 잇게)
         req = await g.send_request(thread_id, me_id, to, kind, body)
         frame.request_id = str(req)                              # 실제 메시지 id로 기록 갱신
         if kind == Kind.WORK and me_id == flow.leader and flow.current:
@@ -1003,6 +1017,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.tasks.append(ref)
             flow.current = ref
             flow.comm.reset_task_tracking()   # 새 산출물 단위 → '완료/Redo' 추적 초기화(Redo는 같은 Task 안에서만)
+            _ckpt(flow)                       # 크래시-세이프: 열린 즉시 영속(동면·강제종료에도 같은 Task로 복구)
             return _ok(f"task={tid} (빈 껍데기·담당자가 팀 선정) thread={thread_id} 팀={flow._names(team)} — 이 팀은 "
                        f"당신이 고른 구성입니다(직군이 부족하면 recruit(role=)로 더하세요). 배정된 팀 **전원**에게 "
                        f"request(Info)로 'Purpose(풀 문제)·Goal(성공기준)·각자 도메인 할 일'을 물어 함께 정한 뒤 "
@@ -1036,6 +1051,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 flow.current.status.purpose = purpose
             flow.current.status.goal = goal
             await flow.refresh(flow.current)
+            _ckpt(flow)                       # 크래시-세이프: 확정된 Purpose·Goal 영속
             return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}")
         tools.append(set_goal)
 
@@ -1076,6 +1092,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             await flow.refresh(done_ref)
             await _react(g, flow.project_channel, done_ref.block_id, "✅")  # 완료=이모지
             flow.current = None
+            _ckpt(flow)                       # 크래시-세이프: 마감 즉시 '미완 없음'으로 영속(유령 복원 방지)
             return _ok(f"task={done_ref.task_id} 완료 마감 (시스템 실행기록 {done_ref.run_count}회 첨부)")
         tools.append(complete_task)
 
