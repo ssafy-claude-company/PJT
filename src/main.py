@@ -24,7 +24,7 @@ from .audit import AuditLog, make_post_tool_use_hook
 from .config import Config, load_config
 from .discord_guide import DiscordGuide
 from .guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
-from .organt import Organt, build_options
+from .organt import Organt, build_options, pinned_cwd
 from .permissions import make_pre_tool_use_hook
 from .protocol import Kind, Request, Response, parse
 from .sys_core import Sys
@@ -168,6 +168,11 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
         # organt의 파일 도구(cwd)는 '현재 흐름의 작업공간'을 따른다 — 프로젝트별 폴더 분리와 정합
         # (cwd가 base 고정이면 run은 프로젝트 폴더, Write는 base로 가는 분열이 생긴다).
         cwd = str(getattr(flow, "workspace", None) or cfg.workspace_dir)
+        # [세션-cwd 고정] CLI 세션 저장소는 cwd 기준 — 이미 세션이 있는 봇은 '그 세션이 시작된 cwd'로
+        # 빌드해야 resume가 찾는다. 흐름 도중 create_project가 작업공간을 하위 폴더로 깎아도(카빙)
+        # 세션이 안 깨진다(카빙 폴더는 원 cwd의 하위라 파일 쓰기 범위는 동일, run은 flow.workspace 사용).
+        # 라이브 관측: cwd가 바뀐 리더 이어가기가 'No conversation found'로 12회 전부 헛돈 뒤 미완 종료.
+        cwd = pinned_cwd(state_path) or cwd
         return Organt(cfg, build_options(
             cfg, cwd=cwd, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={

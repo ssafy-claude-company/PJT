@@ -10,6 +10,7 @@ claude-agent-sdk의 ClaudeSDKClient로 Organt를 구동한다.
 import asyncio
 import dataclasses
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +47,26 @@ def load_persona(path=None) -> str:
 
 
 _MAX_API_RETRY = 3   # 일시적 API 오류(과부하 등) 재시도 횟수
+
+
+def _is_stale_session_error(text: str) -> bool:
+    """resume 대상 세션이 CLI 저장소에 없다(cwd 불일치·저장소 유실) — 일시 오류와 달리 재시도가
+    무의미하며, 세션을 버리고 새로 시작하는 것이 유일한 전진이다."""
+    return "no conversation found" in (text or "").lower()
+
+
+def pinned_cwd(state_path) -> Optional[str]:
+    """이 상태 파일의 세션이 '시작된' cwd(있고, 디렉터리가 살아 있으면). CLI 세션 저장소는 cwd
+    기준이라 같은 세션을 resume하는 빌드는 이 cwd를 그대로 써야 찾는다 — 흐름 도중 작업공간이
+    바뀌어도(create_project 카빙) 세션 연속성이 깨지지 않게 하는 고정점."""
+    try:
+        d = json.loads(Path(state_path).read_text(encoding="utf-8"))
+        c = str(d.get("cwd") or "")
+        if d.get("session_id") and c and os.path.isdir(c):
+            return c
+    except (OSError, ValueError):
+        pass
+    return None
 
 
 def _is_transient_api_error(text: str) -> bool:
@@ -110,7 +131,21 @@ class Organt:
         self.session_id = sid
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            self.state_path.write_text(json.dumps({"session_id": sid}), encoding="utf-8")
+            # cwd를 함께 영속 — CLI 세션 저장소는 cwd 기준이라, 같은 세션을 잇는 다음 빌드가
+            # '세션이 시작된 그 cwd'를 그대로 쓰게 한다(pinned_cwd). 흐름 도중 작업공간이 바뀌어도
+            # (create_project의 폴더 카빙) resume가 깨지지 않는 구조적 근거.
+            self.state_path.write_text(
+                json.dumps({"session_id": sid, "cwd": str(self.options.cwd or "")}),
+                encoding="utf-8")
+        except OSError:
+            pass
+
+    def _reset_session(self) -> None:
+        """스테일 세션 폐기 — resume 대상이 저장소에 없을 때(cwd 불일치·유실) 새 출발.
+        상태 파일째 지워 cwd 고정도 함께 푼다(새 세션은 현재의 올바른 작업공간에서 시작)."""
+        self.session_id = None
+        try:
+            self.state_path.unlink()
         except OSError:
             pass
 
@@ -174,6 +209,12 @@ class Organt:
                 final_text, captured_sid = f"API Error: {e}", None
             if captured_sid:
                 self._save_session_id(captured_sid)
+            # 스테일 세션(resume 대상이 저장소에 없음 — cwd 불일치·유실)은 재시도해도 영원히 같은
+            # 실패다(라이브 관측: 이어가기 12회 전부 8초 헛돌이 후 흐름 미완 종료). 세션을 버리고
+            # **즉시 새 세션으로** 전진한다 — 작업 맥락은 프롬프트의 Task 상태·작업공간 산출물이 보전.
+            if _is_stale_session_error(final_text) and self.session_id:
+                self._reset_session()
+                continue
             # 정상 응답(비어있지 않고 일시오류도 아님)이면 종료. **빈 응답('')은 서브프로세스가 발화 없이
             # 조용히 죽은 신호**이므로(이게 동료가 '무응답'으로 보여 리더가 충원·재처리로 churn하던 원인)
             # 일시오류와 똑같이 resume 재시도한다. 끝내 비면 그대로 반환(무한루프 없음 — 최대 _MAX_API_RETRY).
