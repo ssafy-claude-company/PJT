@@ -205,7 +205,9 @@ class Sys:
                     self._log("project_name_uniquified", asked=p.get("name"), made=name,
                               existing=p.get("id"))
                     break
-                p["channel"], p["workspace"] = ch, workspace
+                # [연장 = 기존 산출물 위에서] 재사용은 작업공간을 새 흐름의 임시 폴더로 덮지 않는다 —
+                # 이어가기의 본질은 '그 작품의 폴더'를 계속 쓰는 것(덮으면 산출물 연속성이 끊긴다).
+                p["channel"] = ch
                 if purpose and not p.get("purpose"):
                     p["purpose"] = purpose[:700]
                 self.projects[ch] = p
@@ -217,6 +219,7 @@ class Sys:
                 return p["id"]
         self._proj_n += 1
         pid = f"P-{self._proj_n:03d}"
+        workspace = self._idify_workspace(workspace, pid, name)   # 신원=번호: p-00n-슬러그 개명
         self.projects[ch] = {"id": pid, "name": name, "channel": ch,
                              "workspace": workspace, "leader": leader, "summary": "",
                              "purpose": purpose[:700]}
@@ -340,6 +343,25 @@ class Sys:
         return (f"● 작업 중 {mins}분째 — “{req}”\n"
                 f"지금: {who} · 위임 {done}건 완주 · 세그먼트 {max(1, flow.leader_segment)}\n"
                 f"마지막 활동: {idle}초 전")
+
+    @staticmethod
+    def _idify_workspace(workspace, pid, name) -> str:
+        """[신원=번호 — 사용자 제안] 흐름의 임시 폴더(new-…)를 'p-00n-슬러그'로 개명한다 — 작업
+        공간의 정체성을 리더의 작명이 아니라 식별번호가 보증해, 일반명사 이름 충돌이 폴더·배포
+        수준에서 무해해진다. 흐름 임시 폴더(new-*)일 때만 작동(직접 등록·시드 경로는 전달값 유지)."""
+        try:
+            ws = str(workspace or "").rstrip("/")
+            parent, cur = os.path.dirname(ws), os.path.basename(ws)
+            if not (cur.startswith("new-") and os.path.isdir(ws)):
+                return str(workspace)
+            slug = re.sub(r"[^0-9a-z가-힣-]+", "-", str(name or "").lower()).strip("-")[:32]
+            tgt = os.path.join(parent, f"{pid.lower()}{('-' + slug) if slug else ''}")
+            if tgt != ws and not os.path.exists(tgt):
+                os.replace(ws, tgt)
+                return tgt
+        except OSError:
+            pass
+        return str(workspace)
 
     @staticmethod
     def _same_purpose(a, b) -> bool:
@@ -1121,9 +1143,14 @@ class Sys:
         # (asyncio 단일 스레드 — 게이트 검사~여기까지 await 없음). start_root의 재등록은 멱등.
         self.engaged.engage(lead, scope_key)
         flow.comm.attach_engagement(self.engaged, scope_key)
-        flow.register_project = lambda ch, name: self._register_project(
-            ch, name, flow.workspace, flow.leader,
-            purpose=self._origin_request)   # 프로젝트의 존재 이유 = 그 흐름을 시작시킨 사용자 원문
+        def _reg(ch, name):
+            pid = self._register_project(ch, name, flow.workspace, flow.leader,
+                                         purpose=self._origin_request)  # 존재 이유 = 사용자 원문
+            p = self.projects.get(int(ch))
+            if p and p.get("workspace"):
+                flow.workspace = p["workspace"]   # id-개명(p-00n-슬러그)/재사용(기존 산출물) 결과 채택
+            return pid
+        flow.register_project = _reg
         # '기억'(직업 고정): 예비가 recruit로 직군을 받으면 그 직업을 다음 흐름에도 유지하도록 로스터 라벨에 반영
         # — 흐름 시작 때 _roster_labels로 원복되므로, 여기에 기록해야 채용한 직업이 지속된다(1봇 1직업의 연속성).
         flow.persist_role = self._persist_job   # 채용한 직군을 메모리+디스크(jobs.json)에 영속(재시작에도 유지)
@@ -1193,7 +1220,15 @@ class Sys:
                 f"후 complete_task. 동작·물리·판정 문제는 server.js, 색·레이아웃·그리기 순서만 public/입니다.")
             self._log("intervention", project=proj["id"], text=user_text[:60])
         else:
-            flow.workspace = self.workspace
+            # [흐름 격리 — 시작부터 고유 폴더] 신규 흐름이 작업공간 루트에서 시작하면 다른 프로젝트
+            # 폴더들이 다 보여 남의 산출물을 뒤지고 이어받는 오염이 생긴다(라이브: 모션 팀이 지진
+            # 산출물을 발견·개조). 흐름마다 고유 폴더에서 시작하고, 프로젝트 등록 때 P-번호 이름
+            # (p-00n-슬러그)으로 개명한다 — **이름이 아니라 번호가 신원**(사용자 제안).
+            try:
+                flow.workspace = os.path.join(self.workspace, scope_key)
+                os.makedirs(flow.workspace, exist_ok=True)
+            except OSError:
+                flow.workspace = self.workspace
             # [공급 원칙 — 유사 프로젝트 알림] 같은 요청의 재전송이 리더의 이름 짓기 운(한글/영문)에
             # 따라 '기존 이어가기 vs 신설'로 갈리던 비결정성(라이브: 동일 원문 → P-006 중복 신설).
             # 판단은 리더 몫, 정보는 구조가 — 신설 전에 알아야 할 사실을 결정 지점에 공급한다.
@@ -1366,6 +1401,15 @@ class Sys:
         # [전역 점유 해제 안전망] 이 흐름의 모든 점유를 일괄 해제 — 정상 경로는 respond/escalate가
         # 대칭으로 풀지만, 예외·강제 종료로 남은 점유가 있어도 여기서 회사 풀로 돌려보낸다.
         self.engaged.release_scope(scope_key)
+        # [임시 폴더 위생] 프로젝트로 승격되지 못한 흐름 폴더(new-…)가 비어 있으면 정리 — 루트에
+        # 빈 껍데기가 쌓이지 않게(산출물이 있으면 보존: 사용자가 살펴볼 수 있게 남긴다).
+        if not flow.project_id:
+            try:
+                ws = str(flow.workspace or "")
+                if os.path.basename(ws.rstrip("/")).startswith("new-") and not os.listdir(ws):
+                    os.rmdir(ws)
+            except OSError:
+                pass
         # 큐 드레인: 지금 시작 가능한(스코프 비충돌·리더 가용) 첫 명령을 이어서 처리.
         item = self._pop_runnable_queued()
         if item is not None:

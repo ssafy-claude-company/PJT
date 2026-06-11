@@ -664,18 +664,30 @@ def test_close_flow_비정상베턴_강제드레인():
     assert f.comm.done                          # 교착 없이 종료
 
 
-def test_프로젝트_등록과_채널개입_라우팅():
-    """create_project → 식별번호 등록+채널 앵커. 등록된 채널에 다시 명령 → '개입'으로 라우팅(맥락 유지)."""
+def test_프로젝트_등록과_채널개입_라우팅(tmp_path):
+    """create_project → 식별번호 등록 + 흐름 임시 폴더(new-…)가 **p-00n-슬러그로 개명**(신원=번호 —
+    사용자 제안). 등록된 채널에 다시 명령 → '개입'으로 라우팅되어 그 id-작업공간을 그대로 잇는다."""
+    import os as _os
+    base = str(tmp_path)
     g = FakeGuide()
-    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"}, workspace="/ws")
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"}, workspace=base)
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "M"})
-    f.workspace = "/ws"
-    f.register_project = lambda ch, name: s._register_project(ch, name, f.workspace, f.leader)
+    f.workspace = _os.path.join(base, "new-1")
+    _os.makedirs(f.workspace)
+
+    def _reg(ch, name):                          # Sys가 흐름에 거는 것과 같은 배선(개명 결과 채택)
+        pid = s._register_project(ch, name, f.workspace, f.leader)
+        f.workspace = s.projects[int(ch)]["workspace"]
+        return pid
+    f.register_project = _reg
     f.start_root("root")
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "스네이크", "team": "12"}))   # 채널 9001 생성
     pid = s.projects[9001]["id"]
-    assert pid.startswith("P-") and s.projects[9001]["workspace"] == "/ws/스네이크"   # 전용 작업공간으로 등록
+    ws = s.projects[9001]["workspace"]
+    assert pid.startswith("P-") and ws.endswith(f"{pid.lower()}-스네이크")        # 신원=번호 개명
+    assert f.workspace == ws and _os.path.isdir(ws)                              # 흐름도 채택·실재
+    assert not _os.path.exists(_os.path.join(base, "new-1"))                     # 임시 이름 소멸
 
     captured = {}
     async def fake_run_turn(flow, oid, body, kind, role):
@@ -685,11 +697,13 @@ def test_프로젝트_등록과_채널개입_라우팅():
     asyncio.run(s.handle_user_input(9001, 11, "즉사 버그 고쳐", root_id=None))   # 등록 채널 명령
     fl = captured["flow"]
     assert fl.intervention and fl.project_id == pid                              # 개입으로 인식
-    assert fl.project_channel == 9001 and fl.workspace == "/ws/스네이크"          # 기존(전용) 맥락 유지
+    assert fl.project_channel == 9001 and fl.workspace == ws                     # id-작업공간 유지
     assert "개입" in captured["body"] and "즉사 버그 고쳐" in captured["body"]
-    # 미등록 채널은 일반 신규 흐름(개입 아님)
+    # 미등록 채널의 신규 흐름은 시작부터 고유 임시 폴더(루트 노출 차단 — 타 프로젝트 안 보임)
     asyncio.run(s.handle_user_input(777, 11, "새 일", root_id=None))
-    assert captured["flow"].intervention is None and captured["flow"].workspace == "/ws"
+    nw = captured["flow"].workspace
+    assert captured["flow"].intervention is None
+    assert _os.path.basename(nw).startswith("new-") and _os.path.dirname(nw) == base
 
 
 def test_프로젝트_레지스트리_영속과_중복방지(tmp_path):
@@ -700,11 +714,11 @@ def test_프로젝트_레지스트리_영속과_중복방지(tmp_path):
     # 같은 이름은 새 채널이어도 식별번호 '그대로 유지' + 채널만 갱신(번호 증가/중복 금지)
     assert s1._register_project(9999, "스네이크", "/ws2", 11) == pid
     assert 9999 in s1.projects and 9001 not in s1.projects     # 채널만 현재 것으로 이동
-    assert s1.projects[9999]["id"] == pid and s1.projects[9999]["workspace"] == "/ws2"
+    assert s1.projects[9999]["id"] == pid and s1.projects[9999]["workspace"] == "/ws"   # 연장=기존 폴더 유지
     # 새 프로세스(새 Sys)가 같은 파일 로드 → 갱신된 채널·식별번호 그대로 복원
     s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"}, projects_path=p)
     assert 9999 in s2.projects and s2.projects[9999]["id"] == pid
-    assert s2.projects[9999]["workspace"] == "/ws2"
+    assert s2.projects[9999]["workspace"] == "/ws"   # 연장=기존 작품 폴더 그대로(덮지 않음)
 
 
 def test_신규끼리_같은리더는_큐_다른리더는_병렬_큐는_접수안내():
@@ -1656,20 +1670,29 @@ def test_직무기준_흡수_영속_본문제거(tmp_path):
     assert "실플레이 시나리오" in s2.role_profiles["QA"]        # 재기동 복원
 
 
-def test_create_project는_전용_작업공간을_분리한다():
-    """[격리] 프로젝트 생성 시 전용 하위 폴더로 작업공간을 분리한다 — 전 프로젝트가 한 폴더를
-    공유하며 새 프로젝트가 이전 산출물을 덮어쓰던 결함(라이브: 세포 게임이 아레나를 덮음) 차단."""
-    import tempfile
+def test_create_project는_id기반_작업공간과_배포슬롯(tmp_path):
+    """[신원=번호 — 사용자 제안] 프로젝트의 폴더와 배포 슬롯은 리더 작명이 아니라 식별번호가
+    보증한다 — 일반명사 이름이 충돌해도(라이브: 'public-data-website' 3연쇄) 폴더·슬롯이 안 섞인다."""
+    import os as _os
+    from src.guide_tools import deploy_service_name
+    base = str(tmp_path)
     g = FakeGuide()
-    f = _flow(g)
-    with tempfile.TemporaryDirectory() as base:
-        f.workspace = base
-        t = _tools(f, 11, "leader")
-        asyncio.run(t["create_project"].handler({"name": "Cell Grow Game!", "team": ""}))
-        assert f.workspace != base and f.workspace.startswith(base)
-        assert f.workspace.endswith("cell-grow-game")            # 슬러그 폴더
-        import os as _os
-        assert _os.path.isdir(f.workspace)                       # 실제 생성됨
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"}, workspace=base)
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L"})
+    f.workspace = _os.path.join(base, "new-7")
+    _os.makedirs(f.workspace)
+
+    def _reg(ch, name):
+        pid = s._register_project(ch, name, f.workspace, f.leader)
+        f.workspace = s.projects[int(ch)]["workspace"]
+        return pid
+    f.register_project = _reg
+    f.start_root("root")
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_project"].handler({"name": "Public-Data-Website", "team": ""}))
+    assert _os.path.basename(f.workspace).startswith(f.project_id.lower())   # 폴더 신원=번호
+    assert _os.path.isdir(f.workspace)
+    assert deploy_service_name(f, "내맘대로이름") == f"organt-{f.project_id.lower()}"  # 슬롯 신원=번호(작명 무시)
 
 
 def test_배포명은_프로젝트별_결정적(monkeypatch):
@@ -1680,7 +1703,7 @@ def test_배포명은_프로젝트별_결정적(monkeypatch):
     monkeypatch.setenv("DEPLOY_NAME", "todo-organt-demo")
     f = _flow(FakeGuide())
     f.project_id, f.project_name = "P-003", "Cell Grow Game"
-    assert deploy_service_name(f, "agent-random-name") == "organt-cell-grow-game"   # 인자 무시
+    assert deploy_service_name(f, "agent-random-name") == "organt-p-003"   # 신원=번호(작명·인자 무시)
     f.project_name = "세포 키우기"                                                   # 한글 → 식별번호 폴백
     assert deploy_service_name(f) == "organt-p-003"
     f2 = _flow(FakeGuide())                                                          # 미등록 흐름

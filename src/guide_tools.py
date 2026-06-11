@@ -353,9 +353,14 @@ def deploy_service_name(flow, arg_name: str = "") -> str:
     불가(인자 무시). 미등록 흐름만 DEPLOY_NAME → 인자 → 기본 순."""
     pname = getattr(flow, "project_name", None)
     pid = getattr(flow, "project_id", None)
-    if pname or pid:
-        slug = re.sub(r"[^a-z0-9-]", "-", str(pname or "").lower()).strip("-")[:40]
-        return f"organt-{slug or str(pid).lower()}"
+    if pid:
+        # [신원=번호] 등록 프로젝트의 슬롯은 무조건 식별번호 — 이름 슬러그를 쓰면 일반명사 이름이
+        # 충돌할 때 다른 작품이 같은 슬롯을 덮어쓴다(라이브: 지진·모션이 대기질 슬롯을 연쇄 점유).
+        return f"organt-{str(pid).lower()}"
+    if pname:
+        slug = re.sub(r"[^a-z0-9-]", "-", str(pname).lower()).strip("-")[:40]
+        if slug:
+            return f"organt-{slug}"
     return (os.environ.get("DEPLOY_NAME", "").strip()
             or re.sub(r"[^a-z0-9-]", "-", str(arg_name or "").lower()).strip("-")
             or "organt-app")
@@ -973,18 +978,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 return _ok(f"이미 project_channel={flow.project_channel} (project_id={flow.project_id}) — "
                            f"개입 중이면 create_project 말고 바로 작업하세요.")
             flow.project_channel = await g.create_project_channel(flow.guild_id, args["name"])
-            # [프로젝트별 작업공간] 전 프로젝트가 한 폴더를 공유하면 새 프로젝트가 이전 산출물을 덮어쓴다
-            # (라이브 관측: 세포 게임이 아레나 server.js 108KB→6KB로 덮고 클라 파일까지 혼합·수정 →
-            # 라이브 품질 붕괴). 프로젝트마다 전용 하위 폴더로 격리 — 레지스트리·개입 복원·organt cwd가
-            # 모두 flow.workspace를 따르므로 여기서 분리하면 전체가 정합된다.
-            try:
-                base = str(flow.workspace) if flow.workspace else "."
-                slug = re.sub(r"[^0-9a-z가-힣-]+", "-", str(args["name"]).lower()).strip("-")[:40] or "project"
-                new_ws = os.path.join(base, slug)
-                os.makedirs(new_ws, exist_ok=True)
-                flow.workspace = new_ws
-            except Exception:
-                pass
+            # [작업공간 격리·신원] 폴더는 여기서 깎지 않는다 — 흐름은 시작부터 고유 임시 폴더(new-…)에서
+            # 일했고, 아래 register_project가 그 폴더를 **식별번호 이름(p-00n-슬러그)으로 개명**해
+            # 신원을 번호로 확정한다(리더 작명 충돌이 폴더·배포 수준에서 무해 — 사용자 제안).
             assigned = _resolve_members(args.get("team", ""), flow, flow.pool)
             if assigned:
                 flow.project_team = _uniq([flow.leader] + assigned)
