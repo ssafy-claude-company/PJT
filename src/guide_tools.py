@@ -833,6 +833,18 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 return _ok(f"이미 project_channel={flow.project_channel} (project_id={flow.project_id}) — "
                            f"개입 중이면 create_project 말고 바로 작업하세요.")
             flow.project_channel = await g.create_project_channel(flow.guild_id, args["name"])
+            # [프로젝트별 작업공간] 전 프로젝트가 한 폴더를 공유하면 새 프로젝트가 이전 산출물을 덮어쓴다
+            # (라이브 관측: 세포 게임이 아레나 server.js 108KB→6KB로 덮고 클라 파일까지 혼합·수정 →
+            # 라이브 품질 붕괴). 프로젝트마다 전용 하위 폴더로 격리 — 레지스트리·개입 복원·organt cwd가
+            # 모두 flow.workspace를 따르므로 여기서 분리하면 전체가 정합된다.
+            try:
+                base = str(flow.workspace) if flow.workspace else "."
+                slug = re.sub(r"[^0-9a-z가-힣-]+", "-", str(args["name"]).lower()).strip("-")[:40] or "project"
+                new_ws = os.path.join(base, slug)
+                os.makedirs(new_ws, exist_ok=True)
+                flow.workspace = new_ws
+            except Exception:
+                pass
             assigned = _resolve_members(args.get("team", ""), flow, flow.pool)
             if assigned:
                 flow.project_team = _uniq([flow.leader] + assigned)

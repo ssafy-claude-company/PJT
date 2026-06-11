@@ -673,7 +673,7 @@ def test_프로젝트_등록과_채널개입_라우팅():
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "스네이크", "team": "12"}))   # 채널 9001 생성
     pid = s.projects[9001]["id"]
-    assert pid.startswith("P-") and s.projects[9001]["workspace"] == "/ws"   # 내부 등록(채널 앵커는 안 박음)
+    assert pid.startswith("P-") and s.projects[9001]["workspace"] == "/ws/스네이크"   # 전용 작업공간으로 등록
 
     captured = {}
     async def fake_run_turn(flow, oid, body, kind, role):
@@ -1625,3 +1625,19 @@ def test_직무기준_흡수_영속_본문제거(tmp_path):
     s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
              session_dir=str(tmp_path))
     assert "실플레이 시나리오" in s2.role_profiles["QA"]        # 재기동 복원
+
+
+def test_create_project는_전용_작업공간을_분리한다():
+    """[격리] 프로젝트 생성 시 전용 하위 폴더로 작업공간을 분리한다 — 전 프로젝트가 한 폴더를
+    공유하며 새 프로젝트가 이전 산출물을 덮어쓰던 결함(라이브: 세포 게임이 아레나를 덮음) 차단."""
+    import tempfile
+    g = FakeGuide()
+    f = _flow(g)
+    with tempfile.TemporaryDirectory() as base:
+        f.workspace = base
+        t = _tools(f, 11, "leader")
+        asyncio.run(t["create_project"].handler({"name": "Cell Grow Game!", "team": ""}))
+        assert f.workspace != base and f.workspace.startswith(base)
+        assert f.workspace.endswith("cell-grow-game")            # 슬러그 폴더
+        import os as _os
+        assert _os.path.isdir(f.workspace)                       # 실제 생성됨

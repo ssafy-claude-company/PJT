@@ -160,8 +160,11 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
                     flow.last_activity = time.monotonic()
                 except Exception:
                     pass
+        # organt의 파일 도구(cwd)는 '현재 흐름의 작업공간'을 따른다 — 프로젝트별 폴더 분리와 정합
+        # (cwd가 base 고정이면 run은 프로젝트 폴더, Write는 base로 가는 분열이 생긴다).
+        cwd = str(getattr(flow, "workspace", None) or cfg.workspace_dir)
         return Organt(cfg, build_options(
-            cfg, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
+            cfg, cwd=cwd, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={
                 "PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label, flow=flow)])],
                 "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit, actor=organt_id, role=label, flow=flow)])],
