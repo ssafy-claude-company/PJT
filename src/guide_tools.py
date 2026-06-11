@@ -395,6 +395,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         except Exception:
             pass
 
+    async def _say(who, text):
+        """회의·표결 발언을 '그 봇 본인 명의'로 스레드에 남긴다 — 4명의 독립 의견이 리더 명의
+        [안내] 묶음으로 게시돼 '중앙 공지'처럼 보이던 착시(사용자 관측) 제거. 협업의 실체와
+        가시성을 일치시킨다. 실패는 조용히(가시화는 best-effort, 흐름은 안 멈춤)."""
+        try:
+            if flow.current:
+                await g.post(int(flow.current.thread_id), who, text)
+        except Exception:
+            pass
+
     @tool("request", "현재 Task 팀의 동료 한 명에게 요청(kind: Info=질문 / Work=작업, to_id 문자열)",
           {"to_id": str, "kind": str, "body": str})
     async def request(args):
@@ -1142,6 +1152,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     if chosen:
                         tally[chosen] += 1
                     reasons.append(f"{flow._info(v) or v}: {(pick or '무효')} — {(res or '')[:150]}")
+                    await _say(v, f"[표] {(pick or '무효')} — {(res or '').strip()[:200]}")  # 본인 명의 발언
                     if v in flow.current.team and v != flow.leader:
                         flow.current.participated.add(v)        # 표결 참여 = 실질 협의 인정
                 board = " / ".join(f"{o}: {n}표" for o, n in tally.items())
@@ -1208,7 +1219,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 for m, res, note in await _fork_collect(flow, me_id, members, body_r1):
                     line = f"[1R] {flow._info(m) or m}: {(res or note or '').strip()[:400]}"
                     minutes.append(line)
-                    await _note(f"[회의] {line[:300]}")
+                    await _say(m, f"[회의 1R] {(res or note or '').strip()[:300]}")  # 본인 명의 발언
                     if res is not None and m in flow.current.team and m != flow.leader:
                         flow.current.participated.add(m)        # 회의 발언 = 실질 협의 인정
                 # 2라운드+ = 직렬 상호 토론(서로의 발언을 보며 동의/반박/보완) — 품질의 원천인
@@ -1242,7 +1253,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                             pass
                         line = f"[{r}R] {flow._info(m) or m}: {(res or '').strip()[:400]}"
                         minutes.append(line)
-                        await _note(f"[회의] {line[:300]}")
+                        await _say(m, f"[회의 {r}R] {(res or '').strip()[:300]}")  # 본인 명의 발언
                         if m in flow.current.team and m != flow.leader:
                             flow.current.participated.add(m)    # 회의 발언 = 실질 협의 인정
                 return _ok(f"[회의록] 주제: {topic} ({rounds}라운드, {len(members)}명)\n"
