@@ -690,6 +690,66 @@ class Sys:
                 self._log("role_experience_saved", job=job, lines=n)
         return out or "(직무 기준/경험이 기록되었습니다.)"
 
+    _DISTILL_MIN = int(os.environ.get("ORGANT_DISTILL_MIN", "5"))   # 증류 발동 최소 경험 줄 수
+
+    def pick_distill_job(self):
+        """증류가 필요한 직군 하나를 고른다 — 경험이 가장 많이 쌓인 직군부터(없으면 None)."""
+        cands = [(len(v), k) for k, v in self.role_experience.items() if len(v) >= self._DISTILL_MIN]
+        return max(cands)[1] if cands else None
+
+    def _bot_of_job(self, job):
+        """그 직군을 보유한 봇(겸직 포함)을 찾는다 — 증류는 그 직군의 전문가 본인이 한다."""
+        for mid, label in self.bot_info.items():
+            if any(j.strip() == job for j in str(label or "").split("·")):
+                return mid
+        return None
+
+    async def distill_role(self, job) -> bool:
+        """[수면 — 기억 증류] 직군의 '최근 경험'을 그 전문가 봇이 직무 기준으로 압축한다.
+        시스템은 내용을 정하지 않는다(전문가 자기정의 원칙) — 일반화 가치가 있는 교훈만 기준에
+        흡수시키고, 증류된 경험 로그는 비운다. 증류 대화는 별도 세션(state_tag)이라 작업 기억을
+        오염시키지 않으며, 흐름이 없을 때만 호출된다(수면 사이클)."""
+        mid = self._bot_of_job(job)
+        exp = self.role_experience.get(job) or []
+        if mid is None or len(exp) < self._DISTILL_MIN:
+            return False
+        cur = self.role_profiles.get(job, "(아직 없음)")
+        flow = Flow(self.guide, 0, self.guild_id, mid, self.bot_info)   # 도구 형식용 빈 흐름(깨우기 없음)
+        server = build_guide_server(flow, mid, "member")
+        try:
+            organt = self.organt_builder(mid, server, "member", flow, state_tag=f"distill_{mid}")
+        except TypeError:
+            organt = self.organt_builder(mid, server, "member", flow)   # 구형 빌더 호환(테스트 등)
+        prompt = (
+            f"[자기계발 시간 — 직무 기준 증류] 당신은 '{job}' 전문가입니다. 도구를 쓰지 말고 텍스트로만 답하세요.\n\n"
+            f"현재 직무 기준:\n{cur}\n\n"
+            f"최근 실작업에서 쌓인 경험(원석):\n" + "\n".join(f"- {e}" for e in exp) + "\n\n"
+            f"위 경험 중 '앞으로도 반복 적용될 일반화 가치'가 있는 교훈만 골라 직무 기준에 녹여, 개선된 "
+            f"기준 전체(5~10줄)를 작성하세요. 일회성 디테일·특정 프로젝트 한정 사항은 버리세요. "
+            f"반드시 아래 형식만으로 답하세요:\n[직무기준] {job}\n(개선된 기준 줄들)\n[/직무기준]"
+        )
+        try:
+            out = await organt.handle(prompt)
+        except Exception as e:
+            self._log("role_distill_failed", job=job, err=str(e)[:80])
+            return False
+        before = self.role_profiles.get(job)
+        await self._absorb_role_profiles(out)            # [직무기준] 블록 흡수(영속 포함)
+        ok = self.role_profiles.get(job) not in (None, before) or (before and "[직무기준]" in (out or ""))
+        if self.role_profiles.get(job) and self.role_profiles.get(job) != cur:
+            self.role_experience[job] = []               # 증류 완료 — 원석 비움
+            self._save_profiles()
+            self._log("role_distilled", job=job, used=len(exp))
+            # 증류 세션은 일회성 — 다음 증류가 깨끗하게 시작하도록 제거
+            if self.session_dir:
+                try:
+                    os.remove(os.path.join(str(self.session_dir), f"organt_state_distill_{mid}.json"))
+                except OSError:
+                    pass
+            return True
+        self._log("role_distill_noop", job=job)
+        return False
+
     async def _drain_inflight(self, flow) -> str:
         """완주 중인 위임(detach 포함)이 있으면 끝까지 기다리고, 도착한 위임 결과를 이어가기 리더에게
         전달할 본문으로 돌려준다(없으면 ''). CLI가 도구 호출을 포기해도 deliver 태스크는 계속 돌므로

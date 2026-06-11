@@ -1711,3 +1711,34 @@ def test_Skill강화_경험_흡수_주입_상한(tmp_path):
     s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "QA"},
              session_dir=str(tmp_path))
     assert s2.role_experience["QA"]                              # 재기동 복원
+
+
+def test_수면_기억증류_경험이_기준으로_압축(tmp_path):
+    """[수면 — 기억 증류] 유휴 시 경험이 쌓인 직군의 '전문가 본인'이 경험을 일반화해 직무 기준을
+    개선하고, 증류된 경험 로그는 비워진다(자기계발 보강 — Feature.md). 증류는 별도 세션(state_tag)
+    이라 작업 기억을 오염시키지 않는다."""
+    g = FakeGuide()
+    calls = {}
+
+    class _Distiller:
+        async def handle(self, prompt):
+            calls["prompt"] = prompt
+            return "[직무기준] QA\n개선된 기준: 소켓 e2e는 기동 대기 후 검증한다\n실플레이를 끝까지 재현한다\n[/직무기준]"
+
+    def builder(oid, srv, role, flow=None, state_tag=None):
+        calls["state_tag"] = state_tag
+        return _Distiller()
+
+    s = Sys(g, guild_id=1, organt_builder=builder, bot_info={11: "백엔드·QA"},
+            session_dir=str(tmp_path))
+    s.role_profiles["QA"] = "기존 기준"
+    s.role_experience["QA"] = [f"교훈{i}" for i in range(6)]
+    assert s.pick_distill_job() == "QA"                       # 경험 임계 도달 직군 선정
+    ok = asyncio.run(s.distill_role("QA"))
+    assert ok is True
+    assert "소켓 e2e" in s.role_profiles["QA"]                # 기준이 개선본으로 교체
+    assert s.role_experience["QA"] == []                      # 원석 비움
+    assert calls["state_tag"] == "distill_11"                 # 작업 세션과 분리
+    assert "교훈3" in calls["prompt"] and "기존 기준" in calls["prompt"]
+    assert any(e["event"] == "role_distilled" for e in s.flow_log)
+    assert s.pick_distill_job() is None                       # 증류 후 대상 없음

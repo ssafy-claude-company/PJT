@@ -133,7 +133,7 @@ async def _connect(token: str, message_content: bool = False,
 def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
     """role에 맞는 도구·권한·훅·State를 갖춘 Organt를 만드는 빌더를 돌려준다."""
     bot_info = bot_info or {}
-    def organt_builder(organt_id, server, role, flow=None):
+    def organt_builder(organt_id, server, role, flow=None, state_tag=None):
         # 리더도 한 명의 직원 — 구현 도구(Write/Edit)를 그대로 갖는다. 차이는 권한이 아니라
         # 역할: 목표는 팀 합의로 정하고(set_goal), Work 위임 본문은 '스펙'이 아니라
         # '측정가능한 목표'이며, 받은 owner가 구현·검증까지 끝까지 책임진다.
@@ -148,7 +148,8 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
         if role == "leader":
             allowed = allowed + LEADER_TOOLS
             turns = int(os.environ.get("ORGANT_LEADER_TURNS", "500"))
-        state_path = cfg.audit_log_path.parent / f"organt_state_{organt_id}.json"
+        # state_tag: 증류(수면) 등 '작업 외 대화'는 별도 세션 파일을 써 작업 기억을 오염시키지 않는다.
+        state_path = cfg.audit_log_path.parent / f"organt_state_{state_tag or organt_id}.json"
         label = bot_info.get(organt_id, role)   # 협업 관찰성: 로그에 '누가' 남기기
         # sdk 서버별 도구호출 타임아웃(ms) — CLI가 env(MCP_TOOL_TIMEOUT)보다 우선 적용하는 명시 설정.
         # request(동료 위임)는 동료의 중첩 작업 동안 수십 분 블록되는 게 정상 설계라 사실상 해제해 둔다.
@@ -486,6 +487,23 @@ async def run() -> None:
             else:
                 canary["misses"] = 0
 
+    async def _sleep_cycle():
+        """수면(기억 증류): 시스템이 유휴일 때, 경험이 충분히 쌓인 직군의 전문가를 깨워 '경험→직무
+        기준'으로 압축한다(자기계발 시간 보강 — Feature.md). 흐름이 활성이면 건너뛴다(단일흐름 존중),
+        주기당 한 직군만(비용 제어)."""
+        period = int(os.environ.get("ORGANT_SLEEP_PERIOD", "600"))
+        while True:
+            await asyncio.sleep(period)
+            try:
+                if sysm.active_flow is not None:
+                    continue
+                job = sysm.pick_distill_job()
+                if job:
+                    await sysm.distill_role(job)
+            except Exception:
+                log.error("수면(증류) 사이클 오류:\n%s", traceback.format_exc())
+
+    tasks.append(asyncio.create_task(_sleep_cycle()))
     tasks.append(asyncio.create_task(_gateway_canary()))
     tasks.append(asyncio.create_task(_watch_new_tokens()))
     await asyncio.gather(*tasks)
