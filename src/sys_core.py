@@ -460,8 +460,15 @@ class Sys:
                 notes.append(f"[당신의 최근 경험 — {j} 직군이 실제 작업에서 얻은 교훈. 같은 함정을 반복하지 마세요]\n"
                              + "\n".join(f"- {e}" for e in exp[-6:]))
         if jobs:
-            notes.append("[경험 남기기] 이번 작업에서 직군 차원의 교훈(함정·효과적이었던 방법)을 얻었다면 보고 끝에 "
-                         f"`[경험] {jobs[0]}` / 교훈 1~2줄 / `[/경험]` 블록으로 남기세요(다음 작업에 주입됩니다). 없으면 생략.")
+            # [의무형 — 데이터 근거] 선택형("없으면 생략")은 라이브에서 0% 산출, 의무형([직무기준]
+            # 요청)은 7/7 직군 100% 산출. 학습 플라이휠(기준→경험→증류→개선)의 원료가 여기서만 나오므로
+            # 고정 섹션으로 강제하되, '없음' 탈출구로 억지 채움(노이즈)을 막는다('없음'은 흡수 때 버려짐).
+            notes.append(
+                f"[경험 — 보고의 고정 섹션(생략 금지)] 작업 보고 끝에 반드시 아래 블록을 포함하세요. "
+                f"이번 작업에서 얻은 **직군 차원의 일반화 가치가 있는** 교훈(함정·효과적이었던 방법) "
+                f"1~2줄만 — 다음 작업에 주입되고 수면 중 직무 기준으로 증류됩니다. 새 교훈이 진짜 "
+                f"없으면 본문에 '없음'이라고 쓰세요(억지로 채우는 것보다 '없음'이 낫습니다 — 일회성 "
+                f"디테일·당연한 일반론은 노이즈입니다):\n[경험] {jobs[0]}\n(교훈 또는 '없음')\n[/경험]")
         if missing:
             notes.append(
                 f"[직무 기준 작성 — 이번 한 번만] 당신 직군 '{missing[0]}'의 직무 기준이 아직 없습니다. "
@@ -677,7 +684,13 @@ class Sys:
             job = (m.group("job") or "").strip()
             body = (m.group("body") or "").strip()[:600]
             if job and body:
-                lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+                # '없음' 류는 버린다 — 의무 섹션의 탈출구이지 경험이 아니다(저장하면 다음 프롬프트
+                # 주입과 증류 원료가 노이즈로 오염된다). 괄호 안내문 재복창도 같은 이유로 컷.
+                lines = [ln.strip() for ln in body.splitlines()
+                         if ln.strip() and ln.strip().rstrip(".") not in
+                         ("없음", "없다", "-", "특이사항 없음", "(교훈 또는 '없음')")]
+                if not lines:
+                    return ""
                 cur = self.role_experience.setdefault(job, [])
                 cur.extend(lines)
                 del cur[:-self._EXP_KEEP]   # 최근 N줄만(압축은 기억 증류의 몫)
@@ -1029,9 +1042,17 @@ class Sys:
                     f"끝내세요: 남은 부분을 owner에게 request(Work)로 맡기고(이미 정해진 팀·owner 존중 — 가로채 혼자 "
                     f"마무리 금지), run으로 검증한 뒤 complete_task로 **이 블록**을 마감하세요. 만약 사용자가 **명백히 "
                     f"다른 새 작업**을 원한 거면, 이 Task를 먼저 적절히 마무리(complete_task)한 뒤 새 Task를 여세요(당신 판단).\n\n")
+            # [Project.Context 주입 — docs Project.md "Organts는 Context를 숙지한다"] 직전 흐름의 마감
+            # 요약을 리더에게 참고로 준다. 기록만 되고 읽는 곳이 없던 단절(감사 발견)의 복원 — 특히
+            # 리클레임/세션 유실 후의 차가운 시작에서 프로젝트의 핵심 결정·방향성이 이어진다.
+            ctx_note = ""
+            if (proj.get("summary") or "").strip():
+                ctx_note = (f"[프로젝트 최근 맥락 — 직전 흐름의 마감 보고] {proj['summary'].strip()}\n"
+                            f"(핵심 결정·방향성 참고용 — 사용자의 이번 요청이 우선합니다)\n\n")
             body = (
                 f"[프로젝트 {proj['id']} 개입 — 기존 산출물 수정] 이미 작업공간·산출물이 있습니다. create_project 다시 만들지 마세요.\n"
                 f"사용자가 보고한 요청/증상: {user_text}\n\n"
+                f"{ctx_note}"
                 f"{resume_note}"
                 f"[이어지는 작업 — 처음부터 다시 짜지 말 것(중요)] 당신은 이 프로젝트에서 일한 **이전 세션 맥락을 그대로 "
                 f"이어갑니다**. 직전에 진행 중이던 Task·목표·위임(누가 누구에게 무엇을 맡겼는지)·owner·팀 구성이 있었다면 "
@@ -1147,7 +1168,7 @@ class Sys:
         if flow.project_channel:
             p = self.projects.get(int(flow.project_channel))
             if p:
-                p["summary"] = (result or "")[:300]
+                p["summary"] = (result or "")[:600]   # Project.Context — 개입 프롬프트에 주입됨
                 p["open_task"] = open_task_snap
                 self._save_projects()
         # 신규 흐름이 프로젝트를 등록했으면 세션을 프로젝트 스코프로 '승격'(리네임) — 다음 개입이

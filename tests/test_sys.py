@@ -2121,3 +2121,41 @@ def test_fork수집중_신규request와_중첩수집은_대기():
         assert "A: 2표" in out["content"][0]["text"]           # 수집은 정상 완주
         assert f.fork_active == 0                              # 조인 후 가드 해제
     asyncio.run(scenario())
+
+
+def test_경험_의무섹션_없음은_흡수에서_버려짐(tmp_path):
+    """[학습 플라이휠] [경험]은 보고의 고정 섹션(의무형 — 선택형은 라이브 0% vs 의무형 100%)이되,
+    '없음'은 탈출구라 흡수 단계에서 구조적으로 버려진다 — 다음 프롬프트 주입·증류 원료가 억지
+    채움 노이즈로 오염되지 않는다."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "QA"},
+            session_dir=str(tmp_path))
+    note = s._craft_note(11)
+    assert "고정 섹션" in note and "생략 금지" in note and "'없음'" in note   # 의무형 + 탈출구 안내
+    out = asyncio.run(s._absorb_role_profiles("검증 끝.\n[경험] QA\n없음\n[/경험]"))
+    assert out == "검증 끝." and not s.role_experience.get("QA")            # '없음'은 저장 안 됨
+    asyncio.run(s._absorb_role_profiles("[경험] QA\n소켓 e2e는 1.5초 대기 후 안정\n[/경험]"))
+    assert s.role_experience["QA"] == ["소켓 e2e는 1.5초 대기 후 안정"]      # 실교훈만 축적
+
+
+def test_프로젝트_Context가_개입프롬프트에_주입(tmp_path):
+    """[Project.Context 복원 — docs Project.md 'Organts는 Context를 숙지한다'] 직전 흐름의 마감
+    요약(summary)이 다음 개입의 리더 프롬프트에 참고 블록으로 주입된다(기록만 되고 읽는 곳이
+    없던 단절 해소). 요약이 비어 있으면 블록 자체가 없다."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"},
+            workspace="/tmp/ws-x", session_dir=str(tmp_path))
+    s.projects = {100: {"id": "P-00A", "name": "a", "channel": 100, "workspace": str(tmp_path),
+                        "leader": 11, "summary": "핵심 결정: 렌더는 Canvas 채택, 룸 기반 멀티 구조"}}
+    bodies = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        bodies.append(body)
+        flow.current = None
+        return "ok"
+    s.run_turn = fake_run_turn
+    asyncio.run(s.handle_user_input(100, 11, "이어서 개선해", root_id=None))
+    assert "프로젝트 최근 맥락" in bodies[0] and "Canvas 채택" in bodies[0]
+    assert "이번 요청이 우선" in bodies[0]                                   # 앵커링 방향 단서
+    s.projects[100]["summary"] = ""
+    asyncio.run(s.handle_user_input(100, 11, "또 개선해", root_id=None))
+    assert "프로젝트 최근 맥락" not in bodies[1]                             # 빈 요약이면 블록 없음
