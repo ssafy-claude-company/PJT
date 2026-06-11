@@ -438,10 +438,23 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 await flow.refresh()
                 _dbg(f"{tag} +Task자동합류(프로젝트팀원)")
             elif to in flow.pool:
+                # [원인 교정 — 정보가 있는 거부] 리더가 회사 풀(전체 로스터)과 프로젝트 팀을 혼동해
+                # 팀 밖 동료를 반복 호출하던 라이브 관측(7회 우회, SIGTERM 기억구멍이 증폭)의 뿌리:
+                # 거부가 '안 된다'만 말하고 '그 직군이 팀에 누구인지'를 안 알려줘 같은 실수가 반복됐다.
+                # 올바른 대안(팀 내 같은 직군)과 현재 팀 명단을 동봉해 첫 거부에서 바로 교정되게 한다.
+                same = [m for m in flow.project_team
+                        if m != me_id and not _is_spare(flow, m)
+                        and ({_norm_job(j) for j in _jobs_of(flow._info(to) or "")}
+                             & {_norm_job(j) for j in _jobs_of(flow._info(m) or "")})]
+                alt = (" 같은 직군의 **팀 내 동료**: "
+                       + ", ".join(f"{flow._info(m)}(id {m})" for m in same)
+                       + " — 이들에게 요청하세요(재시도 금지)." if same else
+                       " 팀에 그 직군이 없습니다 — 정말 필요하면 recruit(member=…, role=…)로 합류시킨 뒤 요청하세요.")
                 _dbg(f"{tag} ✗거부:프로젝트밖")
-                await _note(f"{flow._info(to) or to}는 이 프로젝트 팀이 아님 — recruit로 합류 후 요청")
-                return _ok(f"요청 거부: {to}({flow._info(to)})는 이 프로젝트 팀이 아닙니다. "
-                           f"프로젝트 외부 인력은 신중히 — recruit로 합류시킨 뒤 요청하세요.")
+                await _note(f"{flow._info(to) or to}는 이 프로젝트 팀이 아님 — 팀 내 대안 안내")
+                return _ok(f"요청 거부: {to}({flow._info(to)})는 이 프로젝트 팀이 아닙니다 — 회사 풀에는 "
+                           f"있지만 이 프로젝트 구성원이 아닙니다(팀은 create_project 때 당신이 구성했습니다)."
+                           f"{alt} 현재 프로젝트 팀: {flow._names(flow.project_team)}")
             else:
                 return _ok(f"요청 거부: {to}는 채용 풀에 없습니다. 풀: {flow._names(flow.pool)}")
         if flow.wake is None:

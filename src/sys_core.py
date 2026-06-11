@@ -1188,7 +1188,22 @@ class Sys:
                 flow.leader_segment = cont + 1
                 self._log("continue_incomplete",
                           task=(flow.current.task_id if flow.current else None), attempt=cont)
-                result = await self.run_turn(flow, lead, _CONTINUE_BODY + drained, Kind.WORK, "leader")
+                # [기억 구멍 무력화] 이어가기마다 팀·소유의 '시스템 사실'을 재주입한다 — 외부 절단
+                # (SIGTERM)으로 직전 턴이 세션에 안 남으면 리더가 자기 팀 구성을 잊고 '참여 중인가요?'
+                # 재확인·팀 밖 호출을 반복했다(라이브 관측). 기억은 흔들려도 사실은 SYS가 들고 있다.
+                team_note = ""
+                if flow.current is not None:
+                    try:
+                        team_note = (
+                            f"[시스템 기록 — 현재 Task {flow.current.task_id}] "
+                            f"팀: {flow._names(flow.current.team)} / Owner: {flow.current.status.owner or '미정'} / "
+                            f"Goal: {(flow.current.status.goal or '미확정')[:80]}\n"
+                            f"[프로젝트 팀 전체] {flow._names(flow.project_team)} — 이 명단 밖 동료는 이 프로젝트 "
+                            f"구성원이 아닙니다(필요하면 recruit로 합류부터).\n\n")
+                    except Exception:
+                        team_note = ""   # 사실 주입은 best-effort — 형식이 다른 Task여도 이어가기는 진행
+                result = await self.run_turn(flow, lead, _CONTINUE_BODY + team_note + drained,
+                                             Kind.WORK, "leader")
             # 이어가기 한도 소진/마감 후에도 완주 중인 위임이 있으면 그 결과까지 받아 보고에 붙인다
             # (작업 유실 방지 — 마지막 위임이 마감 직전에 끝나는 경우).
             drained = await self._drain_inflight(flow)

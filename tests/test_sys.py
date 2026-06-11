@@ -2294,3 +2294,57 @@ def test_상태텍스트_살아있음_신호_구성():
     assert "지금: 기획" in txt and "마지막 활동: 14초 전" in txt
     fin = s._status_text(f, _t.monotonic(), final="⏸ 중단(미완 Task 이어가기 가능)")
     assert fin.startswith("⏸ 중단") and "온라인 세포" in fin
+
+
+def test_팀밖_거부는_팀내_같은직군_대안과_명단을_동봉():
+    """[정보가 있는 거부 — 원인 교정] 리더가 풀과 프로젝트 팀을 혼동해 팀 밖 동료를 반복 호출하던
+    문제(라이브 7회 우회)의 뿌리는 '거부만 하고 올바른 대안을 안 알려준 것' — 거부에 팀 내 같은
+    직군 동료와 현재 팀 명단을 동봉해 첫 거부에서 바로 교정되게 한다(자동 합류·양산 없이)."""
+    f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "프론트엔드", 13: "프론트엔드", 14: "QA"})
+    f.start_root("root")
+    f.project_team = [11, 12, 14]                    # 13(프론트)은 풀에만 있고 팀 밖
+
+    async def wake(to, b, k):
+        return "ok"
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12,14"}))
+    r = asyncio.run(t["request"].handler({"to_id": "13", "kind": "Info", "body": "도와줘"}))
+    txt = r["content"][0]["text"]
+    assert "이 프로젝트 팀이 아닙니다" in txt
+    assert "팀 내 동료" in txt and "id 12" in txt     # 같은 직군(프론트)의 팀 내 대안(id 포함)
+    assert "현재 프로젝트 팀" in txt and "재시도 금지" in txt
+
+
+def test_이어가기_본문에_팀·소유_시스템사실_재주입(tmp_path):
+    """[기억 구멍 무력화] 외부 절단으로 리더 세션에서 직전 턴이 증발해도, 이어가기 본문에 SYS가
+    팀·Owner·Goal·프로젝트 팀 명단을 재주입한다 — '참여 중인가요?' 재확인·팀 밖 호출 반복의 차단."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드"},
+            workspace="/tmp/ws-x", session_dir=str(tmp_path))
+    bodies = []
+    calls = {"n": 0}
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        bodies.append(body)
+        calls["n"] += 1
+        if role != "leader":
+            return "(owner 진행 중)"
+        if calls["n"] == 1:                          # 1세그먼트: Task를 연 채 끝남 → 이어가기 유발
+            from src.guide_tools import TaskRef
+            from src.protocol import TaskStatus
+            st = TaskStatus(task_id="T-1", purpose="p", status="진행", goal="측정가능 g",
+                            owner="백엔드", group=[])
+            flow.current = TaskRef(task_id="T-1", thread_id="th", block_id="b",
+                                   status=st, team=[11, 12], owner=12)
+            flow.project_team = [11, 12]
+            return "1차(미완)"
+        flow.current = None                          # 2세그먼트(이어가기): 마감
+        return "완료"
+    s.run_turn = fake_run_turn
+    asyncio.run(s.handle_user_input(500, 11, "큰 작업", root_id=None))
+    cont = bodies[1]                                 # 이어가기 본문
+    assert "[시스템 기록 — 현재 Task T-1]" in cont
+    assert "Owner: 백엔드" in cont and "측정가능 g" in cont
+    assert "[프로젝트 팀 전체]" in cont and "구성원이 아닙니다" in cont
