@@ -8,7 +8,7 @@
 Discord 멀티에이전트 AI 회사 **"Organt"** — 사용자가 Discord로 일을 시키면 봇 직원들이
 팀을 꾸려 협업(위임·회의·표결·검증)으로 작품을 만들고 배포까지 한다.
 - 레포 2개: `PJT`(코드, `/home/user/PJT`) + `docs`(설계 문서, `/home/user/docs`)
-- 작업 브랜치: `claude/fervent-dirac-bsx1w3` (main FF 동기화 관행)
+- 작업 브랜치: `claude/jolly-lovelace-9r2knl` (main FF 동기화 관행)
 - 설계 기준은 docs 레포의 Rule — 코드가 Rule과 다르면 코드가 버그다.
 
 ## 1. 처음 5분 — 부팅 체크리스트 (순서대로)
@@ -21,17 +21,19 @@ tail -5 logs/listener.log
 # ③ 죽어 있으면 재기동 — 반드시 이 래퍼(필수 env 주입). 로그 리다이렉션 잊지 말 것(stdout 로그).
 setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null &
 ```
-- ③-보충: 새 컨테이너라 `.env`가 없으면 영속 env의 토큰 4개 폴백으로 뜬다(소규모 팀).
-  풀팀(20봇)은 SESSION_HANDOFF '자격증명' 절 참조 — 사용자에게 토큰을 받아야 한다.
+- ③-보충: 영속 env에 풀팀 토큰(`SYSTEM_BOT`+`ORGANT_BOT_2~20`)과 배포 키(GH_PAT·RENDER_KEY)가
+  등록돼 있어 `.env` 없이도 **풀팀(워커 20)으로 뜬다**(2026-06-12 새 컨테이너에서 라이브 검증).
+  새 컨테이너면 `.venv`·`logs/`부터 만들어야 한다(`python3 -m venv .venv` + requirements 2종).
 - ④ **감독자 재무장** — 전 세션의 감독자는 세션 종료와 함께 소멸한다. Monitor 도구로
   아래 스크립트를 `persistent`로 **딱 1개만** 무장(평시 침묵=토큰 0, 사망 시 셸이 직접 소생):
   ```bash
   cd /home/user/PJT
   P1="src"; P2="main"   # pgrep 자기매칭 회피(분할 패턴)
+  S="scripts/run_"      # 재기동 경로도 분할 — 외부 pkill -f 리터럴 매칭에 감독자가 동반 사망 방지
   while true; do
     if ! pgrep -f "python -m ${P1}.${P2}" >/dev/null 2>&1; then
       echo "[감독자] 리스너 부재 → 자동 재기동 ($(date '+%m-%d %H:%M:%S'))"
-      setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null &
+      setsid nohup bash "${S}listener.sh" >> logs/listener.log 2>&1 < /dev/null &
       sleep 100
       if pgrep -f "python -m ${P1}.${P2}" >/dev/null 2>&1 \
          && tail -8 logs/listener.log | grep -q "User 입력 대기 중"; then
@@ -67,6 +69,9 @@ setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null 
 - 재기동 전 흐름 진행 여부 확인: 봇 CLI(`_bundled/claude`) 프로세스 + logs 파일 mtime.
   (`/tmp/restart_organt.sh`가 있으면 그걸 사용 — 능동 흐름 가드 내장, `--force`로 무시.)
 - `pkill`/`pgrep`은 **분할 패턴**(`P="run_"; pkill -f "${P}listener.sh"`) — 자기매칭(exit 144) 회피.
+  **인자만 분할하면 부족**: 같은 커맨드라인 다른 곳의 리터럴(예: 뒤따르는 재기동 명령)도 매칭된다 —
+  pkill과 재기동은 **호출을 분리**하라. 감독자도 커맨드라인에 재기동 명령을 들고 있어 외부 pkill에
+  동반 사망할 수 있다(2026-06-12 실증 — 죽었으면 재무장).
 - 감시는 항상 **감독자 1개**만 — 30분짜리 모니터를 여러 개 재무장하지 말 것(토큰 누수).
 
 ## 4. 진단 빠른 참조
