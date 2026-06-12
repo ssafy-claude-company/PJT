@@ -557,6 +557,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 owner_body = (f"[위임 — 이 목표를 끝까지 책임지는 owner는 당신입니다] 이 Task의 Goal: {goal}\n"
                               f"직접 구현하고 run으로 '목표가 충족됨'을 검증한 뒤(리더에게 되넘기지 말 것), "
                               f"그 실행 증거와 함께 간결히 보고하세요.\n"
+                              f"큰 목표는 **수직 슬라이스 우선**: '끝까지 관통하는 최소 동작 버전'을 먼저 만들어 "
+                              f"검증하고 그 위에 살을 붙이세요 — 마지막 통합 몰빵 금지(오차를 일찍 드러내는 것이 "
+                              f"빠른 길입니다. RFC-005: 검증 신호는 연속적이어야 한다).\n"
                               f"보고는 다음 골격으로(보고 계약 — 받은 쪽이 산출물을 재탐색하지 않아도 되게): "
                               f"[결과] 한 줄 결론(완료/부분/실패) / [변경] 파일·핵심 변경 목록 / "
                               f"[검증] 방법→결과 / [리스크] 남은 것·주의점.\n"
@@ -1092,7 +1095,14 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.current = ref
             flow.comm.reset_task_tracking()   # 새 산출물 단위 → '완료/Redo' 추적 초기화(Redo는 같은 Task 안에서만)
             _ckpt(flow)                       # 크래시-세이프: 열린 즉시 영속(동면·강제종료에도 같은 Task로 복구)
-            return _ok(f"task={tid} (빈 껍데기·담당자가 팀 선정) thread={thread_id} 팀={flow._names(team)} — 이 팀은 "
+            size_note = ""
+            if len(team) >= 6:
+                # [공급 원칙 — RFC-005] 소통 비용은 인원², 실작업은 소수 정예가 빠르다(실측: 팀 5~10명
+                # 중 실작업 3직군). 회의(meet)는 전원이 옳지만 '실행 팀'은 다르다 — 판단은 리더.
+                size_note = (f"\n[정보 — 판단은 당신 몫] 실행 팀이 {len(team)}명입니다. 소통 비용은 인원의 "
+                             f"제곱으로 늘고, 실작업은 보통 3~5명이 빠릅니다 — 회의는 전원, Task 실행 팀은 "
+                             f"핵심만 두고 나머지는 검증·자문(request Info)으로 두는 것을 고려하세요.")
+            return _ok(f"task={tid} (빈 껍데기·담당자가 팀 선정) thread={thread_id} 팀={flow._names(team)}{size_note} — 이 팀은 "
                        f"당신이 고른 구성입니다(직군이 부족하면 recruit(role=)로 더하세요). 배정된 팀 **전원**에게 "
                        f"request(Info)로 'Purpose(풀 문제)·Goal(성공기준)·각자 도메인 할 일'을 물어 함께 정한 뒤 "
                        f"set_goal로 확정하세요(전원 협의 전엔 set_goal 거부됨). 그 다음 일을 맡길 동료에게 Work로 위임.")
