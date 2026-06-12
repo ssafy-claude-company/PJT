@@ -2849,3 +2849,21 @@ def test_병렬Work_영역겹침과_전제위반은_거부():
     r3 = asyncio.run(t["parallel_work"].handler({"assignments": _j.dumps(
         [{"to": "12", "files": "a.js", "body": "x"}])}))
     assert "2건부터" in r3["content"][0]["text"]                 # 1건 거부
+
+
+def test_협의명단은_스냅샷에_영속되고_복원된다(tmp_path):
+    """[재협의 루프 차단] participated(협의 완료 명단)가 스냅샷에 없으면 재개마다 set_goal 게이트가
+    전원 재협의를 강제 — 라이브 P-010 개입: 동면 재개 5회 동안 리더가 같은 협의 질문을 5회 반복
+    (스레드 통독으로 발견). 협의는 '사실'이라 영속이 옳다(검증 누계는 의도적으로 0 재시작 — 별개)."""
+    g = FakeGuide()
+    f = _flow(g)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "B"}, session_dir=str(tmp_path))
+    snap = s._task_snapshot(f, f.current)
+    assert snap["participated"] == [12]                      # 영속
+    f2 = _flow(FakeGuide())
+    proj = {"id": "P-X", "open_task": snap}
+    asyncio.run(s._restore_open_task(f2, proj))
+    assert 12 in f2.current.participated                     # 복원 → 재개 후 set_goal 재협의 불요

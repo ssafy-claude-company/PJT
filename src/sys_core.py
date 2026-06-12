@@ -356,6 +356,10 @@ class Sys:
             "team": [int(x) for x in ref.team],
             "result_so_far": (ref.status.result or "")[:500],
             "collab_notes": getattr(ref, "collab_notes", ""),   # 회의·표결 합의 — 재개 위임에도 동봉
+            # [협의 명단 영속] 이게 없으면 재개마다 set_goal 게이트가 전원 재협의를 강제 —
+            # 라이브: 동면 5회 흐름에서 리더가 같은 협의 질문을 5회 반복(시간·토큰 낭비의 주범).
+            # 협의는 '사실'이라 영속이 옳다(검증 누계와 다름 — 그건 의도적으로 0에서 재시작).
+            "participated": sorted(int(x) for x in getattr(ref, "participated", []) or []),
         }
 
     def _status_text(self, flow, t0, final=None) -> str:
@@ -458,6 +462,7 @@ class Sys:
                       owner=int(snap.get("owner") or 0))
         if snap.get("collab_notes"):
             ref.collab_notes = snap["collab_notes"]   # 합의 기록 복원 — 재개 후 위임에도 동봉(스펙 증발 방지)
+        ref.participated = {int(x) for x in snap.get("participated", [])}   # 협의 명단 복원(재협의 루프 차단)
         flow.tasks.append(ref)
         flow.current = ref
         # 되살린 Task 멤버를 프로젝트 팀에 **합친다(union)** — 덮어쓰면 그 Task에 낀 일부 멤버로
