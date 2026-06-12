@@ -216,6 +216,15 @@ class Sys:
                     self._log("project_name_uniquified", asked=p.get("name"), made=name,
                               existing=p.get("id"))
                     break
+                # [채널 하이재킹 가드] 미완 Task가 영속된 '진행 중' 프로젝트의 채널은 옮기지 않는다 —
+                # 같은 작품을 다른 채널에서 다시 등록하는 흐름(라이브: 동면 복구 재발사가 새 채널을 파고
+                # create_project)이 원래 작업 채널에서 신원·토픽·open_task를 떼어가 '기존 채널이 죽고
+                # 새 채널에서 처음부터'가 되던 사고 차단. 신원은 돌려주되(같은 작품 인지) 채널·미완
+                # Task는 원래 자리를 지킨다 — 이어가기는 그 채널 개입으로.
+                if c != ch and p.get("open_task"):
+                    self._log("project_channel_move_refused", project=p.get("id"),
+                              kept=c, asked=ch)
+                    return p["id"]
                 # [연장 = 기존 산출물 위에서] 재사용은 작업공간을 새 흐름의 임시 폴더로 덮지 않는다 —
                 # 이어가기의 본질은 '그 작품의 폴더'를 계속 쓰는 것(덮으면 산출물 연속성이 끊긴다).
                 p["channel"] = ch

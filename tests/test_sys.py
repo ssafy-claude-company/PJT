@@ -1752,6 +1752,26 @@ def test_프로젝트_등록은_원요청링크를_영속(tmp_path):
     assert s.projects[500]["origin_msg"] == "650442" and s.projects[500]["id"] == pid
 
 
+def test_진행중_프로젝트의_채널은_재등록이_못_옮긴다(tmp_path):
+    """[채널 하이재킹 가드] 같은 작품(이름·목적 유사)을 다른 채널에서 다시 등록해도, 미완 Task가
+    영속된 '진행 중' 프로젝트의 채널·open_task는 원래 자리를 지킨다 — 라이브: 동면 복구 재발사가
+    새 채널을 파고 create_project → 원래 작업 채널에서 신원·토픽이 떨어져 나가 '기존 채널이 죽고
+    새 채널에서 처음부터'가 됐다(사용자 지적). 미완 Task가 없으면(쉬는 작품) 기존처럼 이동 허용."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
+            session_dir=str(tmp_path), workspace=str(tmp_path))
+    pid = s._register_project(500, "마법진 디펜스", str(tmp_path / "ws"), 11, purpose="디펜스 게임")
+    s.projects[500]["open_task"] = {"task_id": "065442-1"}      # 진행 중 표식(크래시-세이프 스냅샷)
+    assert s._register_project(900, "마법진 디펜스", str(tmp_path / "w2"), 11,
+                               purpose="디펜스 게임") == pid    # 신원은 돌려주되
+    assert 500 in s.projects and s.projects[500]["channel"] == 500   # 채널은 원래 자리
+    assert 900 not in s.projects
+    assert s.projects[500]["open_task"]["task_id"] == "065442-1"     # 미완 Task 보존
+    s.projects[500]["open_task"] = None                          # 쉬는 작품(마감 완료)이면
+    assert s._register_project(900, "마법진 디펜스", str(tmp_path / "w2"), 11,
+                               purpose="디펜스 게임") == pid
+    assert s.projects[900]["channel"] == 900 and 500 not in s.projects   # 기존 이동 동작 유지
+
+
 def test_배포명은_프로젝트별_결정적(monkeypatch):
     """[멀티 프로젝트] 배포 서비스명은 '프로젝트 신원'에서만 결정적으로 유도된다 — 미등록 흐름은
     슬롯이 없다(사용자 설계: 배포는 프로젝트마다). 과거의 DEPLOY_NAME env·인자·기본 폴백은
