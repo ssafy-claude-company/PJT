@@ -1789,11 +1789,11 @@ def test_진행중_프로젝트의_채널은_재등록이_못_옮긴다(tmp_path
     assert s.projects[900]["channel"] == 900 and 500 not in s.projects   # 기존 이동 동작 유지
 
 
-def test_검증분업_교차검증0이면_완료_1회보류_재호출은_통과():
-    """[품질 판정 독점 방지] owner 인도 후 '다른 멤버'의 검증 참여가 0이면 complete_task 첫 호출을
-    보류하고 검증 위임을 안내한다 — 라이브 P-009: QA·교차 검증 0인 채 리더 단독 마감 → 브라우저
-    렉·적 돌진 등 사용성 결함이 통과(사용자가 첫 발견). 재호출은 통과(판단은 리더, 무한 반려 금지),
-    교차 검증이 있으면 보류 없음."""
+def test_교차검증_의무_제3멤버가_있으면_단독마감_불가():
+    """[교차 검증 의무 — Rule/Task.md 6, 범용 이치의 하드 제한(사용자 확정)] owner 아닌 멤버의
+    검증 참여 없이는 완수 선언 불가(제3멤버가 있는 한 우회 없음 — 재호출도 거부). 라이브 P-009:
+    단독 마감이 브라우저 렉·적 돌진 등 사용성 결함을 통과시킴(사용자가 첫 발견). 검증 응답이
+    돌아오면 게이트는 자동으로 열린다. 제3멤버가 정말 없는 팀만 예외(단독 마감 마커가 기록에)."""
     g = FakeGuide()
     f = _flow(g)
     f.bot_info[13] = "잠수"
@@ -1807,20 +1807,23 @@ def test_검증분업_교차검증0이면_완료_1회보류_재호출은_통과(
     f.act_by[12] = 5                                               # owner는 실작업 있음
     r1 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
     txt1 = r1["content"][0]["text"]
-    assert "완료 보류" in txt1 and f.current is not None           # 1회 보류
+    assert "완료 거부" in txt1 and f.current is not None           # 거부
     assert "4항목" in txt1                                         # goal 항목별 검증 요구(동적)
     assert "실작업·검증 참여 0" in txt1                            # 잠수 멤버(13) 가시화
     r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
-    assert f.current is None and "보류" not in r2["content"][0]["text"]        # 재호출 통과
-    assert "단독 마감" in f.tasks[0].status.result                 # 침묵 강행 불가 — 기록에 보임
+    assert "완료 거부" in r2["content"][0]["text"] and f.current is not None   # 재호출도 거부(우회 없음)
+    f.current.cross_checks = 1                                     # 검증 응답 도착
+    r3 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert f.current is None and "거부" not in r3["content"][0]["text"]        # 게이트 자동 개방
+    assert "단독 마감" not in f.tasks[0].status.result             # 교차 검증 마감 — 마커 없음
+    # 제3멤버가 없는 팀(leader+owner뿐) → 예외 허용 + 단독 마감 마커
     asyncio.run(t["create_task"].handler({"members": "12"}))
     f.current.participated.add(12)
     asyncio.run(t["set_goal"].handler({"goal": "g2"}))
     f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
-    f.current.cross_checks = 1
-    r3 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
-    assert f.current is None and "보류" not in r3["content"][0]["text"]        # 교차 검증 有 → 즉시 통과
-    assert "단독 마감" not in f.tasks[1].status.result             # 교차 검증 마감엔 마커 없음
+    r4 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert f.current is None and "거부" not in r4["content"][0]["text"]
+    assert "단독 마감" in f.tasks[1].status.result                 # 침묵 강행 불가 — 기록에 보임
 
 
 def test_협의기록은_Work위임에_동봉되고_스냅샷에_생존한다(tmp_path):

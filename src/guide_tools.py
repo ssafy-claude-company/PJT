@@ -275,7 +275,7 @@ class TaskRef:
     work_delegated: int = 0                          # 리더가 이 Task에서 보낸 Work 위임 수(0이면 '자문만 받고 독식' 의심)
     collab_notes: str = ""                           # 회의·표결 합의 기록 — Work 위임에 자동 동봉(스펙이 회의에서 증발하던 결함 방지)
     cross_checks: int = 0                            # owner 인도 후 '다른 멤버'의 검증 참여 수(0이면 complete 1회 보류 — 품질 판정 독점 방지)
-    complete_retry: bool = False                     # 검증 분업 보류를 이미 1회 받았나(재호출은 통과 — 판단은 결국 리더, 무한 반려 금지)
+    complete_retry: bool = False                     # (구) 1회 보류 시절 잔재 — 교차 검증 의무 하드화(Rule/Task 6)로 미사용, 호환 위해 유지
     leader_writes: int = 0                           # 리더가 이 Task에서 직접 쓴 파일 수(위임 없이 독식하면 차단)
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
@@ -552,6 +552,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 owner_body = (f"[위임 — 이 목표를 끝까지 책임지는 owner는 당신입니다] 이 Task의 Goal: {goal}\n"
                               f"직접 구현하고 run으로 '목표가 충족됨'을 검증한 뒤(리더에게 되넘기지 말 것), "
                               f"그 실행 증거와 함께 간결히 보고하세요.\n"
+                              f"보고는 다음 골격으로(보고 계약 — 받은 쪽이 산출물을 재탐색하지 않아도 되게): "
+                              f"[결과] 한 줄 결론(완료/부분/실패) / [변경] 파일·핵심 변경 목록 / "
+                              f"[검증] 방법→결과 / [리스크] 남은 것·주의점.\n"
                               f"단, 이 Goal의 **핵심이 당신 직군 밖의 전문성**을 요구하면 어설프게 떠안지 말고 "
                               f"보고 **첫 줄**에 `[직군밖] 필요직군명` 을 적어 반려하세요 — 리더가 그 직군을 "
                               f"채용해 맡깁니다(전문화 원칙: 관계없는 일을 흡수하지 않는 것이 옳은 행동입니다).\n"
@@ -1159,23 +1162,23 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # P-009: QA·교차 검증 0인 채 단독 마감 → 브라우저 렉·적 돌진 등 사용성 결함이 그대로 통과,
             # 사용자가 첫 발견). owner 인도 후 '다른 멤버'의 검증 참여가 0이면 첫 호출만 보류하고 검증
             # 위임을 안내한다 — 재호출은 통과(판단은 결국 리더 몫, 무한 반려 금지. 직군 키워드 없음).
-            if (flow.current.owner and flow.current.cross_checks == 0
-                    and not flow.current.complete_retry):
-                flow.current.complete_retry = True
-                # [공급 원칙] 잠수 멤버(실작업·검증 0 — act_by 부재)와 goal 항목 수를 결정 지점에 공급:
-                # 도메인 키워드 없이도 '전문가가 손을 안 댄 채 마감되는' 패턴을 리더가 보게 한다(판단은 리더).
-                idle = [m for m in flow.current.team
-                        if m not in (flow.leader, flow.current.owner) and flow.act_by.get(m, 0) == 0]
+            # [교차 검증 의무 — Rule/Task.md 6 (사용자 확정: 범용 이치는 하드 제한도 옳다)]
+            # 작업자(owner) 아닌 멤버가 산출물을 '사용자처럼 실제로 사용해' 검증해야 완수 선언 가능.
+            # 제3멤버가 팀에 있는 한 우회 없음(거부 반복) — 라이브 P-009: 단독 마감이 렉·사용성
+            # 결함을 통과시킴. 제3멤버가 정말 없을 때만 예외(단독 마감 마커가 기록에 남는다).
+            third = [m for m in flow.current.team
+                     if m not in (flow.leader, flow.current.owner)]
+            if flow.current.owner and flow.current.cross_checks == 0 and third:
+                idle = [m for m in third if flow.act_by.get(m, 0) == 0]
                 idle_note = (f"\n[정보] 이 Task 팀에서 **실작업·검증 참여 0**인 멤버: {flow._names(idle)} — "
                              f"goal에 이들의 전문 영역이 있다면 그 부분의 검증·보완을 이들에게 맡기는 것이 "
                              f"자연스럽습니다." if idle else "")
                 n_items = len(re.findall(r"^\s*\d+[).]", flow.current.status.goal or "", re.M))
                 per_item = (f"goal {n_items}항목 **각각**의 충족/결함을" if n_items >= 2 else "goal의 충족/결함을")
-                return _ok(f"완료 보류(1회): owner 인도 후 **다른 멤버의 검증 참여가 0**입니다 — 지금 마감하면 "
-                           f"품질 판정자가 당신 혼자입니다. 산출물에 맞는 동료에게 request(Work)로 "
-                           f"'**사용자처럼 처음부터 끝까지 실제로 사용·플레이해 보고** {per_item} "
-                           f"보고하라'고 검증을 맡긴 뒤 마감하세요(검증자의 결함 보고는 Redo의 근거가 됩니다). "
-                           f"그래도 단독 마감이 옳다고 판단하면 complete_task를 다시 호출하면 통과됩니다.{idle_note}")
+                return _ok(f"완료 거부(교차 검증 의무 — Rule/Task): owner 인도 후 **다른 멤버의 검증 참여가 "
+                           f"0**입니다. 팀의 다른 멤버에게 request(Work)로 '**사용자처럼 처음부터 끝까지 실제로 "
+                           f"사용·플레이해 보고** {per_item} 보고하라'고 검증을 맡긴 뒤 마감하세요(검증자의 결함 "
+                           f"보고는 Redo의 근거). 검증 응답이 돌아오면 이 게이트는 자동으로 열립니다.{idle_note}")
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.
