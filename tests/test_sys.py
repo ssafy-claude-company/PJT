@@ -2910,3 +2910,25 @@ def test_활동기반_이어가기예산_진행세그는_소모없음():
     s2.run_turn = stuck_run_turn
     asyncio.run(s2.handle_user_input(500, 11, "정체 작업", root_id="r"))
     assert len(calls2) == 3                            # 첫 턴 + 무진행 이어가기 2회에서 한도 종결
+
+    # 교대 시나리오: 무진행↔진행이 번갈아도 '진행 시 리셋' 덕에 연속 한도(2)에 안 걸린다
+    g3 = FakeGuide()
+    s3 = Sys(g3, guild_id=1, organt_builder=None, bot_info={11: "L"}, workspace="/ws", max_continue=2)
+    calls3 = []
+
+    async def alt_run_turn(flow, oid, body, kind, role):
+        calls3.append(1)
+        if len(calls3) <= 4:
+            flow.current = types.SimpleNamespace(
+                task_id="t1", thread_id="th", block_id="blk", team=[], owner=0,
+                participated=set(), collab_notes="",
+                status=types.SimpleNamespace(status="진행", result=None, purpose="", goal="", owner=""))
+            if len(calls3) % 2 == 0:
+                flow.act_count += 1                    # 짝수 세그만 진행(교대)
+            return "작업 중 (⚠ 턴 한도 도달 — 미완)"
+        flow.current = None
+        return "완료"
+
+    s3.run_turn = alt_run_turn
+    asyncio.run(s3.handle_user_input(500, 11, "교대 작업", root_id="r"))
+    assert len(calls3) == 5                            # 연속 2 무진행이 없으므로 완주(리셋 검증)
