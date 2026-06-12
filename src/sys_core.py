@@ -181,18 +181,29 @@ class Sys:
         self._roster_labels[int(mid)] = role
         self._save_jobs()
 
-    def _register_project(self, channel_id, name, workspace, leader, purpose="") -> str:
+    def _register_project(self, channel_id, name, workspace, leader, purpose="",
+                          origin_msg="") -> str:
         """프로젝트를 1급 엔티티로 등록 → 식별번호 P-XXX 부여. 같은 채널이나 같은 이름이 이미
         있으면 재사용(중복 방지). 등록 채널에 다시 명령이 오면 '개입'으로 라우팅된다.
         purpose = 프로젝트를 탄생시킨 **사용자 원문**(docs Project.md의 '방향성') — 개입마다
         주입돼, 마지막 미완 Task만 보고 마감하는 시야 협착을 막는다(라이브 관측: '이어서 진행해'가
-        아트 Task 하나만 닫고 멀티·배포가 남은 프로젝트를 끝났다고 보고)."""
+        아트 Task 하나만 닫고 멀티·배포가 남은 프로젝트를 끝났다고 보고).
+        origin_msg = 프로젝트를 탄생시킨 원요청의 메시지 ID — 부팅 복구가 '이미 프로젝트로 졸업한
+        원요청'을 새 흐름으로 재발사하지 않고 그 프로젝트 채널 '개입'으로 잇는 연결 고리(라이브:
+        동면 복구가 P-009 원요청을 재발사해 진행을 버리고 처음부터 새로 시작 — 사용자 지적)."""
         ch = int(channel_id)
         if ch in self.projects:
-            if purpose and not self.projects[ch].get("purpose"):
-                self.projects[ch]["purpose"] = purpose[:700]
+            p = self.projects[ch]
+            changed = False
+            if purpose and not p.get("purpose"):
+                p["purpose"] = purpose[:700]
+                changed = True
+            if origin_msg and not p.get("origin_msg"):
+                p["origin_msg"] = str(origin_msg)
+                changed = True
+            if changed:
                 self._save_projects()
-            return self.projects[ch]["id"]
+            return p["id"]
         # 같은 이름이 이미 있으면 식별번호를 '그대로 유지'하고 채널만 현재 것으로 이동(증가/중복 금지)
         for c, p in list(self.projects.items()):
             if p.get("name") == name:
@@ -210,6 +221,8 @@ class Sys:
                 p["channel"] = ch
                 if purpose and not p.get("purpose"):
                     p["purpose"] = purpose[:700]
+                if origin_msg and not p.get("origin_msg"):
+                    p["origin_msg"] = str(origin_msg)
                 self.projects[ch] = p
                 if c != ch:
                     del self.projects[c]
@@ -222,7 +235,7 @@ class Sys:
         workspace = self._idify_workspace(workspace, pid, name)   # 신원=번호: p-00n-슬러그 개명
         self.projects[ch] = {"id": pid, "name": name, "channel": ch,
                              "workspace": workspace, "leader": leader, "summary": "",
-                             "purpose": purpose[:700]}
+                             "purpose": purpose[:700], "origin_msg": str(origin_msg or "")}
         self._save_projects()
         self._sync_topic(ch)
         return pid
@@ -1146,7 +1159,8 @@ class Sys:
         flow.comm.attach_engagement(self.engaged, scope_key)
         def _reg(ch, name):
             pid = self._register_project(ch, name, flow.workspace, flow.leader,
-                                         purpose=self._origin_request)  # 존재 이유 = 사용자 원문
+                                         purpose=self._origin_request,  # 존재 이유 = 사용자 원문
+                                         origin_msg=root_id or "")      # 원요청 링크(부팅 복구의 개입 라우팅 근거)
             p = self.projects.get(int(ch))
             if p and p.get("workspace"):
                 flow.workspace = p["workspace"]   # id-개명(p-00n-슬러그)/재사용(기존 산출물) 결과 채택

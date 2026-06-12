@@ -1735,6 +1735,23 @@ def test_create_project는_id기반_작업공간과_배포슬롯(tmp_path):
     assert deploy_service_name(f, "내맘대로이름") == f"organt-{f.project_id.lower()}"  # 슬롯 신원=번호(작명 무시)
 
 
+def test_프로젝트_등록은_원요청링크를_영속(tmp_path):
+    """[졸업 라우팅의 전제] 등록은 '프로젝트를 탄생시킨 원요청 메시지 id'(origin_msg)를 영속한다 —
+    부팅 복구가 졸업한 원요청을 재발사하지 않고 프로젝트 채널 개입으로 잇는 연결 고리.
+    같은 채널 재등록은 기존 origin을 보존하고, 비어 있을 때만 백필한다."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
+            session_dir=str(tmp_path), workspace=str(tmp_path))
+    pid = s._register_project(500, "마법진 디펜스", str(tmp_path / "ws"), 11,
+                              purpose="디펜스 게임", origin_msg="650442")
+    assert s.projects[500]["origin_msg"] == "650442"
+    s._register_project(500, "마법진 디펜스", str(tmp_path / "ws"), 11,
+                        purpose="x", origin_msg="999999")        # 재등록은 기존 origin 보존
+    assert s.projects[500]["origin_msg"] == "650442"
+    s.projects[500]["origin_msg"] = ""                           # 구세대 등록(링크 없음) 백필 경로
+    s._register_project(500, "마법진 디펜스", str(tmp_path / "ws"), 11, origin_msg="650442")
+    assert s.projects[500]["origin_msg"] == "650442" and s.projects[500]["id"] == pid
+
+
 def test_배포명은_프로젝트별_결정적(monkeypatch):
     """[멀티 프로젝트] 배포 서비스명은 '프로젝트 신원'에서만 결정적으로 유도된다 — 미등록 흐름은
     슬롯이 없다(사용자 설계: 배포는 프로젝트마다). 과거의 DEPLOY_NAME env·인자·기본 폴백은

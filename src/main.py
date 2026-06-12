@@ -96,6 +96,19 @@ def find_pending_request(messages, known_ids) -> Optional[Request]:
     return pending
 
 
+def graduated_project(projects: dict, message_id) -> Optional[dict]:
+    """미응답 원요청(message_id)이 이미 '등록 프로젝트로 졸업'했으면 그 프로젝트를 돌려준다.
+    부팅 복구의 라우팅 판정: 졸업한 원요청은 새 흐름으로 재발사하면 안 된다 — 그 흐름의 진행
+    (전용 채널·작업공간·팀·미완 Task)이 이미 프로젝트에 영속돼 있으므로, 프로젝트 채널 '개입'
+    (스코프 resume = 기억 유지)으로 이어가는 게 옳다(라이브: 동면 복구가 P-009 원요청을
+    재발사해 새 스코프·새 임시 작업공간으로 처음부터 다시 시작 — 사용자 지적으로 교정)."""
+    sid = str(message_id)
+    for p in projects.values():
+        if str(p.get("origin_msg") or "") == sid:
+            return p
+    return None
+
+
 async def _connect(token: str, message_content: bool = False,
                    members: bool = False) -> Tuple[discord.Client, asyncio.Task]:
     """봇 하나를 연결하고 on_ready까지 기다린다. 일시적 TLS/클럭 스큐 블립엔 재시도.
@@ -402,6 +415,24 @@ async def run() -> None:
         if skip_recovery:
             log.info("부팅 복구 건너뜀(ORGANT_SKIP_RECOVERY) ch=%s — 미응답 요청 재실행 안 함", ch)
             continue
+        # [졸업 라우팅] 메인 채널의 미응답 원요청이 이미 등록 프로젝트로 졸업했으면, 원요청을
+        # 새 흐름으로 재발사하지 않는다(진행을 버리고 처음부터 다시 — 라이브 P-009 사고).
+        # 미완 Task가 영속돼 있으면 그 프로젝트 채널 '개입'(스코프 resume)으로 이어 마무리하고,
+        # 미완 Task가 없으면(직전 개입이 마감까지 갔음) 아무것도 안 한다 — 자연 종결(재발사 유령 차단).
+        if ch == cfg.channel_id:
+            grad = graduated_project(sysm.projects, pending.message_id)
+            if grad is not None:
+                if grad.get("open_task"):
+                    log.info("부팅 복구: 원요청이 %s로 졸업 + 미완 Task 존재 → 프로젝트 채널 개입으로 이어가기",
+                             grad.get("id"))
+                    pendings.append((int(grad["channel"]), Request(
+                        to_id=grad.get("leader"), kind=Kind.WORK,
+                        body="이어서 계속해 — 시스템 재시작으로 중단된 진행을 이어서 마무리해줘. "
+                             "(부팅 복구 자동 개입: 새 Task를 열지 말고 복원된 미완 Task를 끝내세요)",
+                        from_id=pending.from_id, message_id=pending.message_id)))
+                else:
+                    log.info("부팅 복구: 원요청이 %s로 졸업(미완 Task 없음) → 재발사 안 함", grad.get("id"))
+                continue
         if pending.to_id is None:        # 프로젝트 채널이면 그 프로젝트의 등록 리더가 기본 담당
             pending.to_id = sysm.projects[ch]["leader"] if ch in sysm.projects else leader_id
         pendings.append((ch, pending))
