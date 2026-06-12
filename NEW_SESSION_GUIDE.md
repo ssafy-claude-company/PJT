@@ -21,7 +21,7 @@ tail -5 logs/listener.log
 # ③ 죽어 있으면 재기동 — 반드시 이 래퍼(필수 env 주입). 로그 리다이렉션 잊지 말 것(stdout 로그).
 setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null &
 ```
-- ③-보충: 영속 env에 풀팀 토큰(`SYSTEM_BOT`+`ORGANT_BOT_2~20`)과 배포 키(GH_PAT·RENDER_KEY)가
+- ③-보충: 영속 env에 풀팀 토큰(`SYSTEM_BOT`+`ORGANT_BOT_2~20`+`TEST_BOT_1`(=1번 봇))과 배포 키(GH_PAT·RENDER_KEY)가
   등록돼 있어 `.env` 없이도 **풀팀(워커 20)으로 뜬다**(2026-06-12 새 컨테이너에서 라이브 검증).
   새 컨테이너면 `.venv`·`logs/`부터 만들어야 한다(`python3 -m venv .venv` + requirements 2종).
 - ④ **감독자 재무장** — 전 세션의 감독자는 세션 종료와 함께 소멸한다. Monitor 도구로

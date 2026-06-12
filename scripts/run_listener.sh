@@ -30,16 +30,17 @@ export ORGANT_CANARY_PERIOD="${ORGANT_CANARY_PERIOD:-120}"
 # (라이브 관측: 결함수정 개입이 생산적 세그먼트 7개 필요 — 기본 6으로 마감 직전에 끊김)
 export ORGANT_MAX_CONTINUE="${ORGANT_MAX_CONTINUE:-12}"
 export CHANNEL_ID="${CHANNEL_ID:-1510828120490643517}"
-export DEPLOY_NAME="${DEPLOY_NAME:-todo-organt-demo}"
-# 로스터(직군만 — 담당자는 [Request]의 To로 런타임 결정): 2~7 시드 직군, 1·8~100·TEST_BOT_1 예비.
-# ORGANT_BOT_1은 최고참 봇 계정(길드의 '알로항' 추정, 2021년산) — 토큰이 env에 등록되면 합류한다.
+# DEPLOY_NAME 주입은 제거됨(2026-06-12) — 배포 슬롯은 프로젝트 신원(P-번호)으로만 정해지며,
+# 미등록 흐름은 슬롯이 없다(공유 슬롯 폴백이 P-002 라이브를 덮어쓸 수 있던 위험 종결).
+# 로스터(직군만 — 담당자는 [Request]의 To로 런타임 결정): 2~7 시드 직군, 8~100·TEST_BOT_1 예비.
+# TEST_BOT_1이 워커 계정 시리즈의 1번(username 'testtest')이다 — 별도 ORGANT_BOT_1 변수는 없다.
 # 토큰이 든 슬롯만 활성화된다(빈 슬롯 자동 제외). 환경변수로 ORGANT_ROSTER를 주면 그게 우선.
 # TEST_OBT_2/TEST_OBT_3은 실행환경(env)에 영속 설정된 구세대 토큰 — ORGANT_BOT_*가 든 .env는
 # gitignore라 컨테이너 리클레임 때 사라지므로, 이 폴백 슬롯 덕에 리클레임 직후에도 팀이 선다.
 if [ -z "${ORGANT_ROSTER:-}" ]; then
   R="ORGANT_BOT_2:백엔드;ORGANT_BOT_3:백엔드;ORGANT_BOT_4:프론트엔드;ORGANT_BOT_5:프론트엔드;ORGANT_BOT_6:디자이너;ORGANT_BOT_7:QA"
   for i in $(seq 8 100); do R="$R;ORGANT_BOT_$i:예비"; done
-  export ORGANT_ROSTER="$R;ORGANT_BOT_1:예비;TEST_OBT_2:프론트엔드;TEST_OBT_3:디자이너;TEST_BOT_1:예비"
+  export ORGANT_ROSTER="$R;TEST_OBT_2:프론트엔드;TEST_OBT_3:디자이너;TEST_BOT_1:예비"
 fi
 # 프로젝트 레지스트리의 시드 복원은 파이썬이 한다(sys_core._load_projects): logs/projects.json이
 # 없으면 커밋 시드(organt/projects.seed.json)를 'seeded' 마커와 함께 적재하고, 부팅 reconcile이

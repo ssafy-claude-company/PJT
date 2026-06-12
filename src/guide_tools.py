@@ -346,11 +346,12 @@ class Flow:
 
 
 def deploy_service_name(flow, arg_name: str = "") -> str:
-    """배포 서비스명 결정 — [멀티 프로젝트] 등록 프로젝트는 '프로젝트명 슬러그'(없으면 식별번호)로
-    **결정적으로** 정한다: 같은 프로젝트는 늘 같은 서비스, 다른 프로젝트는 다른 서비스(단일
-    DEPLOY_NAME 고정이 모든 작품을 한 슬롯에 덮어쓰게 하던 '단일 작품 가정' 제거 — 라이브에서
-    세포 게임이 아레나 라이브를 덮음). 에이전트 임의 명명 사고도 등록 프로젝트에선 구조적으로
-    불가(인자 무시). 미등록 흐름만 DEPLOY_NAME → 인자 → 기본 순."""
+    """배포 서비스명 결정 — [멀티 프로젝트] 등록 프로젝트는 식별번호(P-번호)로 **결정적으로**
+    정한다: 같은 프로젝트는 늘 같은 서비스, 다른 프로젝트는 다른 서비스. 미등록 흐름은 슬롯이
+    **없다**("") — 배포 신원은 프로젝트가 보증한다(사용자 설계 확인 2026-06-12: 배포는
+    프로젝트마다. 과거의 DEPLOY_NAME env 폴백은 미등록 배포를 공유 슬롯(P-002 라이브 겸용
+    todo-organt-demo)으로 보내 덮어쓰기 위험을 남겼었다). 에이전트 임의 명명(arg_name)은
+    등록·미등록 어디서도 슬롯이 되지 못한다(작명 사고 차단)."""
     pname = getattr(flow, "project_name", None)
     pid = getattr(flow, "project_id", None)
     if pid:
@@ -361,9 +362,7 @@ def deploy_service_name(flow, arg_name: str = "") -> str:
         slug = re.sub(r"[^a-z0-9-]", "-", str(pname).lower()).strip("-")[:40]
         if slug:
             return f"organt-{slug}"
-    return (os.environ.get("DEPLOY_NAME", "").strip()
-            or re.sub(r"[^a-z0-9-]", "-", str(arg_name or "").lower()).strip("-")
-            or "organt-app")
+    return ""
 
 
 def _ok(text):
@@ -1325,6 +1324,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            "아니라 **새 배포를 또 트리거**해 빌드를 계속 리셋합니다). 진행 중인 배포의 "
                            "성공/실패 결과가 곧 이 도구의 응답으로 돌아옵니다 — 그때 판단하세요.")
             name = deploy_service_name(flow, args.get("name", ""))   # 프로젝트별 결정적 서비스명
+            if not name:
+                return _ok("배포 불가: 미등록 흐름은 배포 슬롯이 없습니다 — 배포는 프로젝트마다"
+                           "(P-번호 슬롯, organt-p-00n) 설정됩니다. create_project로 등록한 뒤 "
+                           "다시 배포하세요.")
             gh, ghu = os.environ.get("GH_PAT"), os.environ.get("GH_USER")
             rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")
             if not (gh and ghu and rk and owner):

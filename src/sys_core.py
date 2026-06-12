@@ -1033,8 +1033,9 @@ class Sys:
         return last
 
     async def _ensure_deploy(self, flow, lead, result):
-        """배포 가능한 산출물(package.json)인데 deploy가 안 불렸고 자격증명·DEPLOY_NAME이 있으면,
-        리더에게 의존하지 않고 **SYS가 직접 deploy_sync로 배포**한다(리더가 빼먹는 누락 구멍 차단).
+        """배포 가능한 산출물(package.json)인데 deploy가 안 불렸고 자격증명·배포 슬롯(등록 프로젝트)이
+        있으면, 리더에게 의존하지 않고 **SYS가 직접 deploy_sync로 배포**한다(리더가 빼먹는 누락 구멍 차단).
+        미등록 흐름은 슬롯이 없어("") 자연 스킵 — 배포 신원은 프로젝트가 보증한다(사용자 설계).
         deploy_sync가 라이브 URL 실제 응답까지 확인하므로, 거짓 성공이 아니라 진짜 배포가 보장된다."""
         ws = str(flow.workspace) if flow.workspace else ""
         # 품질 게이트: 흐름이 미완으로 끝나거나(중단될 Task가 남음) 이 흐름에서 '완료'된 Task가 하나도

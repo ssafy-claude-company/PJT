@@ -1624,13 +1624,14 @@ def test_강제배포는_완료Task가_있을때만(tmp_path, monkeypatch):
     import types
     (tmp_path / "package.json").write_text("{}")
     for k, v in (("GH_PAT", "x"), ("GH_USER", "u"), ("RENDER_KEY", "k"),
-                 ("RENDER_OWNER", "o"), ("DEPLOY_NAME", "n")):
+                 ("RENDER_OWNER", "o")):
         monkeypatch.setenv(k, v)
     deployed = {"n": 0}
     monkeypatch.setattr("src.deploy.deploy_sync",
                         lambda *a: (deployed.__setitem__("n", deployed["n"] + 1), "https://URL")[1])
     s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"})
     f = _flow(FakeGuide())
+    f.project_id = "P-009"                                     # 등록 프로젝트만 슬롯을 가진다
     f.workspace = str(tmp_path)
     f.current = object()                                       # ① 미완 Task 남음 → 배포 금지
     assert asyncio.run(s._ensure_deploy(f, 11, "r")) == "r" and deployed["n"] == 0
@@ -1735,20 +1736,29 @@ def test_create_project는_id기반_작업공간과_배포슬롯(tmp_path):
 
 
 def test_배포명은_프로젝트별_결정적(monkeypatch):
-    """[멀티 프로젝트] 등록 프로젝트의 배포 서비스명은 '프로젝트'에서 결정적으로 유도된다 —
-    DEPLOY_NAME 고정이 모든 작품을 한 슬롯에 덮어쓰게 하던 단일 작품 가정 제거. 에이전트
-    임의 명명은 등록 프로젝트에서 무시되고, 미등록 흐름만 env→인자→기본 순."""
+    """[멀티 프로젝트] 배포 서비스명은 '프로젝트 신원'에서만 결정적으로 유도된다 — 미등록 흐름은
+    슬롯이 없다(사용자 설계: 배포는 프로젝트마다). 과거의 DEPLOY_NAME env·인자·기본 폴백은
+    미등록 배포를 공유 슬롯(P-002 라이브 겸용)으로 보내 덮어쓰기 위험을 남겨 제거됨."""
     from src.guide_tools import deploy_service_name
-    monkeypatch.setenv("DEPLOY_NAME", "todo-organt-demo")
+    monkeypatch.setenv("DEPLOY_NAME", "todo-organt-demo")      # env가 있어도 어디서도 안 읽는다
     f = _flow(FakeGuide())
     f.project_id, f.project_name = "P-003", "Cell Grow Game"
     assert deploy_service_name(f, "agent-random-name") == "organt-p-003"   # 신원=번호(작명·인자 무시)
     f.project_name = "세포 키우기"                                                   # 한글 → 식별번호 폴백
     assert deploy_service_name(f) == "organt-p-003"
     f2 = _flow(FakeGuide())                                                          # 미등록 흐름
-    assert deploy_service_name(f2, "x") == "todo-organt-demo"                        # env 폴백 유지
-    monkeypatch.delenv("DEPLOY_NAME")
-    assert deploy_service_name(f2, "My App!") == "my-app"
+    assert deploy_service_name(f2, "x") == ""                  # 슬롯 없음 — env·인자 폴백 폐지
+    assert deploy_service_name(f2, "My App!") == ""
+
+
+def test_deploy도구는_미등록흐름을_등록안내로_거부():
+    """[배포=프로젝트] 미등록 흐름의 deploy 호출은 자격증명·작업공간 검사 전에 거부되고,
+    create_project 등록 경로를 안내한다 — 공유 슬롯 덮어쓰기가 도구 수준에서 구조적으로 불가."""
+    f = _flow(FakeGuide())
+    t = _tools(f, 11, "leader")
+    r = asyncio.run(t["deploy"].handler({"name": "my-random-slot"}))
+    text = r["content"][0]["text"]
+    assert "배포 불가" in text and "create_project" in text
 
 
 def test_세션_스코프분리_프로젝트간_기억오염_구조차단(tmp_path):
@@ -2529,6 +2539,7 @@ def test_배포_진행중_재호출은_대기_새배포_트리거_금지():
     f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L"})
     f.start_root("root")
     f.workspace = "/tmp/ws-x"
+    f.project_id = "P-009"                       # 등록 프로젝트만 배포 슬롯을 가진다(미등록은 즉시 거부)
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     calls = {"n": 0}
     gate = asyncio.Event()
