@@ -1174,6 +1174,13 @@ class Sys:
             pid = self._register_project(ch, name, flow.workspace, flow.leader,
                                          purpose=self._origin_request,  # 존재 이유 = 사용자 원문
                                          origin_msg=root_id or "")      # 원요청 링크(부팅 복구의 개입 라우팅 근거)
+            p0 = self.projects.get(int(ch))
+            if p0 is not None and status_mid and not p0.get("origin_status"):
+                # [시초 계기판 영속] 원요청의 상태 메시지(채널·id·시작 시각)를 프로젝트에 기록 —
+                # 졸업 재개가 새 계기판을 달지 않고 이 시초를 되살린다(사용자 설계).
+                p0["origin_status"] = {"channel": status_ch, "id": str(status_mid),
+                                       "started": int(time.time() - (time.monotonic() - status_t0))}
+                self._save_projects()
             p = self.projects.get(int(ch))
             if p and p.get("workspace"):
                 flow.workspace = p["workspace"]   # id-개명(p-00n-슬러그)/재사용(기존 산출물) 결과 채택
@@ -1278,11 +1285,29 @@ class Sys:
         flow.status_req = (user_text or "").strip()
         status_t0 = time.monotonic()
         status_mid, status_updater = None, None
+        status_ch = int(channel_id)
         if getattr(self.guide, "edit_message", None):
-            try:
-                status_mid = await self.guide.post(channel_id, 0, self._status_text(flow, status_t0))
-            except Exception:
-                status_mid = None
+            # [시초 계기판 되살리기 — 사용자 설계: "재개는 시초가 살아나게만 하면 된다"] 같은
+            # 원요청의 재개(졸업 라우팅: root_id == origin_msg)는 새 상태 메시지를 또 달지 않고
+            # **원요청 채널의 시초 상태 메시지를 이어서 갱신**한다. 시작 시각도 시초의 것을
+            # 유지 — 재개마다 '작업 중 0분'부터 새로 재고 동면 1회당 계기판이 1개씩 쌓이던
+            # 노이즈(라이브 관측) 제거. 시초가 사라졌으면(삭제 등) 새로 단다(폴백).
+            o = (proj.get("origin_status") if proj and root_id
+                 and str(root_id) == str(proj.get("origin_msg") or "") else None) or {}
+            if o.get("id"):
+                try:
+                    t0_resume = time.monotonic() - max(0.0, time.time() - float(o.get("started") or time.time()))
+                    await self.guide.edit_message(int(o["channel"]), o["id"],
+                                                  self._status_text(flow, t0_resume))
+                    status_ch, status_mid, status_t0 = int(o["channel"]), str(o["id"]), t0_resume
+                except Exception:
+                    status_mid = None
+            if status_mid is None:
+                try:
+                    status_mid = await self.guide.post(channel_id, 0, self._status_text(flow, status_t0))
+                    status_ch = int(channel_id)
+                except Exception:
+                    status_mid = None
             if status_mid:
                 async def _status_updates():
                     period = int(os.environ.get("ORGANT_STATUS_PERIOD", "60"))
@@ -1291,7 +1316,7 @@ class Sys:
                         if flow.done:
                             break
                         try:
-                            await self.guide.edit_message(channel_id, status_mid,
+                            await self.guide.edit_message(status_ch, status_mid,
                                                           self._status_text(flow, status_t0))
                         except Exception:
                             pass               # Discord 순단이 흐름을 건드리지 않게(best-effort)
@@ -1388,7 +1413,7 @@ class Sys:
         if status_mid is not None:
             try:
                 mark = "⏸ 중단(미완 Task 이어가기 가능)" if flow.current is not None else "✅ 완료"
-                await self.guide.edit_message(channel_id, status_mid,
+                await self.guide.edit_message(status_ch, status_mid,
                                               self._status_text(flow, status_t0, final=mark))
             except Exception:
                 pass
