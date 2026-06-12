@@ -67,7 +67,7 @@ def test_leader는_project_task_도구():
     # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit·run)+리더 셋업·배포 도구.
     assert names == {"request", "recruit", "run",
                      "create_project", "create_task", "set_goal", "complete_task", "deploy",
-                     "vote", "meet"}   # Discord 심화 대화: 표결·회의(1R 동시 수집). 경쟁 구현은
+                     "vote", "meet", "parallel_work"}   # Discord 심화 대화: 표결·회의(1R 동시 수집). 경쟁 구현은
                                        # 사용자 판단으로 제거(같은 모델 중복 비교 — 효과는 협업에서)
 
 
@@ -2786,3 +2786,66 @@ def test_신규요청은_같은이름이라도_신설_P번호명시만_재사용
     pid3 = s._register_project(901, "디펜스 게임", str(tmp_path / "c"), 11,
                                purpose="마법진 디펜스 확장", reuse_ok={pid1})
     assert pid3 == pid1 and s.projects[901]["id"] == pid1 and 500 not in s.projects
+
+
+def test_병렬Work_동시실행_리스_조인_owner():
+    """[RFC-006 Work-fork v1] 독립 영역 Work 2건이 '동시에' 실행되고(두 wake가 서로를 기다려야
+    풀리는 게이트로 증명), 가지 동안 쓰기 리스가 활성·조인 시 해제되며, 조인 합본·owner(첫 수신자)·
+    participated·work_delegated가 직렬 request와 일관되게 기록된다 — 병렬 실행+직렬 통합(RFC-005 P1)."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[13] = "프론트"
+    f.project_team.append(13)
+    f.workspace = "/tmp/ws-p"
+    started, gate = [], asyncio.Event()
+
+    async def wake(to, b, k):
+        assert "쓰기 영역(리스)" in b and "보고 계약" in b      # Work 계약 동봉
+        assert f.write_lease.get(to)                            # 가지 동안 리스 활성
+        started.append(to)
+        if len(started) == 2:
+            gate.set()
+        await asyncio.wait_for(gate.wait(), 5)                  # 둘 다 시작해야 풀림 = 동시 실행 증명
+        f.act_by[to] = f.act_by.get(to, 0) + 1                  # 실작업 흔적
+        return f"[결과] 완료/{to} [변경] x [검증] ok [리스크] 없음"
+    f.wake = wake
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.add(12); f.current.participated.add(13)
+    asyncio.run(t["set_goal"].handler({"goal": "측정가능 g"}))
+    import json as _j
+    r = asyncio.run(t["parallel_work"].handler({"assignments": _j.dumps([
+        {"to": "12", "files": "server.js", "body": "서버"},
+        {"to": "13", "files": "public/app.js,public/style.css", "body": "프론트"}])}))
+    txt = r["content"][0]["text"]
+    assert "[병렬 조인 — 2건]" in txt and "완료/12" in txt and "완료/13" in txt
+    assert sorted(started) == [12, 13]                          # 둘 다 실제 깨어남
+    assert not f.write_lease                                    # 조인=리스 해제
+    assert f.current.owner == 12 and f.current.owner_delivered  # 첫 수신자=owner(기존 규칙 일관)
+    assert f.current.work_delegated == 2 and getattr(f, "fork_active", 0) == 0
+
+
+def test_병렬Work_영역겹침과_전제위반은_거부():
+    """[토큰 중립 조건 ⓐ 기계 강제] 영역 일치/포함이면 거부(겹침=통합 충돌→Redo=토큰 손실 — 직렬로).
+    goal 미확정·1건·빈 files도 거부(병렬의 전제: 합의된 목표 + 영역 분리 + 2건 이상)."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[13] = "프론트"
+    f.project_team.append(13)
+    f.workspace = "/tmp/ws-p2"
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    import json as _j
+    mk = lambda files2: _j.dumps([{"to": "12", "files": "public/app.js", "body": "a"},
+                                  {"to": "13", "files": files2, "body": "b"}])
+    r0 = asyncio.run(t["parallel_work"].handler({"assignments": mk("public/x.js")}))
+    assert "Goal 확정 전" in r0["content"][0]["text"]            # goal 미확정 거부
+    f.current.participated.add(12); f.current.participated.add(13)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    r1 = asyncio.run(t["parallel_work"].handler({"assignments": mk("public/app.js")}))
+    assert "영역 겹침 거부" in r1["content"][0]["text"]          # 동일 파일
+    r2 = asyncio.run(t["parallel_work"].handler({"assignments": mk("public")}))
+    assert "영역 겹침 거부" in r2["content"][0]["text"]          # 포함 관계(폴더⊃파일)
+    r3 = asyncio.run(t["parallel_work"].handler({"assignments": _j.dumps(
+        [{"to": "12", "files": "a.js", "body": "x"}])}))
+    assert "2건부터" in r3["content"][0]["text"]                 # 1건 거부

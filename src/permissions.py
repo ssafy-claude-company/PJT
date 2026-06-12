@@ -81,14 +81,16 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
             lease = (getattr(flow, "write_lease", None) or {}).get(actor)
             path = tool_input.get("file_path") or tool_input.get("path")
             if lease and path:
+                # 다중 리스: 병렬 Work(parallel_work)는 가지마다 '파일 목록' 리스를 배정한다(RFC-006).
+                leases = list(lease) if isinstance(lease, (list, tuple)) else [lease]
                 cwd = data.get("cwd") or os.getcwd()
                 tgt = path if os.path.isabs(path) else os.path.join(cwd, path)
-                if not _within(lease, tgt):
+                if not any(_within(l, tgt) for l in leases):
                     audit.record("tool_denied", actor=actor, role=role, tool=tool,
                                  reason="쓰기 리스 밖", path=path, tool_use_id=tool_use_id)
-                    return _deny(f"[쓰기 리스] 당신의 산출물은 배정된 샌드박스 안에만 씁니다: {lease} "
-                                 f"(시도한 경로: {path}) — 프로젝트 기존 파일은 Read로 참고만 하고, "
-                                 f"구현은 샌드박스에 완성하세요.")
+                    return _deny(f"[쓰기 리스] 당신의 산출물은 배정된 영역 안에만 씁니다: {', '.join(map(str, leases))} "
+                                 f"(시도한 경로: {path}) — 영역 밖 파일은 Read로 참고만 하고, 필요한 변경은 "
+                                 f"보고의 [리스크/요청] 항목으로 알리세요(겹침 방지가 병렬의 전제).")
 
         # 3) 구현(Write/Edit)은 'Work 위임 맥락'에서만 — 협의(Info)로 깨워진 동료의 선구현 차단.
         #    나를 깨운 베턴 프레임(top, to=나)이 Work면 통과, Info면 거부. → 리더(origin Work)·
