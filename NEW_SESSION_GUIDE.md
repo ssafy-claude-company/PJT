@@ -8,7 +8,8 @@
 Discord 멀티에이전트 AI 회사 **"Organt"** — 사용자가 Discord로 일을 시키면 봇 직원들이
 팀을 꾸려 협업(위임·회의·표결·검증)으로 작품을 만들고 배포까지 한다.
 - 레포 2개: `PJT`(코드, `/home/user/PJT`) + `docs`(설계 문서, `/home/user/docs`)
-- 작업 브랜치: `claude/jolly-lovelace-9r2knl` (main FF 동기화 관행)
+- 작업 브랜치: 세션마다 발급되는 `claude/*` — **main이 통합 기준**(브랜치 푸시 후 main FF
+  동기화 관행). 시작 전 `git fetch origin main`으로 다른 세션의 선행 커밋을 확인하라.
 - 설계 기준은 docs 레포의 Rule — 코드가 Rule과 다르면 코드가 버그다.
 
 ## 1. 처음 5분 — 부팅 체크리스트 (순서대로)
@@ -45,7 +46,19 @@ setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null 
     sleep 20
   done
   ```
-- ⑤ 기준선 확인: `source .venv/bin/activate && python -m pytest -q` → **209 통과**.
+- ⑤ 기준선 확인: `source .venv/bin/activate && python -m pytest -q` → **210 통과**.
+
+## 1.5 주요 환경변수 — 처음 보면 오해하기 쉬운 것들
+| env | 정체 | 주의 |
+|---|---|---|
+| `SYSTEM_BOT` | 시스템 봇 토큰(라우팅·상태 메시지 명의, id 1510856525240078456) — **직원 아님** | 영속 env |
+| `ORGANT_BOT_2~20` | 워커 봇 토큰(testtest2~20) — 등록된 만큼 합류(로스터 자동 적응). **`ORGANT_BOT_1` 변수는 없다**(1번 봇은 아래 TEST_BOT_1) | 영속 env(풀팀) |
+| `TEST_BOT_1` | **1번 봇** = 워커 계정 시리즈 1번(username `testtest`, id 1510828738181595156) — 현 게임 비주얼 디자이너 | 영속 env |
+| `TEST_OBT_2/3` | 구세대 별칭 — **같은 1기 봇들의 옛 키**(OBT_3=ORGANT_BOT_2와 동일 봇=현 게임 기획자·기본 리더). 새 영속 env엔 없음. 같은 봇의 키 둘을 로스터에 동시 주입 금지 | 레거시 |
+| `CHANNEL_ID` | **메인 채널(#test)의 ID**(기본 1510828120490643517) — 서버(길드) ID가 아니다. 단, 길드 ID를 넣어도 `channels.py`가 안에서 대상 채널을 해석(오인 흡수 설계) | |
+| `DEPLOY_NAME` | **폐지된 유물**(2026-06-12) — 코드가 더 이상 읽지 않는다. 배포 슬롯은 P-번호로만(`organt-p-00n`), **미등록 흐름은 배포 불가**(create_project 등록이 먼저) | env 삭제 무방 |
+
+직군의 진실원은 `jobs.json` > Discord 역할 > 로스터 폴백 라벨 순 — 로스터의 라벨은 참고일 뿐이다.
 
 ## 2. 불변 방향성 (사용자 확정 — 재논의하지 말 것)
 - **구조적 보장 > 프롬프트/LLM 판단** — 기계적 행동은 시스템이 하고, LLM에게는 판단만 맡긴다.
