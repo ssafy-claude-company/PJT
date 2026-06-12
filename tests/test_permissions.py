@@ -267,3 +267,18 @@ def test_fork가지_Info수집은_선구현차단_Work가지는_허용():
     flow.fork_kind = {12: Kind.WORK}                          # 경쟁 구현 가지
     assert _run(make_pre_tool_use_hook(FakeAudit(), ALLOWED, actor=12, flow=flow),
                 "Write", {"file_path": "x.js"}) == {}
+
+
+def test_쓰기리스_다중경로_병렬Work():
+    """[RFC-006 parallel_work] 가지마다 '파일 목록' 리스 — 목록 중 어느 하나(파일 자신 일치 포함)면
+    허용, 전부 밖이면 차단. Work 가지(fork_kind=WORK)의 구현 허용과 결합된 실제 병렬 형상 그대로."""
+    a = FakeAudit()
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=_FakeTask(owner=12, goal="g"), leader=11)
+    flow.fork_kind = {12: Kind.WORK}
+    flow.write_lease = {12: ["/ws/public/app.js", "/ws/public/style.css"]}
+    hook = make_pre_tool_use_hook(a, ALLOWED, actor=12, flow=flow)
+    assert _run(hook, "Write", {"file_path": "public/app.js"}) == {}          # 목록 내(상대경로)
+    assert _run(hook, "Edit", {"file_path": "/ws/public/style.css"}) == {}    # 목록 내(절대경로)
+    out = _run(hook, "Write", {"file_path": "server.js"})                     # 목록 전부 밖
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "쓰기 리스 밖"
