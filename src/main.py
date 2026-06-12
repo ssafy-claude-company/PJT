@@ -425,10 +425,12 @@ async def run() -> None:
                 if grad.get("open_task"):
                     log.info("부팅 복구: 원요청이 %s로 졸업 + 미완 Task 존재 → 프로젝트 채널 개입으로 이어가기",
                              grad.get("id"))
+                    # 개입 본문은 시스템 작문이 아니라 **사용자 원문 그대로**(사용자 지적: 이미 한 채팅
+                    # 요청이 있는데 시스템이 말을 지어내 상태에 띄우지 말 것) — '이어가기' 맥락은
+                    # open_task 복원 노트(새 Task 금지·복원 Task 잇기)와 프로젝트 스코프 세션 기억이 담당.
                     pendings.append((int(grad["channel"]), Request(
-                        to_id=grad.get("leader"), kind=Kind.WORK,
-                        body="이어서 계속해 — 시스템 재시작으로 중단된 진행을 이어서 마무리해줘. "
-                             "(부팅 복구 자동 개입: 새 Task를 열지 말고 복원된 미완 Task를 끝내세요)",
+                        to_id=grad.get("leader"), kind=pending.kind or Kind.WORK,
+                        body=pending.body,
                         from_id=pending.from_id, message_id=pending.message_id)))
                 else:
                     log.info("부팅 복구: 원요청이 %s로 졸업(미완 Task 없음) → 재발사 안 함", grad.get("id"))
