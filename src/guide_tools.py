@@ -1162,18 +1162,34 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             if (flow.current.owner and flow.current.cross_checks == 0
                     and not flow.current.complete_retry):
                 flow.current.complete_retry = True
-                return _ok("완료 보류(1회): owner 인도 후 **다른 멤버의 검증 참여가 0**입니다 — 지금 마감하면 "
-                           "품질 판정자가 당신 혼자입니다. 산출물에 맞는 동료에게 request(Work)로 "
-                           "'**사용자처럼 처음부터 끝까지 실제로 사용·플레이해 보고** goal 항목별 충족/결함을 "
-                           "보고하라'고 검증을 맡긴 뒤 마감하세요(검증자의 결함 보고는 Redo의 근거가 됩니다). "
-                           "그래도 단독 마감이 옳다고 판단하면 complete_task를 다시 호출하면 통과됩니다.")
+                # [공급 원칙] 잠수 멤버(실작업·검증 0 — act_by 부재)와 goal 항목 수를 결정 지점에 공급:
+                # 도메인 키워드 없이도 '전문가가 손을 안 댄 채 마감되는' 패턴을 리더가 보게 한다(판단은 리더).
+                idle = [m for m in flow.current.team
+                        if m not in (flow.leader, flow.current.owner) and flow.act_by.get(m, 0) == 0]
+                idle_note = (f"\n[정보] 이 Task 팀에서 **실작업·검증 참여 0**인 멤버: {flow._names(idle)} — "
+                             f"goal에 이들의 전문 영역이 있다면 그 부분의 검증·보완을 이들에게 맡기는 것이 "
+                             f"자연스럽습니다." if idle else "")
+                n_items = len(re.findall(r"^\s*\d+[).]", flow.current.status.goal or "", re.M))
+                per_item = (f"goal {n_items}항목 **각각**의 충족/결함을" if n_items >= 2 else "goal의 충족/결함을")
+                return _ok(f"완료 보류(1회): owner 인도 후 **다른 멤버의 검증 참여가 0**입니다 — 지금 마감하면 "
+                           f"품질 판정자가 당신 혼자입니다. 산출물에 맞는 동료에게 request(Work)로 "
+                           f"'**사용자처럼 처음부터 끝까지 실제로 사용·플레이해 보고** {per_item} "
+                           f"보고하라'고 검증을 맡긴 뒤 마감하세요(검증자의 결함 보고는 Redo의 근거가 됩니다). "
+                           f"그래도 단독 마감이 옳다고 판단하면 complete_task를 다시 호출하면 통과됩니다.{idle_note}")
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.
             report = _speech_clip(args.get("result") or "", 800)   # Task 블록(Discord 2000 한도) 안에 들어가는 요약
+            # [침묵 강행 불가] 검증 분업 보류를 재호출로 강행한 '단독 마감'은 기록에 그렇게 보이게 한다
+            # ("자를 수는 있어도 조용히는 못 자른다"의 마감 버전) — 행동은 막지 않되(자동 회사·리더 판단),
+            # 사후 분석·사용자가 한눈에 보게(범용 이치의 구조 잠금, 사용자 승인 2026-06-12).
+            solo = bool(flow.current.owner and flow.current.cross_checks == 0)
+            if solo and flow.log:
+                flow.log("task_solo_completed", task=flow.current.task_id, owner=int(flow.current.owner or 0))
             done_ref.status.status = "완료"
             done_ref.status.result = (
-                f"[보고] {report}\n"
+                (f"[검증: 단독 마감 — 교차 검증 0, 리더 판정만]\n" if solo else "")
+                + f"[보고] {report}\n"
                 f"[시스템 실행기록 {done_ref.run_count}회·마지막] {done_ref.evidence or '(없음)'}"
             )[:1400]
             await flow.refresh(done_ref)
