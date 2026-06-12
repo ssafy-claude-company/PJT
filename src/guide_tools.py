@@ -491,7 +491,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 flow.log("dup_parallel_merged", frm=me_id, to=to,
                          kind=str(getattr(kind, "value", kind)), seg=flow.leader_segment)
             _dbg(f"{tag} ⇉병렬중복 합침(동료 재호출 없이 같은 응답 재사용)")
-            return _ok(f"[{to} 응답] {flow.req_results[dupkey][:600]}\n"
+            return _ok(f"[{to} 응답] {_speech_clip(flow.req_results[dupkey], 4000)}\n"
                        f"(같은 턴에 이미 보낸 동일 요청 — 동료를 다시 호출하지 않고 같은 응답을 재사용)")
         # 대기 한도까지 베턴이 안 돌아옴(동료가 비정상적으로 오래 작업) — 규약위반이 아니므로 무서운 '거부'
         # 안내를 사용자에게 띄우지 않고 조용히 '보류'로 소프트 반환(리더는 응답 받은 뒤 다시 시도).
@@ -719,7 +719,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            f"필요 직군: {need}.\n**recruit(role='{need}')로 예비를 채용해 그 전문가에게 Work로 "
                            f"맡기세요** — 같은 동료나 관계없는 직군에 다시 떠넘기지 마세요(이 반려는 실패가 아니라 "
                            f"올바른 전문화 신호입니다. 소유는 해제됐고, 채용된 전문가가 새 owner가 됩니다).\n"
-                           f"--- 반려 보고 원문 ---\n{(result or '')[:400]}")
+                           f"--- 반려 보고 원문 ---\n{_speech_clip(result, 1500)}")
             # owner가 깨어났지만 '실작업 없이'(run/Write/Edit 0회) 곧장 반환 = 아직 착수 전/계획만. 리더가 대신
             # 구현·완료하지 말 것(독점·허위완료의 정확한 진입점). 같은 owner에게 다시 맡겨 '검증된 산출물'을 받게
             # 안내한다. 이 응답은 캐시하지 않는다 → 같은 턴에 재위임해도 합쳐지지 않고 실제로 다시 깨운다.
@@ -727,7 +727,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 _dbg(f"{tag} ⚠owner 미착수(실작업 0)")
                 if flow.log:
                     flow.log("owner_no_work", to=to, seg=flow.leader_segment)
-                return _ok(f"[{to} 응답] {result[:300]}\n\n[중요] {flow._info(to) or to}가 아직 산출물을 만들지 "
+                return _ok(f"[{to} 응답] {_speech_clip(result, 1500)}\n\n[중요] {flow._info(to) or to}가 아직 산출물을 만들지 "
                            f"않았습니다(run/파일작성 0회 — 착수 전이거나 계획만). **당신이 대신 구현하거나 이 Task를 "
                            f"완료하지 마세요(독점·허위완료 금지).** 같은 owner에게 request(Work)로 다시 맡겨 'run으로 "
                            f"검증한 실제 산출물'을 받은 뒤 진행하세요. 정말 끝까지 무응답이면 recruit/재배정으로.")
@@ -736,9 +736,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             receipt = ""
             if (kind == Kind.WORK and not was_clarify and flow.current
                     and flow.current.run_count > runs_before and flow.current.evidence):
-                receipt = f"\n[owner 실행 증거(시스템 캡처)] {flow.current.evidence[:300]}"
+                receipt = f"\n[owner 실행 증거(시스템 캡처)] {_speech_clip(flow.current.evidence, 1000)}"
             flow.req_results[dupkey] = result   # 같은 턴 병렬 중복요청이 재사용할 응답 캐시(동료 재호출 방지)
-            return _ok(f"[{to} 응답] {result[:600]}{receipt}")
+            return _ok(f"[{to} 응답] {_speech_clip(result, 4000)}{receipt}")
 
 
         async def _deliver_tracked():
@@ -748,7 +748,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     txt = payload["content"][0]["text"]
                 except Exception:
                     txt = str(payload)[:400]
-                flow.detached_results.append(f"{flow._info(to) or to} → {txt[:500]}")
+                flow.detached_results.append(f"{flow._info(to) or to} → {_speech_clip(txt, 4000)}")
             return payload
 
         inner = asyncio.ensure_future(_deliver_tracked())
@@ -1135,7 +1135,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.
-            report = (args.get("result") or "")[:300]
+            report = _speech_clip(args.get("result") or "", 800)   # Task 블록(Discord 2000 한도) 안에 들어가는 요약
             done_ref.status.status = "완료"
             done_ref.status.result = (
                 f"[보고] {report}\n"
@@ -1217,7 +1217,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
 
                     def _hand(t):
                         try:
-                            flow.detached_results.append(f"표결 완료 → {t.result()['content'][0]['text'][:400]}")
+                            flow.detached_results.append(f"표결 완료 → {_speech_clip(t.result()['content'][0]['text'], 4000)}")
                         except Exception:
                             pass
                     inner.add_done_callback(_hand)
@@ -1318,7 +1318,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
 
                     def _hand(t):
                         try:
-                            flow.detached_results.append(f"회의 완료 → {t.result()['content'][0]['text'][:400]}")
+                            flow.detached_results.append(f"회의 완료 → {_speech_clip(t.result()['content'][0]['text'], 4000)}")
                         except Exception:
                             pass
                     inner.add_done_callback(_hand)
