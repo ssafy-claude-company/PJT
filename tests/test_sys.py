@@ -2653,7 +2653,7 @@ def test_유사프로젝트_존재시_신설전_정보공급(tmp_path):
     s.run_turn = fake_run_turn
     asyncio.run(s.handle_user_input(500, 11, "공공 데이터를 받아와서 활용한 웹 사이트 만들어줘", root_id=None))
     assert "[유사 프로젝트 존재" in bodies[0] and "P-005" in bodies[0]
-    assert "같은 이름" in bodies[0]                           # 재사용 경로 안내
+    assert "새 작품으로 등록됩니다" in bodies[0]              # 신규가 기본 — 임의 재사용 금지 안내
     asyncio.run(s.handle_user_input(501, 11, "스네이크 게임 만들어줘", root_id=None))
     assert "[유사 프로젝트 존재" not in bodies[1]             # 무관한 요청엔 없음
 
@@ -2767,3 +2767,22 @@ def test_범용직군_채용은_정책으로_거부():
         assert "채용 거부(전문화 정책)" in r["content"][0]["text"], bad
     r = asyncio.run(t["recruit"].handler({"role": "AI 엔지니어", "member": "13"}))
     assert "합류" in r["content"][0]["text"]                      # 전문 직군은 정상 채용
+
+
+def test_신규요청은_같은이름이라도_신설_P번호명시만_재사용(tmp_path):
+    """[신원 재사용 권한 — 주소 지정의 이치(사용자 사건)] 메인 채널의 '새 요청'은 이름이 기존
+    작품과 같아도 신설(자동 고유화)된다 — 단어 유사+같은 이름 작명이 기존 P-009의 신원·작업공간·
+    채널을 통째로 가져가던 사고 차단. 기존 작품 재사용은 ① 그 프로젝트 채널 개입(reuse_ok=None)
+    ② 원문에 P-번호 명시(reuse_ok={'P-00n'})로만."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"},
+            session_dir=str(tmp_path), workspace=str(tmp_path))
+    pid1 = s._register_project(500, "디펜스 게임", str(tmp_path / "a"), 11, purpose="마법진 디펜스")
+    # 신규 요청(명시 P-번호 없음) + 같은 이름 → 신설(고유화), 기존 채널·신원 불변
+    pid2 = s._register_project(900, "디펜스 게임", str(tmp_path / "b"), 11,
+                               purpose="2인 협동 디펜스", reuse_ok=set())
+    assert pid2 != pid1 and s.projects[500]["id"] == pid1 and s.projects[500]["channel"] == 500
+    assert s.projects[900]["id"] == pid2 and s.projects[900]["name"] != "디펜스 게임"   # 이름 고유화
+    # 원문에 P-번호 명시 → 그 프로젝트만 재사용 허용(채널 이동 — 기존 동작)
+    pid3 = s._register_project(901, "디펜스 게임", str(tmp_path / "c"), 11,
+                               purpose="마법진 디펜스 확장", reuse_ok={pid1})
+    assert pid3 == pid1 and s.projects[901]["id"] == pid1 and 500 not in s.projects

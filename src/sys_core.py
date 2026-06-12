@@ -182,7 +182,7 @@ class Sys:
         self._save_jobs()
 
     def _register_project(self, channel_id, name, workspace, leader, purpose="",
-                          origin_msg="") -> str:
+                          origin_msg="", reuse_ok=None) -> str:
         """프로젝트를 1급 엔티티로 등록 → 식별번호 P-XXX 부여. 같은 채널이나 같은 이름이 이미
         있으면 재사용(중복 방지). 등록 채널에 다시 명령이 오면 '개입'으로 라우팅된다.
         purpose = 프로젝트를 탄생시킨 **사용자 원문**(docs Project.md의 '방향성') — 개입마다
@@ -207,6 +207,14 @@ class Sys:
         # 같은 이름이 이미 있으면 식별번호를 '그대로 유지'하고 채널만 현재 것으로 이동(증가/중복 금지)
         for c, p in list(self.projects.items()):
             if p.get("name") == name:
+                # [신규가 기본 — 주소 지정의 이치(사용자 사건 2026-06-12)] 메인 채널의 새 요청이
+                # 기존 작품을 이어가는 길은 둘뿐: 그 프로젝트 채널 개입, 또는 원문에 P-번호 명시.
+                # 단어가 유사한 '다른 작품'("2인 협동…디펜스")이 유사 안내+같은 이름 작명으로 기존
+                # P-009의 신원·작업공간·채널을 통째로 가져가던 사고 차단 — 이름이 같아도 신설(고유화).
+                if reuse_ok is not None and p.get("id") not in reuse_ok:
+                    name = f"{name}-{self._proj_n + 1}"
+                    self._log("project_reuse_denied_new_request", existing=p.get("id"), made=name)
+                    break
                 # [신원 가드 — 이름은 라벨이지 신원이 아니다] 일반명사 이름("public-data-website")이
                 # 우연히 일치하면 다른 작품이 기존 프로젝트의 채널·작업공간·배포 슬롯을 통째로
                 # 차지했다(라이브: 지진 사이트가 대기질 P-006을 하이재킹). 재사용은 '진짜 같은
@@ -1174,9 +1182,14 @@ class Sys:
         self.engaged.engage(lead, scope_key)
         flow.comm.attach_engagement(self.engaged, scope_key)
         def _reg(ch, name):
+            # [신원 재사용 권한] 개입(proj)은 자기 프로젝트 연장이 자명 → 무제한(None).
+            # 메인 채널 신규 흐름은 사용자 원문에 명시된 P-번호만 재사용 가능(주소 지정의 이치).
+            reuse_ok = None if proj is not None else {
+                f"P-{m}" for m in re.findall(r"[Pp]-?(\d{3})", self._origin_request or "")}
             pid = self._register_project(ch, name, flow.workspace, flow.leader,
                                          purpose=self._origin_request,  # 존재 이유 = 사용자 원문
-                                         origin_msg=root_id or "")      # 원요청 링크(부팅 복구의 개입 라우팅 근거)
+                                         origin_msg=root_id or "",      # 원요청 링크(부팅 복구의 개입 라우팅 근거)
+                                         reuse_ok=reuse_ok)
             p0 = self.projects.get(int(ch))
             if p0 is not None and status_mid and not p0.get("origin_status"):
                 # [시초 계기판 영속] 원요청의 상태 메시지(채널·id·시작 시각)를 프로젝트에 기록 —
@@ -1272,10 +1285,11 @@ class Sys:
             # 판단은 리더 몫, 정보는 구조가 — 신설 전에 알아야 할 사실을 결정 지점에 공급한다.
             sim = self._similar_projects(user_text)
             if sim:
-                body = (f"[유사 프로젝트 존재 — 신설 전에 판단] {sim}\n"
-                        f"이 요청이 위 프로젝트의 연장·개선이면 **새 프로젝트를 만들지 말고** create_project에 "
-                        f"**그 프로젝트와 같은 이름**을 써서 재사용하세요(작업공간·채널·배포 슬롯이 이어집니다). "
-                        f"명백히 다른 작품일 때만 새 이름으로 신설하세요.\n\n") + body
+                body = (f"[유사 프로젝트 존재 — 참고] {sim}\n"
+                        f"단어가 비슷해도 이 요청은 **새 작품으로 등록됩니다**(메인 채널 새 요청 = 신규가 기본). "
+                        f"사용자가 위 프로젝트의 연장을 원했다면 원문에 P-번호가 있거나 그 프로젝트 채널에 "
+                        f"직접 개입했을 것입니다 — 기존 작품을 임의로 이어받지 마세요(신원·작업공간 하이재킹 금지). "
+                        f"겹치는 아이디어는 새 작업공간에서 새로 구현하세요.\n\n") + body
         if root_id is not None:
             flow.start_root(root_id)
         flow.wake = lambda to, b, k: self.run_turn(flow, to, b, k, "member")
