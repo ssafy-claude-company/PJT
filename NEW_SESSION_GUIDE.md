@@ -1,0 +1,98 @@
+# 새 세션 시작 가이드 (NEW_SESSION_GUIDE)
+
+> 새 Claude 세션의 **첫 마디**: **"PJT의 NEW_SESSION_GUIDE.md 읽고 시작해."**
+> 이 가이드는 '처음 5분에 할 일'과 '지켜야 할 것'만 담는다. 깊은 맥락(구조 결정
+> 이력 25건·자격증명·복구 원리)은 [SESSION_HANDOFF.md](SESSION_HANDOFF.md)를 이어서 읽는다.
+
+## 0. 이 시스템이 뭔가
+Discord 멀티에이전트 AI 회사 **"Organt"** — 사용자가 Discord로 일을 시키면 봇 직원들이
+팀을 꾸려 협업(위임·회의·표결·검증)으로 작품을 만들고 배포까지 한다.
+- 레포 2개: `PJT`(코드, `/home/user/PJT`) + `docs`(설계 문서, `/home/user/docs`)
+- 작업 브랜치: `claude/fervent-dirac-bsx1w3` (main FF 동기화 관행)
+- 설계 기준은 docs 레포의 Rule — 코드가 Rule과 다르면 코드가 버그다.
+
+## 1. 처음 5분 — 부팅 체크리스트 (순서대로)
+```bash
+cd /home/user/PJT
+# ① 리스너 생존 + 단일 인스턴스 — 정확히 1이어야 한다(2면 게이트웨이 복제 사고)
+P="src"; pgrep -fc "python -m ${P}.main"
+# ② ready 확인 — "User 입력 대기 중"이 보이면 정상
+tail -5 logs/listener.log
+# ③ 죽어 있으면 재기동 — 반드시 이 래퍼(필수 env 주입). 로그 리다이렉션 잊지 말 것(stdout 로그).
+setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null &
+```
+- ③-보충: 새 컨테이너라 `.env`가 없으면 영속 env의 토큰 4개 폴백으로 뜬다(소규모 팀).
+  풀팀(20봇)은 SESSION_HANDOFF '자격증명' 절 참조 — 사용자에게 토큰을 받아야 한다.
+- ④ **감독자 재무장** — 전 세션의 감독자는 세션 종료와 함께 소멸한다. Monitor 도구로
+  아래 스크립트를 `persistent`로 **딱 1개만** 무장(평시 침묵=토큰 0, 사망 시 셸이 직접 소생):
+  ```bash
+  cd /home/user/PJT
+  P1="src"; P2="main"   # pgrep 자기매칭 회피(분할 패턴)
+  while true; do
+    if ! pgrep -f "python -m ${P1}.${P2}" >/dev/null 2>&1; then
+      echo "[감독자] 리스너 부재 → 자동 재기동 ($(date '+%m-%d %H:%M:%S'))"
+      setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null &
+      sleep 100
+      if pgrep -f "python -m ${P1}.${P2}" >/dev/null 2>&1 \
+         && tail -8 logs/listener.log | grep -q "User 입력 대기 중"; then
+        echo "[감독자] 재기동 성공 — ready 확인"
+      else
+        echo "[감독자] 재기동 후 ready 미확인 — 점검 필요"
+      fi
+    fi
+    sleep 20
+  done
+  ```
+- ⑤ 기준선 확인: `source .venv/bin/activate && python -m pytest -q` → **209 통과**.
+
+## 2. 불변 방향성 (사용자 확정 — 재논의하지 말 것)
+- **구조적 보장 > 프롬프트/LLM 판단** — 기계적 행동은 시스템이 하고, LLM에게는 판단만 맡긴다.
+- **단일 호출·단일 흐름**(request→response, 단일활성 베턴)은 의도된 설계(퀄리티·토큰 안정성).
+  병렬은 '서로 다른 프로젝트의 흐름' + fork(독립 의견 동시 수집)만 — 봇은 전역 점유
+  (한 시점 한 흐름). "순차적인 일은 순차, 병렬이 필요한 부분만 병렬."
+- **1봇 1직업 1기억**(전문화). 범용 직군(풀스택·제너럴 등)은 폐지 — recruit가 정책 거부.
+  직군 밖 Work는 받은 전문가가 보고 첫 줄 `[직군밖] 필요직군`으로 반려 → 리더가 채용.
+- **시스템 내부 데이터의 Discord 노출 금지** — 채널의 시스템 명의 메시지는 상태 메시지
+  (+큐 접수 답글)뿐. 거부·표결 집계·배포 결과는 도구 반환으로 당사자에게만.
+- 전 직군 **공용 메커니즘**(특정 직군 키워드 하드코딩 금지). 도메인 판정은 그 분야 전문가가.
+- 프로젝트 신원은 **P-번호**(이름이 아님) — 폴더 `p-00n-*`, 배포 슬롯 `organt-p-00n`.
+- 에이전트 모델: **sonnet**(`ORGANT_MODEL`).
+- 사용자 확인 게이트를 늘리지 말 것 — 목적은 **자동 회사**(자율성). hook=개인 권한 제한일 뿐.
+
+## 3. 운영 수칙
+- 커밋 규약: **`type(scope): 한글 제목`** + 본문에 왜·라이브 근거. 변경은 작게.
+- 푸시: 브랜치 → **main FF 동기화까지 자율**(확립된 관행). PR은 사용자가 시킬 때만.
+- 비밀(봇 토큰·GH_PAT·RENDER_KEY)은 gitignored `.env`에만 — **절대 커밋 금지**.
+- 라이브 리스너가 도는 중 `logs/*.json` 직접 수술 금지(쓰기 충돌) — 멈추고 수술하고 재기동.
+- 재기동 전 흐름 진행 여부 확인: 봇 CLI(`_bundled/claude`) 프로세스 + logs 파일 mtime.
+  (`/tmp/restart_organt.sh`가 있으면 그걸 사용 — 능동 흐름 가드 내장, `--force`로 무시.)
+- `pkill`/`pgrep`은 **분할 패턴**(`P="run_"; pkill -f "${P}listener.sh"`) — 자기매칭(exit 144) 회피.
+- 감시는 항상 **감독자 1개**만 — 30분짜리 모니터를 여러 개 재무장하지 말 것(토큰 누수).
+
+## 4. 진단 빠른 참조
+| 무엇 | 어디 |
+|---|---|
+| 흐름 이벤트(시작·마감·거부·반려) | `logs/flow.jsonl` |
+| 봇 도구 호출 전수 | `logs/audit.jsonl` |
+| 리스너 stdout(부팅·수신·에러) | `logs/listener.log` |
+| 프로젝트 레지스트리(P-001~) | `logs/projects.json` |
+| 직군 기억 | `logs/jobs.json` (진실원: jobs.json > Discord 역할 > 로스터) |
+| 직무 기준·경험(학습 플라이휠) | `logs/role_profiles.json` |
+
+- 알려진 외부 충격(정상 범주): **컨테이너 회수/동면**(프로세스 전멸, `/home`은 보존) →
+  감독자 + 부팅 복구(미응답 [Request] 재처리)가 자가 치유. **Render free 슬립**(15분 유휴,
+  첫 접속 ~1분 콜드스타트)은 결함이 아니다.
+- 협업 품질 분석을 요청받으면: flow.jsonl(이벤트 시퀀스) + 채널 스레드(발언 명의) +
+  audit.jsonl(실작업)로 교차 확인 — 중앙집권 경향(협의 없는 일방 결정)도 함께 본다.
+
+## 5. 하지 말 것
+- 사용자 요청 없는 PR 생성 / 모델 ID를 커밋·코드·문서에 기록(채팅 답변에서만).
+- '이름'으로 프로젝트 식별·작업공간 추측 — 신원은 P-번호, 작업공간은 레지스트리에서 읽는다.
+- 배포 서비스명 수동 지정 — 슬롯은 `deploy_service_name`이 pid로 결정한다.
+- 특정 직군 전용 하드코딩 게이트 추가 — 공용 메커니즘 + 전문가 자기정의가 원칙.
+- 같은 요청을 봇에게 재시도 폴링 — 점유·대기는 시스템이 안내한다.
+
+## 6. 지금 관찰 중인 것 (2026-06-12 기준 — 최신은 SESSION_HANDOFF '다음 할 일')
+- **[직군밖] 반려·범용 채용 거부의 라이브 첫 발동** — 다음 신규 도메인(AI 등) 작업에서.
+- **recruit 자연 작동** — QA·디자이너(각 1명) 보강은 미작동 확인 후 판단.
+- **P-005 채널 404**(사용자가 채널 삭제) — 레지스트리 정리 후보, 사용자 결정 대기.

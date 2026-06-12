@@ -1,7 +1,9 @@
 # 세션 이어가기 가이드 (SESSION_HANDOFF)
 
 > 이 파일 하나로 새 세션에서 작업을 이어갈 수 있습니다.
-> 첫 마디 예: "PJT SESSION_HANDOFF.md 읽고 이어서 작업해."
+> **새 세션의 첫 입력으로는 [NEW_SESSION_GUIDE.md](NEW_SESSION_GUIDE.md)를 주세요**
+> (처음 5분 체크리스트·불변 원칙·운영 수칙) — 이 파일은 그 가이드가 가리키는
+> 깊은 맥락(구조 결정 이력·자격증명·복구 원리)입니다.
 
 ## 현재 상태
 - **최신 브랜치: `claude/fervent-dirac-bsx1w3`** — main과 FF 동기화 관행(2026-06-12 현재 `3d1bf34`).
