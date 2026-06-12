@@ -25,27 +25,13 @@ setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null 
 - ③-보충: 영속 env에 풀팀 토큰(`SYSTEM_BOT`+`ORGANT_BOT_2~20`+`TEST_BOT_1`(=1번 봇))과 배포 키(GH_PAT·RENDER_KEY)가
   등록돼 있어 `.env` 없이도 **풀팀(워커 20)으로 뜬다**(2026-06-12 새 컨테이너에서 라이브 검증).
   새 컨테이너면 `.venv`·`logs/`부터 만들어야 한다(`python3 -m venv .venv` + requirements 2종).
-- ④ **감독자 재무장** — 전 세션의 감독자는 세션 종료와 함께 소멸한다. Monitor 도구로
-  아래 스크립트를 `persistent`로 **딱 1개만** 무장(평시 침묵=토큰 0, 사망 시 셸이 직접 소생):
+- ④ **감독자 무장** — 분리 프로세스(세션이 끝나도 컨테이너가 살면 생존, 평시 토큰 0).
+  **멱등이라 그냥 실행하면 된다** — 이미 떠 있으면 flock이 거부한다('딱 1개' 구조 보장):
   ```bash
-  cd /home/user/PJT
-  P1="src"; P2="main"   # pgrep 자기매칭 회피(분할 패턴)
-  S="scripts/run_"      # 재기동 경로도 분할 — 외부 pkill -f 리터럴 매칭에 감독자가 동반 사망 방지
-  while true; do
-    if ! pgrep -f "python -m ${P1}.${P2}" >/dev/null 2>&1; then
-      echo "[감독자] 리스너 부재 → 자동 재기동 ($(date '+%m-%d %H:%M:%S'))"
-      setsid nohup bash "${S}listener.sh" >> logs/listener.log 2>&1 < /dev/null &
-      sleep 100
-      if pgrep -f "python -m ${P1}.${P2}" >/dev/null 2>&1 \
-         && tail -8 logs/listener.log | grep -q "User 입력 대기 중"; then
-        echo "[감독자] 재기동 성공 — ready 확인"
-      else
-        echo "[감독자] 재기동 후 ready 미확인 — 점검 필요"
-      fi
-    fi
-    sleep 20
-  done
+  setsid nohup bash scripts/supervisor.sh >> logs/supervisor.log 2>&1 < /dev/null &
   ```
+  사건 기록은 `logs/supervisor.log`(무장/재기동/ready 한 줄씩). 세션 Monitor 방식은
+  persistent 지정에도 30분 캡으로 죽어 폐기됨(핸드오프 항목 28).
 - ⑤ 기준선 확인: `source .venv/bin/activate && python -m pytest -q` → **210 통과**.
 
 ## 1.5 주요 환경변수 — 처음 보면 오해하기 쉬운 것들
@@ -83,9 +69,9 @@ setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null 
   (`/tmp/restart_organt.sh`가 있으면 그걸 사용 — 능동 흐름 가드 내장, `--force`로 무시.)
 - `pkill`/`pgrep`은 **분할 패턴**(`P="run_"; pkill -f "${P}listener.sh"`) — 자기매칭(exit 144) 회피.
   **인자만 분할하면 부족**: 같은 커맨드라인 다른 곳의 리터럴(예: 뒤따르는 재기동 명령)도 매칭된다 —
-  pkill과 재기동은 **호출을 분리**하라. 감독자도 커맨드라인에 재기동 명령을 들고 있어 외부 pkill에
-  동반 사망할 수 있다(2026-06-12 실증 — 죽었으면 재무장).
-- 감시는 항상 **감독자 1개**만 — 30분짜리 모니터를 여러 개 재무장하지 말 것(토큰 누수).
+  pkill과 재기동은 **호출을 분리**하라(2026-06-12 실증: 한 커맨드라인에 합쳤다가 자기 셸·감독자 동반 사살).
+  감독자는 이제 분리 프로세스라 면역(argv에 스크립트 경로뿐 — 파일 내용은 pkill -f 매칭 대상 아님).
+- 감시는 **감독자 1개**(flock이 구조 보장) — 세션 Monitor류 상시 감시를 추가하지 말 것(토큰 누수).
 
 ## 4. 진단 빠른 참조
 | 무엇 | 어디 |
