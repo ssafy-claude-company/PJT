@@ -539,9 +539,14 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 frame = flow.comm.redo(me_id, to, "pending")    # 베턴 점유 + Redo 카운트(한계 시 RedoLimitExceeded)
             except RedoLimitExceeded:
                 _dbg(f"{tag} ✗재위임 한도초과")
+                # [품질>토큰 — 리더 셀프 마무리 권유 제거] 종전 안내("직접 Write/Edit로 마무리")는
+                # Redo 실패의 끝에서 중앙집권·비전문 마감을 권하는 셈이었다(탈중앙·전문화 역행).
                 return _ok(f"재위임 거부(Redo 한도 초과): {to}({flow._info(to)})는 이미 이 산출물을 여러 번 "
-                           f"보완했습니다. 같은 일을 또 떠넘기지 말고 — 직접 Read/run으로 확인 후 Write/Edit로 "
-                           f"마무리하거나, goal이 충족됐으면 complete_task로 마감하세요.")
+                           f"보완했습니다. 같은 사람에게 같은 식으로 또 떠넘기지 마세요 — 품질 경로는: "
+                           f"① 검증자(타 멤버)의 결함 보고로 **무엇이 왜 미달인지 정밀화**해 마지막 1회를 명확히 맡기거나 "
+                           f"② 같은 직군의 **다른 전문가**(없으면 recruit)에게 결함 보고와 함께 맡기거나 "
+                           f"③ goal이 이미 충족이면 complete_task, 끝내 미달이면 사용자에게 정직하게 보고하세요"
+                           f"(리더가 비전문 직접 마무리로 덮지 말 것).")
             owner_body = (f"[보완 요청(Redo) — 직전 산출물이 목표에 못 미쳐 되돌아왔습니다] 고칠 구체적 결함: {body}\n"
                           f"[이 Task의 Goal] {goal}\n결함만 정확히 고치고 run으로 재검증해 그 증거와 함께 보고하세요.")
         else:
@@ -564,7 +569,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     # [스펙 증발 방지] 회의·표결의 합의는 리더 머릿속이 아니라 위임 계약에 실린다 —
                     # 라이브 P-009: 9직군이 회의로 정한 스펙(상태머신·SLA·타이밍 계약)이 구현자에게
                     # 전달되지 않아(스코프 단절·리더 요약 의존) 결과물 품질로 이어지지 못함.
-                    owner_body += f"\n[팀 협의 기록(회의·표결) — 구현·검증 시 이 합의를 준수]\n{_speech_clip(notes, 3000)}"
+                    owner_body += f"\n[팀 협의 기록(회의·표결) — 구현·검증 시 이 합의를 준수]\n{_speech_clip(notes, 6000)}"   # 저장 한도(6000)와 일치 — 전달에서 합의가 또 잘리지 않게(품질>토큰)
         thread_id = flow.current.thread_id
         # Owner = 그 일을 Work로 받은 동료(수신=소유). 선배정이 아니라 요청으로 owner가 떠오른다 —
         # 이 Task에 아직 owner가 없을 때 첫 Work-request 수신자가 책임자가 된다(중앙집권 방지).

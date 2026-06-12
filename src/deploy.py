@@ -103,6 +103,37 @@ def _verify_live_assets(url, workspace, limit=12, tries=3, wait=6, fetch=None):
     return bad
 
 
+def _measure_usability(url: str) -> str:
+    """[품질 우선 — 기계적 사용성 측정(사용자 확정: 토큰<품질)] 배포 성공 후 실제 브라우저로 첫
+    로드를 재본다 — 웹 산출물에서 '뜬다(HTTP 200)'와 '쓸 만하다'는 다르다(라이브 P-009: 200인데
+    첫 로드 60s+, 브라우저 즉석 모델학습 렉을 200 검사가 통과시킴 — 사용자가 첫 발견).
+    도메인 무관(웹이라는 산출물 형태에만 의존), best-effort — 측정 실패가 배포를 막지 않는다."""
+    try:
+        import time as _t
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            b = p.chromium.launch()
+            try:
+                pg = b.new_page()
+                errs = []
+                pg.on("console", lambda m: errs.append(m.text[:80]) if m.type == "error" else None)
+                pg.on("pageerror", lambda e: errs.append(str(e)[:80]))
+                t0 = _t.time()
+                try:
+                    pg.goto(url, timeout=20000, wait_until="load")
+                    note = f"첫 로드 {_t.time() - t0:.1f}s"
+                except Exception:
+                    note = "첫 로드 **20s 초과(미완)** — 사용자는 빈 화면을 봅니다"
+                _t.sleep(2)   # 로드 직후 에러 수집 창
+                e_note = f", 콘솔/페이지 에러 {len(errs)}건" + (f" (첫: {errs[0]})" if errs else "")
+                return (f"\n[라이브 사용성 측정] {note}{e_note} — 수치가 나쁘면 '배포됨'이지 "
+                        f"'완성'이 아닙니다(원인을 고치기 전 완료 보고 금지).")
+            finally:
+                b.close()
+    except Exception as e:
+        return f"\n[라이브 사용성 측정 불가(참고): {type(e).__name__}]"
+
+
 def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="singapore"):
     """workspace를 name repo로 push하고 Render 웹서비스로 배포 → 결과 문자열(라이브 URL 포함)."""
     ws = Path(workspace)
@@ -195,7 +226,7 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
                             f"{', '.join(stale[:4])}. 옛 빌드가 서빙 중일 수 있습니다 — 캐시 헤더·빌드 "
                             f"로그를 확인하고 다시 배포하세요(이 상태로 '완료' 보고 금지).")
                 return (f"배포 성공 ✅ 라이브(HTTP {served} + 산출물 바이트 일치 확인): {url}  "
-                        f"(repo: {repo_url})")
+                        f"(repo: {repo_url})" + _measure_usability(url))
             return f"배포 실패: Render는 live인데 {url} 가 응답하지 않음(서버 기동 실패 가능) — 로그 확인 필요."
         if status in _TERMINAL_FAIL:
             return f"배포 실패(Render {status}) — 빌드 로그 확인 필요. 예정 URL: {url}"
