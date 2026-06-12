@@ -878,6 +878,45 @@ def test_개입_미완Task_영속과_되살리기_담당자가_이어감(tmp_pat
     assert s.projects[901].get("open_task") is None                         # 완료 → 비움
 
 
+def test_open_task_복원은_프로젝트팀을_좁히지_않는다(tmp_path):
+    """[라이브 버그 회귀 가드 — 사용자 관측] 미완 Task 복원이 project_team을 그 Task에 낀 일부 멤버로
+    '대입'하면, 같은 프로젝트에서 일하던 팀원(그 Task엔 안 낀)이 이후 request에서 '이 프로젝트 팀이
+    아님'으로 거부됐다(팀 안에 있는데도 거부 → 구조적 불안정). 복원은 union이어야 한다 — 좁히지 않고
+    넓히기만 한다(리더 항상 포함)."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None,
+            bot_info={11: "L", 12: "백엔드", 13: "프론트엔드", 14: "디자이너"},
+            workspace="/ws", session_dir=str(tmp_path),
+            projects_path=str(tmp_path / "projects.json"))
+    s.projects[901] = {"id": "P-009", "name": "게임", "channel": 901,
+                       "workspace": "/ws", "leader": 11, "summary": ""}
+
+    # 1) 미완 Task 생성 — 이 Task 팀은 12만(13 프론트·14 디자이너는 이 Task엔 안 낌, 그러나 프로젝트 팀원)
+    async def make(flow, oid, body, kind, role):
+        t = _tools(flow, 11, "leader")
+        await t["create_task"].handler({"members": "12"})
+        flow.current.status.goal = "g"
+        flow.current.owner = 12
+        flow.current.status.owner = "백엔드"
+        assert 13 in flow.project_team and 14 in flow.project_team   # 처음엔 전체 직군 보유자
+        return "미완"
+    s.run_turn = make
+    asyncio.run(s.handle_user_input(901, 11, "시작", root_id=None))
+
+    # 2) 복원 — project_team이 [11,12]로 축소되면(옛 대입 버그) 13·14가 사라져 이후 거부됨
+    captured = {}
+    async def grab(flow, oid, body, kind, role):
+        if "pt" not in captured:
+            captured["pt"] = list(flow.project_team)
+            captured["team"] = list(flow.current.team) if flow.current else []
+        return "이어감"
+    s.run_turn = grab
+    asyncio.run(s.handle_user_input(901, 11, "더 진행해", root_id=None))
+    assert set(captured["team"]) == {11, 12}                     # 되살린 Task 팀은 일부
+    assert 13 in captured["pt"] and 14 in captured["pt"], f"복원이 프로젝트 팀을 축소함: {captured['pt']}"
+    assert 11 in captured["pt"] and 12 in captured["pt"]
+
+
 def test_직업기억_디스크영속_재시작에도_직군유지(tmp_path):
     """[근본] recruit로 예비가 받은 직군(게임 기획자)을 jobs.json에 영속 → 프로세스 재시작(새 Sys) 뒤에도
     '예비'로 원복되지 않고 그 직군 유지. (매번 다른 봇이 게임 기획자로 뽑히던 churn의 디스크 차원 해결)"""

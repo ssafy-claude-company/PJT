@@ -392,14 +392,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
     g = flow.guide
     tools = []
 
-    async def _note(text):
-        """거부 등 흐름 사건을 스레드에 보이게 남긴다(조용한 유실 방지)."""
-        try:
-            if flow.current:
-                await g.post(int(flow.current.thread_id), me_id, f"[안내] {text}")
-        except Exception:
-            pass
-
     async def _say(who, text):
         """회의·표결 발언을 '그 봇 본인 명의'로 스레드에 남긴다 — 4명의 독립 의견이 리더 명의
         [안내] 묶음으로 게시돼 '중앙 공지'처럼 보이던 착시(사용자 관측) 제거. 협업의 실체와
@@ -456,7 +448,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                        + " — 이들에게 요청하세요(재시도 금지)." if same else
                        " 팀에 그 직군이 없습니다 — 정말 필요하면 recruit(member=…, role=…)로 합류시킨 뒤 요청하세요.")
                 _dbg(f"{tag} ✗거부:프로젝트밖")
-                await _note(f"{flow._info(to) or to}는 이 프로젝트 팀이 아님 — 팀 내 대안 안내")
                 return _ok(f"요청 거부: {to}({flow._info(to)})는 이 프로젝트 팀이 아닙니다 — 회사 풀에는 "
                            f"있지만 이 프로젝트 구성원이 아닙니다(팀은 create_project 때 당신이 구성했습니다)."
                            f"{alt} 현재 프로젝트 팀: {flow._names(flow.project_team)}")
@@ -517,7 +508,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 flow.log("req_rejected", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),
                          alive=flow.comm.alive, seg=flow.leader_segment, reason=str(e)[:70])
             _dbg(f"{tag} ✗거부:규약 ({e})")
-            await _note(f"{flow._info(to) or to}에게 요청했으나 거부됨 — {e}")
             return _ok(f"요청 거부(규약): {e}")
         # Work 위임은 Goal 확정 뒤에만 — '목표 합의(set_goal) → 분배' 순서를 구조적으로 강제(선분배 금지).
         # Info(합의용)는 언제든 허용 → Goal을 정하는 논의 자체는 막지 않는다.
@@ -537,7 +527,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 frame = flow.comm.redo(me_id, to, "pending")    # 베턴 점유 + Redo 카운트(한계 시 RedoLimitExceeded)
             except RedoLimitExceeded:
                 _dbg(f"{tag} ✗재위임 한도초과")
-                await _note(f"{flow._info(to) or to}에게 같은 산출물 재위임 한도 초과 — 직접 보완하거나 수락하세요")
                 return _ok(f"재위임 거부(Redo 한도 초과): {to}({flow._info(to)})는 이미 이 산출물을 여러 번 "
                            f"보완했습니다. 같은 일을 또 떠넘기지 말고 — 직접 Read/run으로 확인 후 Write/Edit로 "
                            f"마무리하거나, goal이 충족됐으면 complete_task로 마감하세요.")
@@ -1200,7 +1189,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     if v in flow.current.team and v != flow.leader:
                         flow.current.participated.add(v)        # 표결 참여 = 실질 협의 인정
                 board = " / ".join(f"{o}: {n}표" for o, n in tally.items())
-                await _note(f"[표결 결과] {question} → {board}")
                 return _ok(f"[표결 집계] {question}\n{board}\n\n[각자의 선택·근거]\n" + "\n".join(reasons)
                            + "\n\n(집계는 참고 — 최종 확정은 당신(리더)의 판정입니다.)")
 
@@ -1350,7 +1338,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             finally:
                 flow.deploy_inflight = False
             flow.deployed = result                 # 배포 호출됨 기록(SYS의 배포 강제가 중복 안 하게)
-            await _note(f"[배포] {result}")
             return _ok(result)
         tools.append(deploy)
 

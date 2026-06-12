@@ -423,12 +423,12 @@ class Sys:
                       owner=int(snap.get("owner") or 0))
         flow.tasks.append(ref)
         flow.current = ref
-        # 되살린 팀을 프로젝트 팀에도 반영(다시 일부만 부르지 않게) + 중복 제거(리더 우선).
-        seen = []
+        # 되살린 Task 멤버를 프로젝트 팀에 **합친다(union)** — 덮어쓰면 그 Task에 낀 일부 멤버로
+        # project_team이 축소돼, 같은 프로젝트에서 일하던 팀원이 이후 '이 프로젝트 팀이 아님'으로
+        # 거부되던 라이브 버그(복원이 팀을 좁힘 — 사용자 관측). 좁히지 않고 넓히기만 한다(리더 포함).
         for x in [flow.leader] + team:
-            if x not in seen:
-                seen.append(x)
-        flow.project_team = seen
+            if x not in flow.project_team:
+                flow.project_team.append(x)
         flow.comm.reset_task_tracking()
         try:
             await flow.refresh(ref)   # 상태블록을 '진행'으로 재활성(블록이 남아 있으면)
