@@ -2414,8 +2414,11 @@ def test_상태가시화_시작게시_종결확정_무알림수정(tmp_path):
 
 
 def test_상태텍스트_살아있음_신호_구성():
-    """상태 본문은 '무엇을·얼마나·지금 누가·마지막 활동'을 담는다 — 갱신이 멈추면 '마지막 활동'의
-    정체 자체가 박제 신호가 되는 구조(추가 감시 장치 불필요)."""
+    """상태 본문은 '무엇을·언제 시작·지금 누가·마지막 활동'을 담되, 시각은 Discord 동적
+    타임스탬프(<t:유닉스:R>)여야 한다 — 클라이언트가 상대시간을 계속 갱신하므로 컨테이너가
+    멈춰 edit이 끊겨도 표시가 늙는다(수정 시점 계산 'N초 전' 고정 문자열은 박제 시
+    '마지막 활동 1초 전' 거짓 생존 신호가 되던 결함 — 사용자 관측)."""
+    import re as _re
     import time as _t
     s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "기획", 12: "백엔드"})
     f = Flow(FakeGuide(), channel_id=1, guild_id=1, leader_id=11, bot_info={11: "기획", 12: "백엔드"})
@@ -2423,8 +2426,13 @@ def test_상태텍스트_살아있음_신호_구성():
     f.status_req = "온라인 세포 키우기 게임"
     f.last_activity = _t.monotonic() - 14
     txt = s._status_text(f, _t.monotonic() - 23 * 60)
-    assert "● 작업 중 23분째" in txt and "온라인 세포" in txt
-    assert "지금: 기획" in txt and "마지막 활동: 14초 전" in txt
+    assert "● 작업 중" in txt and "온라인 세포" in txt and "지금: 기획" in txt
+    stamps = [int(x) for x in _re.findall(r"<t:(\d+):R>", txt)]
+    assert len(stamps) == 2, f"시작·마지막활동 동적 타임스탬프 2개여야 함: {txt}"
+    now = _t.time()
+    assert abs((now - 23 * 60) - stamps[0]) < 5      # 시작 ≈ 23분 전 (벽시계 유닉스)
+    assert abs((now - 14) - stamps[1]) < 5           # 마지막 활동 ≈ 14초 전
+    assert "초 전" not in txt and "분째" not in txt   # 고정 상대문자열 금지(박제=거짓말 차단)
     fin = s._status_text(f, _t.monotonic(), final="⏸ 중단(미완 Task 이어가기 가능)")
     assert fin.startswith("⏸ 중단") and "온라인 세포" in fin
 

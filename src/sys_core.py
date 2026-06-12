@@ -351,20 +351,24 @@ class Sys:
 
     def _status_text(self, flow, t0, final=None) -> str:
         """[Rule/Status — 상태 가시화] 흐름 상태 메시지 본문. 묻기 전에 보이는 계기판:
-        무엇이(요청 요약), 얼마나(경과·세그먼트), 지금 누가(베턴 보유자), 살아 있는가(마지막 활동).
-        시스템이 멈추면 이 메시지의 갱신도 멈춰 '마지막 활동'의 정체 자체가 이상 신호가 된다.
+        무엇이(요청 요약), 얼마나(시작 시각), 지금 누가(베턴 보유자), 살아 있는가(마지막 활동).
+        시각은 Discord **동적 타임스탬프**(<t:유닉스:R>)로 박는다 — 상대시간을 클라이언트가
+        계속 다시 그리므로, 컨테이너가 멈춰 수정(edit)이 끊겨도 표시는 '1초 전→2시간 전'으로
+        늙는다. 수정 시점에 계산한 'N초 전' 고정 문자열은 박제되면 **거짓 생존 신호**가 되던
+        결함(사용자 관측: 동면 중에도 '마지막 활동 1초 전')의 구조적 수정 — 죽으면 죽어 보인다.
         final이 오면 종결 확정 표기('✅ 완료'/'⏸ 중단')로 닫는다."""
         req = (getattr(flow, "status_req", "") or "")[:60]
         if final is not None:
             return f"{final} {time.strftime('%H:%M')} — “{req}”"
-        mins = int((time.monotonic() - t0) // 60)
+        now_m, now_w = time.monotonic(), time.time()
+        start_ts = int(now_w - max(0, now_m - t0))
         alive = flow.comm.alive
         who = flow._info(alive) or ("담당자" if alive == flow.leader else f"<@{alive}>")
         done = sum(1 for h in flow.comm.history if h[0] == "respond")
-        idle = max(0, int(time.monotonic() - (flow.last_activity or t0)))
-        return (f"● 작업 중 {mins}분째 — “{req}”\n"
+        last_ts = int(now_w - max(0, now_m - (flow.last_activity or t0)))
+        return (f"● 작업 중(시작 <t:{start_ts}:R>) — “{req}”\n"
                 f"지금: {who} · 위임 {done}건 완주 · 세그먼트 {max(1, flow.leader_segment)}\n"
-                f"마지막 활동: {idle}초 전")
+                f"마지막 활동: <t:{last_ts}:R>")
 
     @staticmethod
     def _idify_workspace(workspace, pid, name) -> str:
