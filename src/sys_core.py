@@ -1346,6 +1346,7 @@ class Sys:
 
         async def _run_leader():
             flow.leader_segment = 1
+            acts_seg = flow.act_count          # 세그먼트 실작업 기준점(활동 기반 예산 — 첫 턴 포함)
             result = await self.run_turn(flow, lead, body, Kind.WORK, "leader")
             # 구조적 연속 실행: 턴 한도로 작업이 끊겼으면(진행 중 Task가 남았거나 '턴 한도' 표시)
             # 같은 세션으로 이어서 완료까지 재호출한다 — '턴 한도 = 무조건 中断' 결함 해소.
@@ -1373,10 +1374,19 @@ class Sys:
                 # [구조적 이어가기] 미완(턴한도·타임아웃) 위임은 리더 판단에 맡기지 않고 SYS가 직접
                 # 같은 owner에게 이어 보낸다 — 리더는 완성본을 받아 '판정'(검증·마감)만 한다.
                 drained += await self._auto_continue_owner(flow, lead)
-                cont += 1
-                flow.leader_segment = cont + 1
+                # [활동 기반 예산 — "작업 중이면 얼마가 걸리든 안 끊는다"(확립 원칙)의 세그먼트 적용]
+                # 직전 세그먼트에 실작업(act_count 증가)이나 위임 완주 도착(drained)이 있었으면 예산을
+                # 소모하지 않는다 — 예산의 목적은 '무진행 루프 차단'이지 '대형 작업 총량 제한'이 아니다.
+                # 라이브 P-010: 동면 재개 5회+재협의 루프가 예산 12를 태워 '진행 중인' 작업이 마감 직전
+                # 절단(사용자: "왜 작업 도중에 끊겼지"). 무진행 정체는 종전대로 이 예산+워치독이 잡는다.
+                progressed = (flow.act_count > acts_seg) or bool(str(drained).strip())
+                if not progressed:
+                    cont += 1
+                acts_seg = flow.act_count
+                flow.leader_segment += 1
                 self._log("continue_incomplete",
-                          task=(flow.current.task_id if flow.current else None), attempt=cont)
+                          task=(flow.current.task_id if flow.current else None), attempt=cont,
+                          seg=flow.leader_segment, progressed=progressed)
                 # [기억 구멍 무력화] 이어가기마다 팀·소유의 '시스템 사실'을 재주입한다 — 외부 절단
                 # (SIGTERM)으로 직전 턴이 세션에 안 남으면 리더가 자기 팀 구성을 잊고 '참여 중인가요?'
                 # 재확인·팀 밖 호출을 반복했다(라이브 관측). 기억은 흔들려도 사실은 SYS가 들고 있다.

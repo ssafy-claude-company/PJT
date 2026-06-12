@@ -2867,3 +2867,46 @@ def test_협의명단은_스냅샷에_영속되고_복원된다(tmp_path):
     proj = {"id": "P-X", "open_task": snap}
     asyncio.run(s._restore_open_task(f2, proj))
     assert 12 in f2.current.participated                     # 복원 → 재개 후 set_goal 재협의 불요
+
+
+def test_활동기반_이어가기예산_진행세그는_소모없음():
+    """[활동 기반 예산] 직전 세그먼트에 실작업(act_count 증가)이 있으면 이어가기 예산을 소모하지
+    않는다 — 예산의 목적은 '무진행 루프 차단'이지 '대형 작업 총량 제한'이 아니다(라이브 P-010:
+    동면 재개+재협의가 예산 12를 태워 '진행 중' 작업이 마감 직전 절단). max_continue=2여도 진행
+    세그먼트 3개를 지나 완주하고, 무진행만 누적돼 한도에서 닫힌다."""
+    import types
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"}, workspace="/ws", max_continue=2)
+    calls = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        calls.append(1)
+        if len(calls) <= 3:                            # 세그 1~3: 미완이지만 매번 실작업 진행
+            flow.current = types.SimpleNamespace(
+                task_id="t1", status=types.SimpleNamespace(status="진행", result=None))
+            flow.act_count += 1                        # 진행 증거
+            return "작업 중 (⚠ 턴 한도 도달 — 미완)"
+        flow.current = None                            # 4번째에 완주
+        return "완료"
+
+    s.run_turn = fake_run_turn
+    asyncio.run(s.handle_user_input(500, 11, "큰 작업", root_id="r"))
+    assert len(calls) == 4                             # 예산 2를 넘는 진행 세그먼트도 절단되지 않음
+    ci = [e for e in s.flow_log if e["event"] == "continue_incomplete"]
+    assert all(e.get("progressed") for e in ci) and all(e.get("attempt") == 0 for e in ci)
+
+    g2 = FakeGuide()
+    s2 = Sys(g2, guild_id=1, organt_builder=None, bot_info={11: "L"}, workspace="/ws", max_continue=2)
+    calls2 = []
+
+    async def stuck_run_turn(flow, oid, body, kind, role):
+        calls2.append(1)
+        flow.current = types.SimpleNamespace(
+            task_id="t1", thread_id="th", block_id="blk", team=[], owner=0,
+            participated=set(), collab_notes="",
+            status=types.SimpleNamespace(status="진행", result=None, purpose="", goal="", owner=""))
+        return "작업 중 (⚠ 턴 한도 도달 — 미완)"       # 무진행(실작업 0) 반복
+
+    s2.run_turn = stuck_run_turn
+    asyncio.run(s2.handle_user_input(500, 11, "정체 작업", root_id="r"))
+    assert len(calls2) == 3                            # 첫 턴 + 무진행 이어가기 2회에서 한도 종결
