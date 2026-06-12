@@ -2,7 +2,7 @@
 
 > 새 Claude 세션의 **첫 마디**: **"PJT의 NEW_SESSION_GUIDE.md 읽고 시작해."**
 > 이 가이드는 '처음 5분에 할 일'과 '지켜야 할 것'만 담는다. 깊은 맥락(구조 결정
-> 이력 25건·자격증명·복구 원리)은 [SESSION_HANDOFF.md](SESSION_HANDOFF.md)를 이어서 읽는다.
+> 이력·자격증명·복구 원리)은 [SESSION_HANDOFF.md](SESSION_HANDOFF.md)를 이어서 읽는다.
 
 ## 0. 이 시스템이 뭔가
 Discord 멀티에이전트 AI 회사 **"Organt"** — 사용자가 Discord로 일을 시키면 봇 직원들이
@@ -32,7 +32,8 @@ setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null 
   ```
   사건 기록은 `logs/supervisor.log`(무장/재기동/ready 한 줄씩). 세션 Monitor 방식은
   persistent 지정에도 30분 캡으로 죽어 폐기됨(핸드오프 항목 28).
-- ⑤ 기준선 확인: `source .venv/bin/activate && python -m pytest -q` → **210 통과**.
+- ⑤ 기준선 확인: `source .venv/bin/activate && python -m pytest -q` → **전부 통과**가 기준선
+  (개수는 늘어나는 스냅샷이라 박지 않는다 — 실행 결과가 진실원).
 
 ## 1.5 주요 환경변수 — 처음 보면 오해하기 쉬운 것들
 | env | 정체 | 주의 |
@@ -40,7 +41,7 @@ setsid nohup bash scripts/run_listener.sh >> logs/listener.log 2>&1 < /dev/null 
 | `SYSTEM_BOT` | 시스템 봇 토큰(라우팅·상태 메시지 명의, id 1510856525240078456) — **직원 아님** | 영속 env |
 | `ORGANT_BOT_2~20` | 워커 봇 토큰(testtest2~20) — 등록된 만큼 합류(로스터 자동 적응). **`ORGANT_BOT_1` 변수는 없다**(1번 봇은 아래 TEST_BOT_1) | 영속 env(풀팀) |
 | `TEST_BOT_1` | **1번 봇** = 워커 계정 시리즈 1번(username `testtest`, id 1510828738181595156) — 현 게임 비주얼 디자이너 | 영속 env |
-| `TEST_OBT_2/3` | 구세대 별칭 — **같은 1기 봇들의 옛 키**(OBT_3=ORGANT_BOT_2와 동일 봇=현 게임 기획자·기본 리더). 새 영속 env엔 없음. 같은 봇의 키 둘을 로스터에 동시 주입 금지 | 레거시 |
+| `TEST_OBT_2/3` | 구세대 별칭 — **같은 1기 봇들의 옛 키**(OBT_3=ORGANT_BOT_2와 동일 봇=김민준, 현 **백엔드**·To 미지정 폴백 담당). 새 영속 env엔 없음. 같은 봇의 키 둘을 로스터에 동시 주입 금지 | 레거시 |
 | `CHANNEL_ID` | **메인 채널(#test)의 ID**(기본 1510828120490643517) — 서버(길드) ID가 아니다. 단, 길드 ID를 넣어도 `channels.py`가 안에서 대상 채널을 해석(오인 흡수 설계) | |
 | `DEPLOY_NAME` | **폐지된 유물**(2026-06-12) — 코드가 더 이상 읽지 않는다. 배포 슬롯은 P-번호로만(`organt-p-00n`), **미등록 흐름은 배포 불가**(create_project 등록이 먼저) | env 삭제 무방 |
 
