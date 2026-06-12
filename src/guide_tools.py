@@ -387,6 +387,16 @@ async def _add_members(g, thread_id, member_ids):
         await fn(thread_id, member_ids)
 
 
+def _speech_clip(s, n=1500) -> str:
+    """발언 안전망: 폭주만 막고 **침묵 절단하지 않는다** — 잘리면 잘렸다고 표기한다.
+    종전의 하드컷([:300]/[:400])은 '3~5줄' 지시를 지킨 발언(한국어 200~400자+)까지 단어
+    중간에서 잘랐다(라이브: 회의 발언 전원이 307~308자로 박제, "…프론트엔"에서 끊김 — 사용자
+    관측). 더 나쁜 건 회의록도 잘려 **다음 발언자들이 서로의 잘린 주장을 보고 토론**한 것 —
+    분량 통제는 지시(프롬프트)와 모델 판단의 몫이고, 시스템은 안전망만 친다."""
+    s = (s or "").strip()
+    return s if len(s) <= n else s[:n] + f" …(발언 {len(s)}자 — {n}자 안전망에서 잘림)"
+
+
 def make_guide_tools(flow: Flow, me_id: int, role: str):
     g = flow.guide
     tools = []
@@ -1184,7 +1194,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     if chosen:
                         tally[chosen] += 1
                     reasons.append(f"{flow._info(v) or v}: {(pick or '무효')} — {(res or '')[:150]}")
-                    await _say(v, f"[표] {(pick or '무효')} — {(res or '').strip()[:200]}")  # 본인 명의 발언
+                    await _say(v, f"[표] {(pick or '무효')} — {_speech_clip(res, 400)}")  # 본인 명의 발언
                     if v in flow.current.team and v != flow.leader:
                         flow.current.participated.add(v)        # 표결 참여 = 실질 협의 인정
                 board = " / ".join(f"{o}: {n}표" for o, n in tally.items())
@@ -1246,11 +1256,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 def body_r1(m):
                     return (f"[회의 1라운드 — 독립 의견] 주제: {topic}\n(이 라운드에선 동료 발언이 "
                             f"보이지 않습니다 — 앵커링 방지)\n당신({flow._info(m)})의 전문 관점 "
-                            f"입장을 3~5줄로, 근거와 함께.")
+                            f"입장을 3~5줄(최대 1000자)로, 근거와 함께.")
                 for m, res, note in await _fork_collect(flow, me_id, members, body_r1):
-                    line = f"[1R] {flow._info(m) or m}: {(res or note or '').strip()[:400]}"
+                    cut = _speech_clip(res or note)   # 회의록·채널 발언은 같은 내용(기록 일치)
+                    line = f"[1R] {flow._info(m) or m}: {cut}"
                     minutes.append(line)
-                    await _say(m, f"[회의 1R] {(res or note or '').strip()[:300]}")  # 본인 명의 발언
+                    await _say(m, f"[회의 1R] {cut}")  # 본인 명의 발언
                     if res is not None and m in flow.current.team and m != flow.leader:
                         flow.current.participated.add(m)        # 회의 발언 = 실질 협의 인정
                 # 2라운드+ = 직렬 상호 토론(서로의 발언을 보며 동의/반박/보완) — 품질의 원천인
@@ -1262,7 +1273,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         log_txt = "\n".join(minutes[-8:]) or "(아직 발언 없음)"
                         body = (f"[회의 {r}라운드] 주제: {topic}\n지금까지의 발언:\n{log_txt}\n\n"
                                 f"당신({flow._info(m)})의 차례입니다 — 앞 발언에 동의/반박/보완하며 "
-                                f"당신 전문 관점의 입장을 3~5줄로. 맹목적 동의 금지(근거 필수).")
+                                f"당신 전문 관점의 입장을 3~5줄(최대 1000자)로. 맹목적 동의 금지(근거 필수).")
                         try:
                             frame = flow.comm.request(me_id, m, "meet", Kind.INFO)
                         except BusyInOtherFlow as e:
@@ -1282,9 +1293,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                             flow.comm.respond(m, "accept", res)
                         except CommError:
                             pass
-                        line = f"[{r}R] {flow._info(m) or m}: {(res or '').strip()[:400]}"
+                        cut = _speech_clip(res)
+                        line = f"[{r}R] {flow._info(m) or m}: {cut}"
                         minutes.append(line)
-                        await _say(m, f"[회의 {r}R] {(res or '').strip()[:300]}")  # 본인 명의 발언
+                        await _say(m, f"[회의 {r}R] {cut}")  # 본인 명의 발언
                         if m in flow.current.team and m != flow.leader:
                             flow.current.participated.add(m)    # 회의 발언 = 실질 협의 인정
                 return _ok(f"[회의록] 주제: {topic} ({rounds}라운드, {len(members)}명)\n"

@@ -1752,6 +1752,19 @@ def test_프로젝트_등록은_원요청링크를_영속(tmp_path):
     assert s.projects[500]["origin_msg"] == "650442" and s.projects[500]["id"] == pid
 
 
+def test_발언_안전망은_침묵절단하지_않는다():
+    """[회의 품질] 발언 클립은 폭주만 막고, 잘리면 '잘렸다'고 표기한다 — 종전 하드컷([:300])이
+    '3~5줄' 지시를 지킨 발언까지 단어 중간에서 침묵 절단해(라이브: 전 발언이 307~308자 박제,
+    '…프론트엔'에서 끊김) 채널 기록과 다음 발언자의 토론 문맥을 함께 훼손하던 것 교정."""
+    from src.guide_tools import _speech_clip
+    assert _speech_clip("  짧은 발언  ") == "짧은 발언"            # 무손실 + 트림
+    long = "가" * 2000
+    out = _speech_clip(long)
+    assert out.startswith("가" * 1500) and "2000자" in out and "잘림" in out   # 명시 마커
+    assert _speech_clip("나" * 1500) == "나" * 1500               # 경계는 무손실
+    assert _speech_clip(None) == ""
+
+
 def test_진행중_프로젝트의_채널은_재등록이_못_옮긴다(tmp_path):
     """[채널 하이재킹 가드] 같은 작품(이름·목적 유사)을 다른 채널에서 다시 등록해도, 미완 Task가
     영속된 '진행 중' 프로젝트의 채널·open_task는 원래 자리를 지킨다 — 라이브: 동면 복구 재발사가
