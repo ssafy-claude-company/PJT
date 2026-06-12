@@ -2527,3 +2527,44 @@ def test_배포_진행중_재호출은_대기_새배포_트리거_금지():
         finally:
             dp.deploy_sync = orig
     asyncio.run(scenario(fake_deploy_sync))
+
+
+def test_직군밖_Work는_전문가가_반려_리더는_채용지시_받음():
+    """[전문화의 구조 채널] 도메인 적합성은 키워드 하드코딩이 아니라 '받는 전문가'가 판정한다 —
+    owner가 보고 첫 줄에 [직군밖] 필요직군 을 적으면: 실패·미완이 아닌 올바른 반려로 분류되고,
+    소유가 해제되며, 리더는 'recruit로 채용해 맡기라'는 구조 지시를 받는다(관계없는 직군이 일을
+    흡수하던 경로 차단 — 라이브: ML이 백엔드에 묶여 감)."""
+    f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드"})
+    f.start_root("root")
+
+    async def wake(to, b, k):
+        assert "[직군밖]" in b and "반려하세요" in b              # 위임 계약에 반려권 명시
+        return "[직군밖] AI 엔지니어\n이 모델 설계는 ML 전문성이 필요합니다."
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.status.goal = "ML 모델로 혼잡도 예측"
+    r = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "모델 만들어줘"}))
+    txt = r["content"][0]["text"]
+    assert "[직군밖 반려]" in txt and "recruit(role='AI 엔지니어')" in txt   # 채용 구조 지시
+    assert "떠넘기지 마세요" in txt
+    assert f.current.owner == 0                                   # 소유 해제(채용 전문가가 새 owner)
+    assert not f.current.owner_delivered and not f.current.owner_incomplete
+    assert f.consec_fail == 0                                     # 반려 ≠ 실패
+    assert f.comm.alive == 11                                     # 베턴 정상 복귀
+
+
+def test_범용직군_채용은_정책으로_거부():
+    """[전문화 정책 — 사용자 결정] 풀스택·제너럴리스트류 범용 직군 채용은 거부된다 — 범용은 모든
+    일을 흡수해 전문 채용을 막고(라이브: 1봇 22건 집중) 병렬의 병목이 된다."""
+    f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드", 13: "예비"})
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    for bad in ("풀스택 개발자", "Full-Stack Engineer", "만능 개발자"):
+        r = asyncio.run(t["recruit"].handler({"role": bad, "member": "13"}))
+        assert "채용 거부(전문화 정책)" in r["content"][0]["text"], bad
+    r = asyncio.run(t["recruit"].handler({"role": "AI 엔지니어", "member": "13"}))
+    assert "합류" in r["content"][0]["text"]                      # 전문 직군은 정상 채용

@@ -550,7 +550,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 # 루프=재요청의 뿌리를 끊는다). owner가 그 목표를 끝까지(구현+검증) 책임진다.
                 owner_body = (f"[위임 — 이 목표를 끝까지 책임지는 owner는 당신입니다] 이 Task의 Goal: {goal}\n"
                               f"직접 구현하고 run으로 '목표가 충족됨'을 검증한 뒤(리더에게 되넘기지 말 것), "
-                              f"그 실행 증거와 함께 간결히 보고하세요.\n[요청 맥락] {body}")
+                              f"그 실행 증거와 함께 간결히 보고하세요.\n"
+                              f"단, 이 Goal의 **핵심이 당신 직군 밖의 전문성**을 요구하면 어설프게 떠안지 말고 "
+                              f"보고 **첫 줄**에 `[직군밖] 필요직군명` 을 적어 반려하세요 — 리더가 그 직군을 "
+                              f"채용해 맡깁니다(전문화 원칙: 관계없는 일을 흡수하지 않는 것이 옳은 행동입니다).\n"
+                              f"[요청 맥락] {body}")
         thread_id = flow.current.thread_id
         # Owner = 그 일을 Work로 받은 동료(수신=소유). 선배정이 아니라 요청으로 owner가 떠오른다 —
         # 이 Task에 아직 owner가 없을 때 첫 Work-request 수신자가 책임자가 된다(중앙집권 방지).
@@ -603,6 +607,18 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 result = (f"[확인요청 from {flow._info(to)}] {q}\n"
                           f"(→ 답을 정한 뒤, 이 작업을 {flow._info(to)}에게 request(Work)로 다시 맡기세요)")
             failed = _looks_transient(result)
+            # [직군밖 반려 — 전문화의 구조 채널] 도메인 적합성은 시스템이 키워드로 판정하지 않는다 —
+            # 그 분야 전문가(수신 owner)가 판정한다(자기정의 원칙). owner가 첫 줄에 '[직군밖] 필요직군'
+            # 을 적으면: 실패도 미완도 아닌 '올바른 반려'로 분류하고, 소유를 해제하며, 리더에게 채용을
+            # 구조적으로 지시한다 — 관계없는 직군이 일을 흡수해 어설픈 산출물을 내던 경로(라이브:
+            # ML이 백엔드에 묶여 감)의 차단.
+            refused_m = re.match(r"^\s*\[직군밖\]\s*([^\n]*)", result or "")
+            refused = bool(kind == Kind.WORK and not was_clarify and not failed and refused_m)
+            if refused and flow.current is not None and flow.current.owner == to:
+                flow.current.owner = 0                 # 소유 해제 — 채용된 전문가가 새 owner가 되게
+                flow.current.status.owner = ""
+                flow.current.owner_incomplete = False
+                _ckpt(flow)
             # owner가 '위임 도중 실제로 일했나' — 단일흐름이라 깨운 동료(+그 하위)만 활성이므로 wake 전후
             # act_count(run/Write/Edit) 증가 = owner 작업. 거짓이면 owner는 깨어났지만 착수 전/계획만 하고
             # 곧장 반환한 것(허위완료의 씨앗). 이걸로 '검증된 인도'와 '빈 응답'을 가른다.
@@ -620,7 +636,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 같은 owner에게 '이어서(continuation)' 재위임해 끝내야 한다(허위완료→다음 Task churn 차단). 미완은
             # delivered(accept)로 안 쳐서 respond 마커를 'incomplete'로 두면, 재위임이 Redo 한도에 안 걸린다
             # (이어가기는 '직전 결함 보완'이 아니라 '남은 작업 마저 하기'이므로 횟수 제한 없이 계속 가능).
-            incomplete = (kind == Kind.WORK and not was_clarify and not failed
+            incomplete = (kind == Kind.WORK and not was_clarify and not failed and not refused
                           and "턴 한도 도달" in (result or "")) or resumable_timeout
             # 미완 게이트(owner_incomplete)는 '의미 있는 신호'로만 갱신한다: 미완 신호면 True, owner가
             # '실작업을 담은 정상 응답'으로 마무리하면 False(이어가기 완료 = 게이트 자동 해제). 크래시(failed)
@@ -632,6 +648,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 elif not failed and owner_acted:
                     flow.current.owner_incomplete = False
             is_owner_work = (kind == Kind.WORK and not was_clarify and not failed and not incomplete
+                             and not refused
                              and flow.current is not None and to == flow.current.owner)
             # owner가 Work를 받고도 실작업(run/Write) 0회로 곧장 반환 = 착수 전/계획만 = '인도 아님'.
             premature = is_owner_work and not owner_acted
@@ -652,7 +669,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 # Redo(보완)로 둔갑해 한도를 태우고 owner에게 '직전 산출물 결함' 프레임으로 잘못 전달된다.
                 try:
                     flow.comm.respond(to, "clarify" if was_clarify else
-                                      ("incomplete" if (incomplete or premature) else
+                                      ("refused" if refused else
+                                       "incomplete" if (incomplete or premature) else
                                        "failed" if failed else "accept"), result)
                 except CommError:
                     # to의 중첩 하위요청이 응답 없이 끝나(크래시/이탈) 베턴이 to에 '굳은' 비정상 상황 →
@@ -695,6 +713,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            f"오류(서브프로세스 크래시)**입니다 — **다른 사람으로 바꾸거나 새로 뽑지 마세요(같은 환경이라 똑같이 "
                            f"실패).** 같은 동료에게 한 번만 다시 요청해보고(블립이면 회복), 또 실패하면 사용자에게 보고하고 멈추세요.")
             flow.consec_fail = 0   # 정상 응답 → 연속 실패 카운터 리셋(일시 블립 회복)
+            if refused:
+                need = (refused_m.group(1) or "").strip() or "해당 전문 직군"
+                if flow.log:
+                    flow.log("work_refused_offdomain", to=to, need=need[:30], seg=flow.leader_segment)
+                return _ok(f"[직군밖 반려] {flow._info(to) or to}가 이 일을 **자기 직군 밖**으로 판정했습니다 — "
+                           f"필요 직군: {need}.\n**recruit(role='{need}')로 예비를 채용해 그 전문가에게 Work로 "
+                           f"맡기세요** — 같은 동료나 관계없는 직군에 다시 떠넘기지 마세요(이 반려는 실패가 아니라 "
+                           f"올바른 전문화 신호입니다. 소유는 해제됐고, 채용된 전문가가 새 owner가 됩니다).\n"
+                           f"--- 반려 보고 원문 ---\n{(result or '')[:400]}")
             # owner가 깨어났지만 '실작업 없이'(run/Write/Edit 0회) 곧장 반환 = 아직 착수 전/계획만. 리더가 대신
             # 구현·완료하지 말 것(독점·허위완료의 정확한 진입점). 같은 owner에게 다시 맡겨 '검증된 산출물'을 받게
             # 안내한다. 이 응답은 캐시하지 않는다 → 같은 턴에 재위임해도 합쳐지지 않고 실제로 다시 깨운다.
@@ -752,6 +779,14 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
     async def recruit(args):
         role_name = (args.get("role") or "").strip()
         spec = (args.get("member") or "").strip()
+        # [전문화 정책 — 범용 직군 금지(사용자 결정)] 범용(풀스택 등)은 모든 일을 흡수해 전문 채용을
+        # 억제하고(라이브: AI·서버·데이터가 한 봇에 22건 집중) 병렬의 병목이 된다. 전문 직군으로 나눠 뽑는다.
+        if role_name and any(g in _norm_job(role_name)
+                             for g in ("풀스택", "풀 스택", "fullstack", "full stack", "full-stack",
+                                       "제너럴", "generalist", "만능", "올라운드")):
+            return _ok(f"채용 거부(전문화 정책): '{role_name}' 같은 범용 직군은 두지 않습니다 — 범용은 모든 "
+                       f"일을 흡수해 전문 채용을 막고 병렬의 병목이 됩니다(1봇 1직업 전문화가 회사 원칙). "
+                       f"필요한 전문 직군으로 나눠 뽑으세요(예: 백엔드 / 프론트엔드 / AI 엔지니어 / 데이터 엔지니어).")
         # [직군 중복 생성 게이트 — 근본] recruit가 자유 텍스트 직군명을 받다 보니 흐름마다 변형 이름
         # ('VFX 전문가' 있는데 'VFX 아티스트')으로 '같은 도메인 직군'이 새 Discord 역할로 계속 불어났다.
         # 비교 풀은 현재 팀 라벨 + '서버의 커스텀 역할 전체'(직군 역할은 서버 영속이라, 토큰 유실/오프라인
