@@ -1193,7 +1193,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     chosen = next((o for o in opts if o in pick or pick in o), None)
                     if chosen:
                         tally[chosen] += 1
-                    reasons.append(f"{flow._info(v) or v}: {(pick or '무효')} — {(res or '')[:150]}")
+                    # [판정자 사본도 침묵 절단 금지] 리더는 이 근거로 표결을 '판정'한다 — 채널
+                    # 발언(400 안전망+잘림 표기)과 같은 내용이어야 한다. 종전 [:150] 하드컷은
+                    # 판정자가 동강난 근거로 결정하게 만들던 같은 부류의 결함(잘림 사건의 잔재).
+                    reasons.append(f"{flow._info(v) or v}: {(pick or '무효')} — {_speech_clip(res, 400)}")
                     await _say(v, f"[표] {(pick or '무효')} — {_speech_clip(res, 400)}")  # 본인 명의 발언
                     if v in flow.current.team and v != flow.leader:
                         flow.current.participated.add(v)        # 표결 참여 = 실질 협의 인정

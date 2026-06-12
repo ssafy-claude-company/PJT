@@ -2160,6 +2160,31 @@ def test_수면증류_흐름참여_전문가는_스킵_가용하면_진행(tmp_p
 # ───────────────── 병렬 Info fork-join — 표결·회의 1라운드 '독립 의견'의 동시 수집 ─────────────────
 
 
+def test_표결_판정자_사본은_침묵절단되지_않는다():
+    """[잘림 사건의 잔재 — 회귀 가드] 리더가 표결을 판정할 때 받는 '각자의 선택·근거'가 종전
+    [:150] 하드컷으로 단어 중간에서 동강났다(채널 발언은 _speech_clip으로 고쳤는데 판정자
+    사본이 빠짐). 근거는 전문이 전달되거나, 안전망(400)을 넘으면 '잘렸다'는 표기가 붙어야
+    한다 — 침묵 절단 금지."""
+    from src.communication import Engagement
+    eng = Engagement()
+    f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드", 13: "QA"})
+    f.comm.attach_engagement(eng, "P-A")
+    f.start_root("root")
+    mid = "성능과 메모리 곡선을 함께 고려하면 캔버스가 우세합니다. " * 6   # 150자 초과, 400자 이하
+    long = "근거가 아주 깁니다. " * 60                                      # 400자 초과(안전망 발동)
+
+    async def wake(to, b, k):
+        return f"[표] Canvas\n{mid if to == 12 else long}"
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    r = asyncio.run(t["vote"].handler({"question": "렌더?", "options": "Canvas;SVG", "members": ""}))
+    txt = r["content"][0]["text"]
+    assert mid.strip()[:200] in txt          # 150자 넘는 근거가 통째로 전달(종전엔 150에서 동강)
+    assert "안전망에서 잘림" in txt           # 400자 초과는 자르되 '잘렸다'고 표기(침묵 금지)
+
+
 def test_표결_동시수집_점유와_해제():
     """[병렬 fork-join] 표결은 멤버들을 '동시에' 깨워 독립 의견을 모은다(겹침 실측) — 수집 동안
     가지 봇은 전역 점유돼 타 흐름이 못 집어가고, 조인 후 즉시 회사 풀로 돌아간다."""
