@@ -642,6 +642,7 @@ def test_허위완료_차단_run검증_후에만_마감():
     asyncio.run(tools["run"].handler({"command": "echo ok"}))
     assert f.current.verified is True and f.current.run_count == 1 and f.current.evidence
     # 마감 허용 — 결과엔 에이전트 '보고' 옆에 시스템 실행기록(실제 출력)이 떼어낼 수 없게 묶인다
+    f.current.cross_checks = 1                    # 검증 분업 게이트(별도 테스트)와 무관한 의도 보존
     r2 = asyncio.run(tools["complete_task"].handler({"result": "검증 후 완료"}))
     assert "완료" in r2["content"][0]["text"] and f.current is None
     res = f.tasks[-1].status.result
@@ -1025,6 +1026,7 @@ def test_재위임은_Redo로_바운드_정당한첫위임은_허용():
     assert "한도" in r["content"][0]["text"] and len(waked) == n_before
     # 4) 새 Task를 열면 추적이 초기화 → 같은 동료라도 다시 '첫 위임'(다른 산출물)
     f.current.verified = True
+    f.current.cross_checks = 1                    # 검증 분업 게이트(별도 테스트)와 무관한 의도 보존
     asyncio.run(tools["complete_task"].handler({"result": "ok"}))
     asyncio.run(tools["create_task"].handler({"purpose": "p2", "members": "12"}))
     assert not f.comm.delivered_work(11, 12)
@@ -1088,6 +1090,7 @@ def test_owner_미착수면_허위완료_차단_실작업후_완료허용():
     asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "public/ 구현"}))
     assert f.current.owner_delivered is True
     assert not any(ev[0] == "redo" for ev in f.comm.history)   # 첫 인도라 Redo 아님
+    t and setattr(f.current, "cross_checks", 1)   # 검증 분업 게이트(별도 테스트)와 무관한 의도 보존
     rc2 = asyncio.run(t["complete_task"].handler({"result": "owner 검증 완료"}))
     assert "마감" in rc2["content"][0]["text"] and f.current is None
 
@@ -1120,6 +1123,7 @@ def test_미완owner_Task는_완료거부_이어가기는_Redo아님():
     assert not any(ev[0] == "redo" for ev in f.comm.history)        # 이어가기는 Redo 아님
     assert f.current.owner_incomplete is False                      # 완료 반환 → 미완 해제
     assert f.current.owner_delivered is True                        # 실작업 인도됨 → 완료 가능
+    f.current.cross_checks = 1                    # 검증 분업 게이트(별도 테스트)와 무관한 의도 보존
     r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
     assert "마감" in r2["content"][0]["text"] and f.current is None   # 이제 완료 마감 허용
 
@@ -1785,6 +1789,55 @@ def test_진행중_프로젝트의_채널은_재등록이_못_옮긴다(tmp_path
     assert s.projects[900]["channel"] == 900 and 500 not in s.projects   # 기존 이동 동작 유지
 
 
+def test_검증분업_교차검증0이면_완료_1회보류_재호출은_통과():
+    """[품질 판정 독점 방지] owner 인도 후 '다른 멤버'의 검증 참여가 0이면 complete_task 첫 호출을
+    보류하고 검증 위임을 안내한다 — 라이브 P-009: QA·교차 검증 0인 채 리더 단독 마감 → 브라우저
+    렉·적 돌진 등 사용성 결함이 통과(사용자가 첫 발견). 재호출은 통과(판단은 리더, 무한 반려 금지),
+    교차 검증이 있으면 보류 없음."""
+    g = FakeGuide()
+    f = _flow(g)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    r1 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert "완료 보류" in r1["content"][0]["text"] and f.current is not None   # 1회 보류
+    r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert f.current is None and "보류" not in r2["content"][0]["text"]        # 재호출 통과
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "g2"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.current.cross_checks = 1
+    r3 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert f.current is None and "보류" not in r3["content"][0]["text"]        # 교차 검증 有 → 즉시 통과
+
+
+def test_협의기록은_Work위임에_동봉되고_스냅샷에_생존한다(tmp_path):
+    """[스펙 증발 방지] 회의·표결 합의(collab_notes)는 ① 이후 모든 Work 위임 본문에 자동 동봉되고
+    ② Task 스냅샷에 영속돼 재개 후 위임에도 살아있다 — 라이브 P-009: 9직군이 회의로 정한 스펙이
+    구현자에게 전달되지 않아(리더 요약 의존·재개 스코프 단절) 품질로 이어지지 못함."""
+    g = FakeGuide()
+    f = _flow(g)
+    waked = []
+
+    async def wake(to, b, k):
+        waked.append(b)
+        return "구현 완료 보고"
+    f.wake = wake
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    f.current.collab_notes = "[회의] 상태머신 5단계 합의\n[표결] 스택=Node+TF.js"
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현해줘"}))
+    assert any("[팀 협의 기록" in b and "상태머신 5단계" in b for b in waked)   # 위임 동봉
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "B"}, session_dir=str(tmp_path))
+    snap = s._task_snapshot(f, f.current)
+    assert "상태머신 5단계" in snap["collab_notes"]                            # 스냅샷 생존
+
+
 def test_배포명은_프로젝트별_결정적(monkeypatch):
     """[멀티 프로젝트] 배포 서비스명은 '프로젝트 신원'에서만 결정적으로 유도된다 — 미등록 흐름은
     슬롯이 없다(사용자 설계: 배포는 프로젝트마다). 과거의 DEPLOY_NAME env·인자·기본 폴백은
@@ -2387,6 +2440,7 @@ def test_Task_체크포인트_전이마다_영속_마감시_해제(tmp_path):
     f.current.verified = True                                      # (인도 게이트는 별도 테스트가 커버)
     f.current.owner_delivered = True
     f.current.owner_incomplete = False
+    f.current.cross_checks = 1                    # 검증 분업 게이트(별도 테스트)와 무관한 의도 보존
     asyncio.run(t["complete_task"].handler({"result": "끝"}))
     assert s.projects[500]["open_task"] is None                    # 마감 즉시 해제(유령 복원 방지)
 

@@ -273,6 +273,9 @@ class TaskRef:
                                                      #   → 거짓이면 complete_task 거부(owner 미응답·착수전인데 리더가 대신 허위완료 차단)
     verified: bool = False                           # run으로 한 번이라도 실행됐나(실행 0회 완료 차단)
     work_delegated: int = 0                          # 리더가 이 Task에서 보낸 Work 위임 수(0이면 '자문만 받고 독식' 의심)
+    collab_notes: str = ""                           # 회의·표결 합의 기록 — Work 위임에 자동 동봉(스펙이 회의에서 증발하던 결함 방지)
+    cross_checks: int = 0                            # owner 인도 후 '다른 멤버'의 검증 참여 수(0이면 complete 1회 보류 — 품질 판정 독점 방지)
+    complete_retry: bool = False                     # 검증 분업 보류를 이미 1회 받았나(재호출은 통과 — 판단은 결국 리더, 무한 반려 금지)
     leader_writes: int = 0                           # 리더가 이 Task에서 직접 쓴 파일 수(위임 없이 독식하면 차단)
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
@@ -553,6 +556,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                               f"보고 **첫 줄**에 `[직군밖] 필요직군명` 을 적어 반려하세요 — 리더가 그 직군을 "
                               f"채용해 맡깁니다(전문화 원칙: 관계없는 일을 흡수하지 않는 것이 옳은 행동입니다).\n"
                               f"[요청 맥락] {body}")
+                notes = getattr(flow.current, "collab_notes", "")
+                if notes:
+                    # [스펙 증발 방지] 회의·표결의 합의는 리더 머릿속이 아니라 위임 계약에 실린다 —
+                    # 라이브 P-009: 9직군이 회의로 정한 스펙(상태머신·SLA·타이밍 계약)이 구현자에게
+                    # 전달되지 않아(스코프 단절·리더 요약 의존) 결과물 품질로 이어지지 못함.
+                    owner_body += f"\n[팀 협의 기록(회의·표결) — 구현·검증 시 이 합의를 준수]\n{_speech_clip(notes, 3000)}"
         thread_id = flow.current.thread_id
         # Owner = 그 일을 Work로 받은 동료(수신=소유). 선배정이 아니라 요청으로 owner가 떠오른다 —
         # 이 Task에 아직 owner가 없을 때 첫 Work-request 수신자가 책임자가 된다(중앙집권 방지).
@@ -737,6 +746,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             if (kind == Kind.WORK and not was_clarify and flow.current
                     and flow.current.run_count > runs_before and flow.current.evidence):
                 receipt = f"\n[owner 실행 증거(시스템 캡처)] {_speech_clip(flow.current.evidence, 1000)}"
+            if flow.current and flow.current.owner_delivered and to != flow.current.owner:
+                # owner가 인도한 '후'의 타 멤버 응답 = 교차 검증 참여(직군 무관 공용 신호 — complete 보류 게이트의 근거)
+                flow.current.cross_checks += 1
             flow.req_results[dupkey] = result   # 같은 턴 병렬 중복요청이 재사용할 응답 캐시(동료 재호출 방지)
             return _ok(f"[{to} 응답] {_speech_clip(result, 4000)}{receipt}")
 
@@ -941,6 +953,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
 
     @tool("run",
           "작업공간에서 명령을 실행해 산출물을 직접 검증(빌드/구동/테스트). cwd=작업공간, 60s 제한, "
+          "웹 작품은 **실제 브라우저 검증 가능**: playwright+chromium 설치됨 — 예: PJT venv의 python -c로 "
+          "sync_playwright 페이지 로드→로드시간·콘솔에러·스크린샷 확인('실행됨'과 '사용할 만함'은 다르다). "
           "출력 반환. 서버 구동은 'node server.js & sleep 1; curl -s localhost:3000/'처럼 백그라운드+점검으로 "
           "묶으면 됨 — run이 끝나면 백그라운드 프로세스까지 자동 정리하므로 kill 불필요(다음 run의 포트 충돌 없음). "
           "파괴·git·시스템경로 명령은 차단.",
@@ -1104,7 +1118,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.current.status.goal = goal
             await flow.refresh(flow.current)
             _ckpt(flow)                       # 크래시-세이프: 확정된 Purpose·Goal 영속
-            return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}")
+            import re as _re
+            n_items = len(_re.findall(r"^\s*\d+[).]", goal, _re.M))
+            tip = ""
+            if n_items >= 4:
+                # [공급 원칙 — 정보는 구조가, 판단은 리더가] 다항목 goal을 Task 1개로 가면 검증·마감
+                # 게이트가 단 1회뿐(라이브 P-009: 6항목 게임이 Task 1개 → 부분 결함이 일괄 통과).
+                tip = (f"\n[정보 — 판단은 당신 몫] goal이 {n_items}항목입니다. 한 Task로 가면 검증·마감이 "
+                       f"단 1회라 부분 결함이 묻히기 쉽습니다 — 영역별로 Task를 나눠(create_task→위임→검증→"
+                       f"complete_task 반복) 부분마다 마감하는 것을 고려하세요.")
+            return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}{tip}")
         tools.append(set_goal)
 
         @tool("complete_task",
@@ -1132,6 +1155,18 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            f"수 있음). **owner가 일하는 중에 대신 완료하지 마세요(허위 완료 금지).** 같은 owner에게 "
                            f"request(Work)로 맡겨 run 검증 증거가 붙은 완료 응답을 받은 뒤 complete_task 하세요. "
                            f"끝내 무응답이면 recruit/재배정으로 다른 담당에게 맡기세요(리더가 대리 구현·완료 금지).")
+            # [검증 분업 — 1회 보류] 품질 판정이 리더 1인에게 독점되는 것을 구조적으로 흔든다(라이브
+            # P-009: QA·교차 검증 0인 채 단독 마감 → 브라우저 렉·적 돌진 등 사용성 결함이 그대로 통과,
+            # 사용자가 첫 발견). owner 인도 후 '다른 멤버'의 검증 참여가 0이면 첫 호출만 보류하고 검증
+            # 위임을 안내한다 — 재호출은 통과(판단은 결국 리더 몫, 무한 반려 금지. 직군 키워드 없음).
+            if (flow.current.owner and flow.current.cross_checks == 0
+                    and not flow.current.complete_retry):
+                flow.current.complete_retry = True
+                return _ok("완료 보류(1회): owner 인도 후 **다른 멤버의 검증 참여가 0**입니다 — 지금 마감하면 "
+                           "품질 판정자가 당신 혼자입니다. 산출물에 맞는 동료에게 request(Work)로 "
+                           "'**사용자처럼 처음부터 끝까지 실제로 사용·플레이해 보고** goal 항목별 충족/결함을 "
+                           "보고하라'고 검증을 맡긴 뒤 마감하세요(검증자의 결함 보고는 Redo의 근거가 됩니다). "
+                           "그래도 단독 마감이 옳다고 판단하면 complete_task를 다시 호출하면 통과됩니다.")
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.
@@ -1201,6 +1236,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     if v in flow.current.team and v != flow.leader:
                         flow.current.participated.add(v)        # 표결 참여 = 실질 협의 인정
                 board = " / ".join(f"{o}: {n}표" for o, n in tally.items())
+                if flow.current is not None:
+                    record = f"[표결] {question}\n{board}\n" + "\n".join(reasons)
+                    flow.current.collab_notes = _speech_clip(
+                        (getattr(flow.current, 'collab_notes', '') + '\n\n' + record).strip(), 6000)
+                    _ckpt(flow)
                 return _ok(f"[표결 집계] {question}\n{board}\n\n[각자의 선택·근거]\n" + "\n".join(reasons)
                            + "\n\n(집계는 참고 — 최종 확정은 당신(리더)의 판정입니다.)")
 
@@ -1302,6 +1342,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         await _say(m, f"[회의 {r}R] {cut}")  # 본인 명의 발언
                         if m in flow.current.team and m != flow.leader:
                             flow.current.participated.add(m)    # 회의 발언 = 실질 협의 인정
+                if flow.current is not None:
+                    record = f"[회의] {topic} ({rounds}R)\n" + "\n".join(minutes)
+                    flow.current.collab_notes = _speech_clip(
+                        (getattr(flow.current, 'collab_notes', '') + '\n\n' + record).strip(), 6000)
+                    _ckpt(flow)   # 합의는 크래시-세이프(재개 위임에도 동봉되도록 스냅샷에 포함)
                 return _ok(f"[회의록] 주제: {topic} ({rounds}라운드, {len(members)}명)\n"
                            + "\n".join(minutes)
                            + "\n\n(수렴·확정은 당신(리더)의 몫 — 합의점을 정리해 set_goal/결정에 반영하세요.)")

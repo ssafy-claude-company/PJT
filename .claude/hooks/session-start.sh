@@ -16,4 +16,5 @@ if [ ! -x .venv/bin/python ]; then python -m venv .venv 2>/dev/null || python3 -
 # 2) Organt 리스너 자동 기동은 '비활성화'됨.
 #    이유: 자율 봇 군을 운영자 감독 없이(차용 세션 자격증명으로) 상시 가동하지 않기 위함.
 #    리스너가 필요하면 .env(비밀값)를 갖춘 상태에서 수동으로 `bash scripts/run_listener.sh`를 직접 실행한다.
+.venv/bin/playwright install chromium >/dev/null 2>&1 &   # 브라우저 검증 인프라(백그라운드 — 5분 예산 비점유)
 echo "[session-start] 의존성만 보장. 리스너 자동 기동은 비활성화됨(필요 시 수동 실행)."

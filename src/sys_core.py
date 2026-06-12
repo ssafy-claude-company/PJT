@@ -347,6 +347,7 @@ class Sys:
             "owner_name": ref.status.owner or "",
             "team": [int(x) for x in ref.team],
             "result_so_far": (ref.status.result or "")[:500],
+            "collab_notes": getattr(ref, "collab_notes", ""),   # 회의·표결 합의 — 재개 위임에도 동봉
         }
 
     def _status_text(self, flow, t0, final=None) -> str:
@@ -447,6 +448,8 @@ class Sys:
         ref = TaskRef(task_id=snap["task_id"], thread_id=snap["thread_id"],
                       block_id=snap["block_id"], status=status, team=team,
                       owner=int(snap.get("owner") or 0))
+        if snap.get("collab_notes"):
+            ref.collab_notes = snap["collab_notes"]   # 합의 기록 복원 — 재개 후 위임에도 동봉(스펙 증발 방지)
         flow.tasks.append(ref)
         flow.current = ref
         # 되살린 Task 멤버를 프로젝트 팀에 **합친다(union)** — 덮어쓰면 그 Task에 낀 일부 멤버로

@@ -2,3 +2,4 @@
 claude-agent-sdk>=0.2.0   # Organt(LLM) 지속 세션·커스텀 툴·훅
 discord.py>=2.3           # System/Organt 봇 (Discord 게이트웨이)
 python-dotenv>=1.0        # .env 로딩(환경변수 미설정 시 보조)
+playwright
