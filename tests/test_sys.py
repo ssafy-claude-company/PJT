@@ -2995,10 +2995,34 @@ def test_검증위임에_owner도메인_루브릭_자동주입():
     f.current.owner_delivered = True                   # owner(백엔드) 인도 완료
     asyncio.run(t["request"].handler({"to_id": "13", "kind": "Work", "body": "검증해줘"}))   # 검증 위임(QA에게)
     body13 = [b for to, b in waked if to == 13][-1]
-    assert "검증 루브릭" in body13 and "엣지·경계값을 시뮬로" in body13   # owner(백엔드) 도메인 루브릭 주입
+    assert "산출물 품질 기준" in body13 and "엣지·경계값을 시뮬로" in body13   # owner(백엔드) 도메인 기준 주입(검증/후속구현 양쪽 커버)
     waked.clear()
     asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "보완"}))        # owner 본인 재위임
     body12 = [b for to, b in waked if to == 12][-1]
-    assert "검증 루브릭" not in body12                  # owner 자신에겐 루브릭 안 붙음
+    assert "산출물 품질 기준" not in body12             # owner 자신에겐 안 붙음
 
 
+
+
+def test_리더독식_Task도_교차검증_의무(tmp_path):
+    """[발견1 교정 2026-06-13] owner 없이 리더가 직접 구현한 Task(leader_writes>0)도 제3자 검증을
+    면제하지 않는다 — '누가 만들었든 제3자 검증'은 보편 이치(코드리뷰 연구). 종전엔 owner==0이면
+    교차검증 게이트가 건너뛰어 리더 독식이 검증 0으로 마감되던 구멍(P-009/P-010 리더 run 독식 경로)."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[13] = "프론트"
+    f.project_team.append(13)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "13"}))
+    f.current.participated.add(13)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    # 리더가 owner 없이 직접 구현(leader_writes>0), owner는 0
+    f.current.owner = 0
+    f.current.leader_writes = 2
+    f.current.verified = True
+    r1 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert "완료 거부(교차 검증" in r1["content"][0]["text"] and f.current is not None   # 리더 독식도 검증 의무
+    # 타 멤버(13)가 검증 참여 → cross_checks 증가 → 게이트 통과
+    f.current.cross_checks = 1
+    r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert f.current is None                            # 검증 후 마감 통과

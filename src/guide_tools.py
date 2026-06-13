@@ -584,10 +584,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     rub = [flow.craft_of(j) for j in owner_job.split("·") if j.strip()]
                     rub = [r for r in rub if r]
                     if rub:
-                        owner_body += (f"\n[검증 루브릭 — 이 산출물('{owner_job}' 도메인)을 **사용자처럼 실제로 "
-                                       f"사용·플레이**하며 아래 기준의 각 항목을 충족/미달로 채점하고, 미달은 "
-                                       f"구체적 결함으로 보고하세요. '돌아가는가'가 아니라 '이 기준에 충분한가'가 "
-                                       f"질문입니다(rubric-guided 검증):\n" + _speech_clip("\n---\n".join(rub), 2500))
+                        # [발견2 완화] owner 인도 후 타 멤버 Work가 '검증'인지 '후속 구현'인지 구조로 완벽히
+                        # 구분 불가(의도의 문제) — 메시지가 양쪽을 다 커버해 오발동을 무해화한다: 검증 위임이면
+                        # 채점, 후속 구현이면 같은 기준을 '참고'(통합 시 품질 인식). 어느 쪽이든 owner 도메인
+                        # 기준이 주입되는 건 손해가 아니다('충분한가'의 눈을 공유).
+                        owner_body += (f"\n[산출물 품질 기준 — '{owner_job}' 도메인. 이 요청이 **검증**이면 산출물을 "
+                                       f"'사용자처럼 실제로 사용·플레이'하며 아래 각 항목을 충족/미달로 채점하고 미달은 "
+                                       f"구체적 결함으로 보고하세요(돌아가는가 아니라 '충분한가'). 이 요청이 **후속 "
+                                       f"구현/통합**이면 아래 기준을 참고해 같은 품질 수준을 맞추세요:\n"
+                                       + _speech_clip("\n---\n".join(rub), 2500))
         thread_id = flow.current.thread_id
         # Owner = 그 일을 Work로 받은 동료(수신=소유). 선배정이 아니라 요청으로 owner가 떠오른다 —
         # 이 Task에 아직 owner가 없을 때 첫 Work-request 수신자가 책임자가 된다(중앙집권 방지).
@@ -772,8 +777,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             if (kind == Kind.WORK and not was_clarify and flow.current
                     and flow.current.run_count > runs_before and flow.current.evidence):
                 receipt = f"\n[owner 실행 증거(시스템 캡처)] {_speech_clip(flow.current.evidence, 1000)}"
-            if flow.current and flow.current.owner_delivered and to != flow.current.owner:
-                # owner가 인도한 '후'의 타 멤버 응답 = 교차 검증 참여(직군 무관 공용 신호 — complete 보류 게이트의 근거)
+            # [발견1 교정 2026-06-13] 검증 대상 산출물이 '존재'하면(owner 위임 인도 OR 리더가 직접
+            # 구현=leader_writes>0) 그 후 타 멤버 응답을 교차 검증 참여로 센다 — 리더 독식 Task(owner==0)도
+            # 제3자 검증 대상('누가 만들었든 제3자 검증'은 보편 이치). 종전엔 owner_delivered만 봐서 리더
+            # 독식이 검증 면제되던 구멍.
+            product_ready = (flow.current.owner_delivered
+                             or (not flow.current.owner and getattr(flow.current, "leader_writes", 0) > 0))
+            if flow.current and product_ready and to != flow.current.owner:
                 flow.current.cross_checks += 1
             flow.req_results[dupkey] = result   # 같은 턴 병렬 중복요청이 재사용할 응답 캐시(동료 재호출 방지)
             return _ok(f"[{to} 응답] {_speech_clip(result, 4000)}{receipt}")
@@ -1207,19 +1217,22 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 결함을 통과시킴. 제3멤버가 정말 없을 때만 예외(단독 마감 마커가 기록에 남는다).
             third = [m for m in flow.current.team
                      if m not in (flow.leader, flow.current.owner)]
-            if flow.current.owner and flow.current.cross_checks == 0 and third:
+            # [발견1 교정] 검증 대상: owner 위임 산출물 OR 리더 직접구현(leader_writes>0). 리더 독식도
+            # 제3자 검증을 면제하지 않는다(보편 이치). 산출물도 없으면(아무것도 안 만든 Task) 게이트 무의미.
+            has_product = bool(flow.current.owner) or getattr(flow.current, "leader_writes", 0) > 0
+            if has_product and flow.current.cross_checks == 0 and third:
                 idle = [m for m in third if flow.act_by.get(m, 0) == 0]
                 idle_note = (f"\n[정보] 이 Task 팀에서 **실작업·검증 참여 0**인 멤버: {flow._names(idle)} — "
                              f"goal에 이들의 전문 영역이 있다면 그 부분의 검증·보완을 이들에게 맡기는 것이 "
                              f"자연스럽습니다." if idle else "")
                 per_item = "goal의 각 부분·기준 **각각**의 충족/결함을"   # 항목 '수' 카운트 제거(매직넘버 함정) — '각 부분'은 수 무관
-                # [RFC-008 P0 — 직무 기준을 검증 루브릭으로] owner 산출물 도메인의 craft profile을 검증
-                # 루브릭으로 제공한다. QA가 "작동하는가"(holistic)가 아니라 "이 기준 대비 충분한가"를
-                # 차원별로 보게 — rubric-guided judge가 인간 일치를 +20pt 올린다(arXiv 2603.13391).
-                # 핵심 통찰(RFC-008): '측정 가능한 기능'만 보면 측정 어려운 품질이 빠진다(Holmström-Milgrom).
-                # 루브릭은 그 품질 차원을 평가 가능하게 끌어올리는 장치 — 단 binary 점수가 아니라 전문가 판단의 보조.
+                # [RFC-008 P0 — 직무 기준을 검증 루브릭으로] 산출물 도메인(owner 직군, 리더 독식이면 리더 직군)의
+                # craft profile을 검증 루브릭으로 제공한다. QA가 "작동하는가"(holistic)가 아니라 "이 기준 대비
+                # 충분한가"를 차원별로 보게 — rubric-guided judge가 인간 일치를 +20pt(arXiv 2603.13391).
+                # 루브릭은 평가 가능하게 끌어올리는 장치 — binary 점수가 아니라 전문가 판단의 보조.
                 rubric = ""
-                owner_job = (flow._info(flow.current.owner) or "").strip()
+                owner_job = ((flow._info(flow.current.owner) if flow.current.owner
+                              else flow._info(flow.leader)) or "").strip()
                 if callable(getattr(flow, "craft_of", None)) and owner_job:
                     parts = [flow.craft_of(j) for j in owner_job.split("·") if j.strip()]
                     parts = [p for p in parts if p]
@@ -1228,7 +1241,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                                   f"**이 기준을 그대로 전달**하고, 검증자에게 각 항목을 '실제 사용해 충족/미달'로 "
                                   f"채점하게 하세요. '돌아가는가'가 아니라 '이 기준에 비춰 충분한가'가 검증의 "
                                   f"질문입니다(미달 항목은 구체적 결함으로):\n" + _speech_clip("\n---\n".join(parts), 2500) + "]")
-                return _ok(f"완료 거부(교차 검증 의무 — Rule/Task): owner 인도 후 **다른 멤버의 검증 참여가 "
+                return _ok(f"완료 거부(교차 검증 의무 — Rule/Task): 산출물 인도 후 **다른 멤버의 검증 참여가 "
                            f"0**입니다. 팀의 다른 멤버에게 request(Work)로 '**사용자처럼 처음부터 끝까지 실제로 "
                            f"사용·플레이해 보고** {per_item} 위 루브릭 기준으로 채점·보고하라'고 검증을 맡긴 뒤 "
                            f"마감하세요(검증자의 결함 보고는 Redo의 근거). 검증 응답이 돌아오면 게이트는 자동으로 "
@@ -1240,7 +1253,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # [침묵 강행 불가] 검증 분업 보류를 재호출로 강행한 '단독 마감'은 기록에 그렇게 보이게 한다
             # ("자를 수는 있어도 조용히는 못 자른다"의 마감 버전) — 행동은 막지 않되(자동 회사·리더 판단),
             # 사후 분석·사용자가 한눈에 보게(범용 이치의 구조 잠금, 사용자 승인 2026-06-12).
-            solo = bool(flow.current.owner and flow.current.cross_checks == 0)
+            solo = bool((flow.current.owner or getattr(flow.current, "leader_writes", 0) > 0)
+                        and flow.current.cross_checks == 0)
             if solo and flow.log:
                 flow.log("task_solo_completed", task=flow.current.task_id, owner=int(flow.current.owner or 0))
             done_ref.status.status = "완료"
