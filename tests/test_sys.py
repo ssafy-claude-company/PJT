@@ -1826,6 +1826,41 @@ def test_교차검증_의무_제3멤버가_있으면_단독마감_불가():
     assert "단독 마감" in f.tasks[1].status.result                 # 침묵 강행 불가 — 기록에 보임
 
 
+def test_검증게이트에_owner직군_직무기준이_루브릭으로_주입된다():
+    """[RFC-008 P0] 교차 검증 거부 시, owner 산출물 도메인의 직무 기준(craft profile)을 검증 루브릭으로
+    제공한다 — QA가 '작동하는가'(holistic)가 아니라 '이 기준 대비 충분한가'를 차원별로 보게(rubric-guided
+    judge가 인간 일치를 +20pt; 측정 가능한 기능만 보면 품질이 빠지는 Holmström-Milgrom 함정의 처방).
+    craft profile이 없으면 루브릭은 비고(검증자가 먼저 기준을 쓰는 기존 경로), 겸직은 직군별로 합친다."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[12] = "백엔드·QA"          # 겸직 owner
+    f.bot_info[13] = "프론트"
+    f.project_team.append(13)
+    f.craft_of = lambda job: {"백엔드": "엣지·경계값을 시뮬로 직접 재현해 검증한다",
+                              "QA": "실플레이 시나리오를 끝까지 재현한다"}.get(str(job).strip(), "")
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.add(12); f.current.participated.add(13)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    r = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    txt = r["content"][0]["text"]
+    assert "완료 거부(교차 검증" in txt
+    assert "검증 루브릭" in txt and "백엔드·QA" in txt          # 산출물 도메인 명시
+    assert "엣지·경계값을 시뮬로" in txt and "실플레이 시나리오" in txt   # 겸직 두 직군 craft 합쳐 주입
+    # craft profile이 없는 owner → 루브릭 비고(기존 거부 메시지는 유지)
+    f.current.cross_checks = 1                                    # 게이트 통과시켜 새 Task로
+    asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    asyncio.run(t["create_task"].handler({"members": "13"}))
+    f.current.participated.add(13)
+    asyncio.run(t["set_goal"].handler({"goal": "g2"}))
+    f.bot_info[13] = "프론트"; f.project_team.append(99); f.bot_info[99] = "디자이너"
+    f.current.team.append(99)
+    f.current.owner, f.current.owner_delivered, f.current.verified = 13, True, True   # 프론트=craft 없음
+    r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert "완료 거부(교차 검증" in r2["content"][0]["text"] and "검증 루브릭" not in r2["content"][0]["text"]
+
+
 def test_협의기록은_Work위임에_동봉되고_스냅샷에_생존한다(tmp_path):
     """[스펙 증발 방지] 회의·표결 합의(collab_notes)는 ① 이후 모든 Work 위임 본문에 자동 동봉되고
     ② Task 스냅샷에 영속돼 재개 후 위임에도 살아있다 — 라이브 P-009: 9직군이 회의로 정한 스펙이

@@ -1146,7 +1146,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 tip = (f"\n[정보 — 판단은 당신 몫] goal이 {n_items}항목입니다. 한 Task로 가면 검증·마감이 "
                        f"단 1회라 부분 결함이 묻히기 쉽습니다 — 영역별로 Task를 나눠(create_task→위임→검증→"
                        f"complete_task 반복) 부분마다 마감하는 것을 고려하세요.")
-            return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}{tip}")
+            # [RFC-008 P0 — 품질/기능 분리] 측정 가능한 기능만 goal에 담으면 측정 어려운 품질이 빠진다
+            # (Holmström-Milgrom 다중작업: 측정가능한 것만 보상 → 품질 이탈이 최적). 기능 체크리스트와
+            # 별도로 '이 도메인의 훌륭함'(완성도·UX·재미)을 품질 차원으로 의식하게 — 정의 불가한 품질도
+            # 부분 operationalize는 가능(Graham). 강제 아닌 공급(암묵지라 다 못 적음 — Polanyi).
+            qbar = ("\n[품질 차원 — 기능과 별개] goal의 '기능 체크리스트'는 '되는가'만 봅니다. 하지만 "
+                    "'작동≠훌륭함'입니다(라이브: 작동하나 품질 낮은 게임). 마감 검증 때 각 전문가의 직무 "
+                    "기준(품질 루브릭)으로 '이 도메인 기준에 충분한가'를 함께 봅니다 — 지금 그 품질 기대치를 "
+                    "팀과 한 줄 공유해두면(예: '프로그래머 아트가 아닌 일관된 비주얼', '첫 30초에 재미') "
+                    "검증이 명확해집니다.")
+            return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}{tip}{qbar}")
         tools.append(set_goal)
 
         @tool("complete_task",
@@ -1191,10 +1200,26 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                              f"자연스럽습니다." if idle else "")
                 n_items = len(re.findall(r"^\s*\d+[).]", flow.current.status.goal or "", re.M))
                 per_item = (f"goal {n_items}항목 **각각**의 충족/결함을" if n_items >= 2 else "goal의 충족/결함을")
+                # [RFC-008 P0 — 직무 기준을 검증 루브릭으로] owner 산출물 도메인의 craft profile을 검증
+                # 루브릭으로 제공한다. QA가 "작동하는가"(holistic)가 아니라 "이 기준 대비 충분한가"를
+                # 차원별로 보게 — rubric-guided judge가 인간 일치를 +20pt 올린다(arXiv 2603.13391).
+                # 핵심 통찰(RFC-008): '측정 가능한 기능'만 보면 측정 어려운 품질이 빠진다(Holmström-Milgrom).
+                # 루브릭은 그 품질 차원을 평가 가능하게 끌어올리는 장치 — 단 binary 점수가 아니라 전문가 판단의 보조.
+                rubric = ""
+                owner_job = (flow._info(flow.current.owner) or "").strip()
+                if callable(getattr(flow, "craft_of", None)) and owner_job:
+                    parts = [flow.craft_of(j) for j in owner_job.split("·") if j.strip()]
+                    parts = [p for p in parts if p]
+                    if parts:
+                        rubric = (f"\n[검증 루브릭 — 산출물 도메인 '{owner_job}'의 품질 기준. 검증 위임 본문에 "
+                                  f"**이 기준을 그대로 전달**하고, 검증자에게 각 항목을 '실제 사용해 충족/미달'로 "
+                                  f"채점하게 하세요. '돌아가는가'가 아니라 '이 기준에 비춰 충분한가'가 검증의 "
+                                  f"질문입니다(미달 항목은 구체적 결함으로):\n" + _speech_clip("\n---\n".join(parts), 2500) + "]")
                 return _ok(f"완료 거부(교차 검증 의무 — Rule/Task): owner 인도 후 **다른 멤버의 검증 참여가 "
                            f"0**입니다. 팀의 다른 멤버에게 request(Work)로 '**사용자처럼 처음부터 끝까지 실제로 "
-                           f"사용·플레이해 보고** {per_item} 보고하라'고 검증을 맡긴 뒤 마감하세요(검증자의 결함 "
-                           f"보고는 Redo의 근거). 검증 응답이 돌아오면 이 게이트는 자동으로 열립니다.{idle_note}")
+                           f"사용·플레이해 보고** {per_item} 위 루브릭 기준으로 채점·보고하라'고 검증을 맡긴 뒤 "
+                           f"마감하세요(검증자의 결함 보고는 Redo의 근거). 검증 응답이 돌아오면 게이트는 자동으로 "
+                           f"열립니다.{rubric}{idle_note}")
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.

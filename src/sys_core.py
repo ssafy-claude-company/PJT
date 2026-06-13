@@ -612,9 +612,11 @@ class Sys:
             notes.append(
                 f"[직무 기준 작성 — 이번 한 번만] 당신 직군 '{missing[0]}'의 직무 기준이 아직 없습니다. "
                 f"이번 보고 **맨 끝에** 아래 형식으로 이 직군의 '훌륭한 산출물·검증 기준' 5~8줄을 작성해 "
-                f"포함하세요. 이후 모든 작업에서 당신의 자기검수 기준으로 영속·주입됩니다 — 당신이 이 "
-                f"직군의 전문가로서 정의하는 것입니다(일반론 말고 이 직군 특유의 품질·검증 기준으로):\n"
-                f"[직무기준] {missing[0]}\n(기준 줄들)\n[/직무기준]")
+                f"포함하세요. 이후 모든 작업에서 당신의 자기검수 기준으로 영속·주입되고, **마감 검증의 "
+                f"루브릭**으로도 쓰입니다 — 당신이 이 직군의 전문가로서 정의하는 것입니다(일반론 말고 이 "
+                f"직군 특유의 품질·검증 기준으로). [RFC-008] 품질은 추상적 규칙보다 **예시로 더 잘 전수**되니"
+                f"(암묵지), 기준 끝에 '좋은 예 / 흔한 나쁜 예'를 각 1줄 덧붙이면 검증자가 'good'을 구체로 "
+                f"잡습니다:\n[직무기준] {missing[0]}\n(기준 줄들)\n좋은 예: …\n나쁜 예(흔한 미달): …\n[/직무기준]")
         return ("\n\n".join(notes) + "\n\n") if notes else ""
 
     def _prompt(self, body, kind, role, me, leader_id=None):
@@ -1213,6 +1215,7 @@ class Sys:
         # '기억'(직업 고정): 예비가 recruit로 직군을 받으면 그 직업을 다음 흐름에도 유지하도록 로스터 라벨에 반영
         # — 흐름 시작 때 _roster_labels로 원복되므로, 여기에 기록해야 채용한 직업이 지속된다(1봇 1직업의 연속성).
         flow.persist_role = self._persist_job   # 채용한 직군을 메모리+디스크(jobs.json)에 영속(재시작에도 유지)
+        flow.craft_of = lambda job: (self.role_profiles.get(str(job).strip(), "") or "")   # [RFC-008 P0] 직군 직무기준 → 검증 루브릭 조회
         flow.checkpoint_task = lambda: self._checkpoint_open_task(flow)   # Task 전이마다 크래시-세이프 영속
         body = user_text
         if proj:                                     # 기존 프로젝트 개입 — 맥락 유지(재생성 X)
