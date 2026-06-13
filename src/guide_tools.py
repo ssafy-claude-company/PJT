@@ -574,6 +574,20 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     # 라이브 P-009: 9직군이 회의로 정한 스펙(상태머신·SLA·타이밍 계약)이 구현자에게
                     # 전달되지 않아(스코프 단절·리더 요약 의존) 결과물 품질로 이어지지 못함.
                     owner_body += f"\n[팀 협의 기록(회의·표결) — 구현·검증 시 이 합의를 준수]\n{_speech_clip(notes, 6000)}"   # 저장 한도(6000)와 일치 — 전달에서 합의가 또 잘리지 않게(품질>토큰)
+                # [RFC-008 P0 — 검증 위임에 루브릭 자동 주입] owner 인도 후 '다른 멤버'에게 가는 Work =
+                # 검증 위임 → owner 산출물 도메인의 직무 기준을 루브릭으로 동봉. 라이브 P-010 1차에서 루브릭이
+                # complete_task 거부 메시지에만 있어 0회 발동(검증이 카운트되면 게이트를 안 탐) — 검증자에게
+                # 직접 주입해야 'owner 도메인 기준 채점'이 실제로 일어난다. '돌아가는가'가 아니라 '충분한가'.
+                if (getattr(flow.current, "owner_delivered", False) and flow.current.owner
+                        and to != flow.current.owner and callable(getattr(flow, "craft_of", None))):
+                    owner_job = (flow._info(flow.current.owner) or "").strip()
+                    rub = [flow.craft_of(j) for j in owner_job.split("·") if j.strip()]
+                    rub = [r for r in rub if r]
+                    if rub:
+                        owner_body += (f"\n[검증 루브릭 — 이 산출물('{owner_job}' 도메인)을 **사용자처럼 실제로 "
+                                       f"사용·플레이**하며 아래 기준의 각 항목을 충족/미달로 채점하고, 미달은 "
+                                       f"구체적 결함으로 보고하세요. '돌아가는가'가 아니라 '이 기준에 충분한가'가 "
+                                       f"질문입니다(rubric-guided 검증):\n" + _speech_clip("\n---\n".join(rub), 2500))
         thread_id = flow.current.thread_id
         # Owner = 그 일을 Work로 받은 동료(수신=소유). 선배정이 아니라 요청으로 owner가 떠오른다 —
         # 이 Task에 아직 owner가 없을 때 첫 Work-request 수신자가 책임자가 된다(중앙집권 방지).

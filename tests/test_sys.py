@@ -2967,3 +2967,36 @@ def test_활동기반_이어가기예산_진행세그는_소모없음():
     s3.run_turn = alt_run_turn
     asyncio.run(s3.handle_user_input(500, 11, "교대 작업", root_id="r"))
     assert len(calls3) == 5                            # 연속 2 무진행이 없으므로 완주(리셋 검증)
+
+
+def test_검증위임에_owner도메인_루브릭_자동주입():
+    """[RFC-008 P0 보강] owner 인도 후 '다른 멤버'에게 가는 Work(=검증 위임)에 owner 산출물 도메인의
+    직무 기준이 루브릭으로 자동 동봉된다 — 라이브 P-010 1차에서 루브릭이 거부 메시지에만 있어 0회
+    발동(검증이 카운트되면 게이트 미통과)한 구멍 교정. 검증자가 'owner 도메인 기준에 충분한가'로
+    채점하게. owner 본인 재위임·owner 미인도 시엔 주입 안 함."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[12] = "백엔드"
+    f.bot_info[13] = "QA"
+    f.project_team.append(13)
+    f.craft_of = lambda job: "엣지·경계값을 시뮬로 직접 재현" if str(job).strip() == "백엔드" else ""
+    waked = []
+
+    async def wake(to, b, k):
+        waked.append((to, b))
+        return "검증 보고"
+    f.wake = wake
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.add(12)
+    f.current.participated.add(13)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    f.current.owner = 12
+    f.current.owner_delivered = True                   # owner(백엔드) 인도 완료
+    asyncio.run(t["request"].handler({"to_id": "13", "kind": "Work", "body": "검증해줘"}))   # 검증 위임(QA에게)
+    body13 = [b for to, b in waked if to == 13][-1]
+    assert "검증 루브릭" in body13 and "엣지·경계값을 시뮬로" in body13   # owner(백엔드) 도메인 루브릭 주입
+    waked.clear()
+    asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "보완"}))        # owner 본인 재위임
+    body12 = [b for to, b in waked if to == 12][-1]
+    assert "검증 루브릭" not in body12                  # owner 자신에겐 루브릭 안 붙음
