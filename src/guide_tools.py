@@ -278,6 +278,7 @@ class TaskRef:
     cross_checks: int = 0                            # owner 인도 후 '다른 멤버'의 검증 참여 수(0이면 complete 1회 보류 — 품질 판정 독점 방지)
     complete_retry: bool = False                     # (구) 1회 보류 시절 잔재 — 교차 검증 의무 하드화(Rule/Task 6)로 미사용, 호환 위해 유지
     leader_writes: int = 0                           # 리더가 이 Task에서 직접 쓴 파일 수(위임 없이 독식하면 차단)
+    contrib_checked: bool = False                    # 팀 기여 의무 게이트(RFC-009) 1회 통과 여부 — 부른 직군이 실작업·검증 0(회의 발언만)이면 1회 보류 후 재호출 통과
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
 
@@ -1246,6 +1247,30 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            f"사용·플레이해 보고** {per_item} 위 루브릭 기준으로 채점·보고하라'고 검증을 맡긴 뒤 "
                            f"마감하세요(검증자의 결함 보고는 Redo의 근거). 검증 응답이 돌아오면 게이트는 자동으로 "
                            f"열립니다.{rubric}{idle_note}")
+            # [팀 기여 의무 게이트 — RFC-009] 교차 검증(cross_checks)과 **독립**. 검증이 됐어도(검증은
+            # 기능 위주라 폴리시 부재를 못 잡음 — RFC-009 §3), 팀에 부른 직군이 이 흐름에서 회의 발언만 하고
+            # 실작업·검증 0(act_by==0: Write/Edit/run 한 번도 없음)이면 그 도메인(타격감·그래픽·사운드·디자인·
+            # UX 등 폴리시)은 작품에 '반영되지 않은' 것이다 — 라이브 P-010: VFX·디자이너·모션·게임비주얼이
+            # 실구현 0인 채 마감돼 "단순 나열 웹·타격감 없는 게임"이 됨(발언≠기여). 직군 키워드 없이 '실작업
+            # 0'만 본다(보편 이치: 부른 직군은 기여한다, 회의 참석≠기여). 1회 보류 후 재호출 통과(무한 반려
+            # 금지 — 판단은 리더). 동면 복구로 act_by가 0에서 재시작한 경우에도 1회 환기되나 '복구 후 기여
+            # 재확인'으로 무해(검증 누계 리셋과 같은 정신) — 재호출 통과.
+            if has_product and not flow.current.contrib_checked:
+                contrib_idle = [m for m in third if flow.act_by.get(m, 0) == 0]
+                if contrib_idle:
+                    flow.current.contrib_checked = True
+                    if flow.log:
+                        flow.log("task_contrib_idle", task=flow.current.task_id,
+                                 idle=[int(m) for m in contrib_idle])
+                    return _ok(
+                        f"완료 보류(팀 기여 의무 — RFC-009): 팀의 {flow._names(contrib_idle)}이(가) 이 흐름에서 "
+                        f"**회의 발언 외 실작업·검증이 0**입니다(Write/Edit/run 0회) — 이 직군의 도메인(예: "
+                        f"타격감·그래픽·사운드·디자인·UX 등 '되는가'를 넘는 폴리시)이 **작품에 반영되지 "
+                        f"않았습니다**. 셋 중 하나를 택하세요: ① 필요한 도메인이면 request(Work)로 맡겨 "
+                        f"**실제로 만들게** 하고 그 산출물을 교차 검증까지 받으세요 ② 애초에 불필요했으면 "
+                        f"팀에서 빼세요(왜 불렀나=다음 학습) ③ 둘 다 아니면 complete_task 재호출로 통과(판단은 "
+                        f"당신). 특히 회의에서 '중요하다'고 한 부분이 실제 산출물에 들어갔는지 확인하세요 — "
+                        f"발언만으로는 작품이 바뀌지 않습니다.")
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.
