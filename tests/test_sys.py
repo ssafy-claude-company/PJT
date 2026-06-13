@@ -1808,7 +1808,7 @@ def test_교차검증_의무_제3멤버가_있으면_단독마감_불가():
     r1 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
     txt1 = r1["content"][0]["text"]
     assert "완료 거부" in txt1 and f.current is not None           # 거부
-    assert "4항목" in txt1                                         # goal 항목별 검증 요구(동적)
+    assert "각 부분·기준" in txt1                                  # 항목 '수' 아닌 '각 부분' 검증 요구(매직넘버 제거)
     assert "실작업·검증 참여 0" in txt1                            # 잠수 멤버(13) 가시화
     r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
     assert "완료 거부" in r2["content"][0]["text"] and f.current is not None   # 재호출도 거부(우회 없음)
@@ -3002,13 +3002,3 @@ def test_검증위임에_owner도메인_루브릭_자동주입():
     assert "검증 루브릭" not in body12                  # owner 자신에겐 루브릭 안 붙음
 
 
-def test_goal_항목수_인라인_원문자_카운트():
-    """[P0 분해 안내 버그 교정] goal을 '1) … / 2) … / 3) … / 4) …'처럼 한 줄에 슬래시로 쓰면 줄 시작만
-    세던 정규식이 1로 오판 → 4항목 분해 안내 미발동(라이브 P-011: 응급실 사이트가 Task 1개로 마감).
-    인라인 '/'·줄바꿈·원문자(①②) 모두 세되, '2.5초' 같은 소수는 오탐 안 함."""
-    from src.guide_tools import _count_goal_items as c
-    assert c("1) e-GEN / 2) REST / 3) 폴백 / 4) 경고") == 4      # 인라인 슬래시(P-011형)
-    assert c("1)a\n2)b\n3)c\n4)d") == 4                       # 줄바꿈
-    assert c("① 4인 ② room_full ③ 팬아웃 ④ 검증") == 4          # 원문자
-    assert c("1) a / 2) b") == 2                                # 2항목(분해 임계 미만)
-    assert c("응답 p95≤200ms, 2.5초 이내, 3.0초") == 0          # 쉼표+소수 오탐 없음

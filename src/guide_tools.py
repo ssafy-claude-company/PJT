@@ -401,16 +401,6 @@ def _speech_clip(s, n=1500) -> str:
     return s if len(s) <= n else s[:n] + f" …(발언 {len(s)}자 — {n}자 안전망에서 잘림)"
 
 
-def _count_goal_items(goal: str) -> int:
-    """goal의 '번호 매긴 항목' 수 — 줄 시작 'N)'·'N.'뿐 아니라 한 줄에 '/'·','로 나열한 인라인
-    'N)'과 원문자(①②③)도 센다. 라이브 버그(P-011): goal을 '1) … / 2) … / 3) … / 4) …'로 한 줄에
-    써서 줄 시작만 보던 정규식이 1항목으로 오판 → 4항목 분해 안내가 발동 안 함(Task 1개로 마감)."""
-    import re as _r
-    n = len(_r.findall(r"(?:^\s*|/\s*)\d+[).]", goal or "", _r.M))   # 줄 시작 또는 '/' 뒤 'N)'/'N.'(쉼표 제외 — '2.5초' 오탐 방지)
-    n += len(_r.findall(r"[①-⑮]", goal or ""))                          # 원문자 ①~⑮
-    return n
-
-
 def make_guide_tools(flow: Flow, me_id: int, role: str):
     g = flow.guide
     tools = []
@@ -1161,15 +1151,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.current.status.goal = goal
             await flow.refresh(flow.current)
             _ckpt(flow)                       # 크래시-세이프: 확정된 Purpose·Goal 영속
-            import re as _re
-            n_items = _count_goal_items(goal)
-            tip = ""
-            if n_items >= 4:
-                # [공급 원칙 — 정보는 구조가, 판단은 리더가] 다항목 goal을 Task 1개로 가면 검증·마감
-                # 게이트가 단 1회뿐(라이브 P-009: 6항목 게임이 Task 1개 → 부분 결함이 일괄 통과).
-                tip = (f"\n[정보 — 판단은 당신 몫] goal이 {n_items}항목입니다. 한 Task로 가면 검증·마감이 "
-                       f"단 1회라 부분 결함이 묻히기 쉽습니다 — 영역별로 Task를 나눠(create_task→위임→검증→"
-                       f"complete_task 반복) 부분마다 마감하는 것을 고려하세요.")
+            # [공급 원칙 — 정보는 구조가, 판단은 리더가. 매직넘버 제거(사용자 지적 2026-06-13)]
+            # 종전엔 'goal 4항목+'(항목 수)로 분해를 트리거했으나, 항목 '수'는 표면 프록시다 — RFC-008이
+            # 경고한 측정의 함정(Goodhart)의 재발이었다. 분해 필요성의 본질은 개수가 아니라 '독립적으로
+            # 구현·검증할 단위로 나뉘는가'(응집도/검증 단위). 숫자 게이트 없이 질적 기준만 공급하고 판단은
+            # 리더(LLM)에게 — 검증·마감 게이트가 부분마다 생겨 결함이 일괄 통과되지 않는다(P-009 교훈).
+            tip = ("\n[정보 — 판단은 당신 몫] 이 goal이 **서로 독립적으로 구현·검증할 수 있는 여러 부분**을 "
+                   "담고 있으면(개수가 아니라 '독립성'이 기준), 부분마다 Task로 나눠(create_task→위임→검증→"
+                   "complete_task 반복) 각각 마감하는 것을 고려하세요 — 한 Task로 가면 검증·마감이 1회뿐이라 "
+                   "부분 결함이 묻힙니다(라이브 P-009). 깊게 얽혀 한 덩어리면 굳이 나누지 마세요.")
             # [RFC-008 P0 — 품질/기능 분리] 측정 가능한 기능만 goal에 담으면 측정 어려운 품질이 빠진다
             # (Holmström-Milgrom 다중작업: 측정가능한 것만 보상 → 품질 이탈이 최적). 기능 체크리스트와
             # 별도로 '이 도메인의 훌륭함'(완성도·UX·재미)을 품질 차원으로 의식하게 — 정의 불가한 품질도
@@ -1222,8 +1212,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 idle_note = (f"\n[정보] 이 Task 팀에서 **실작업·검증 참여 0**인 멤버: {flow._names(idle)} — "
                              f"goal에 이들의 전문 영역이 있다면 그 부분의 검증·보완을 이들에게 맡기는 것이 "
                              f"자연스럽습니다." if idle else "")
-                n_items = _count_goal_items(flow.current.status.goal or "")
-                per_item = (f"goal {n_items}항목 **각각**의 충족/결함을" if n_items >= 2 else "goal의 충족/결함을")
+                per_item = "goal의 각 부분·기준 **각각**의 충족/결함을"   # 항목 '수' 카운트 제거(매직넘버 함정) — '각 부분'은 수 무관
                 # [RFC-008 P0 — 직무 기준을 검증 루브릭으로] owner 산출물 도메인의 craft profile을 검증
                 # 루브릭으로 제공한다. QA가 "작동하는가"(holistic)가 아니라 "이 기준 대비 충분한가"를
                 # 차원별로 보게 — rubric-guided judge가 인간 일치를 +20pt 올린다(arXiv 2603.13391).
