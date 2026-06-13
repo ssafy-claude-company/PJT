@@ -41,3 +41,22 @@ def test_졸업한_원요청은_프로젝트로_판정된다():
     assert graduated_project(projects, "2") is None             # 무관한 요청은 기존 경로(재발사)
     assert graduated_project({}, "1") is None
     assert graduated_project({500: {"id": "P-001"}}, "1") is None   # origin 미기록(구세대 등록) → 기존 경로
+
+
+def test_미완Task_프로젝트는_부팅복구가_이어서_재개():
+    """[복구 갭 — 사용자 지적 2026-06-13] 프로젝트 채널 평문 개입이 부분 처리된 채(봇 응답이 달려
+    find_pending_request가 '완료'로 보고 못 잡음) 동면하면, open_task가 남은 등록 프로젝트는 그 채널
+    개입으로 이어 재개한다 — 졸업 라우팅이 main 출신에만 해주던 'open_task 이어가기'를 동일 적용
+    (라이브: '게임성 고도화' 개입이 복구에서 누락→사용자 수동 재전송). 이미 복구 큐에 든 채널(졸업
+    등 중복)·메인 채널·open_task 없는(완료된) 프로젝트는 제외(이중 발사·유령 재개 방지)."""
+    from src.main import projects_to_resume
+    projects = {
+        500: {"id": "P-010", "channel": 500, "leader": 12, "purpose": "게임", "open_task": {"task_id": "1"}},
+        501: {"id": "P-012", "channel": 501, "leader": 13, "purpose": "웹", "open_task": {"task_id": "2"}},
+        502: {"id": "P-002", "channel": 502, "leader": 14, "open_task": None},   # 완료 → 제외
+        700: {"id": "P-MAIN", "channel": 700, "leader": 11, "open_task": {"task_id": "3"}},  # 메인 → 제외
+    }
+    out = projects_to_resume(projects, already_channels={501}, main_channel=700)   # 501=이미 졸업 라우팅으로 큐
+    assert {p["id"] for p in out} == {"P-010"}     # P-012(이미 큐)·P-002(완료)·P-MAIN(메인) 모두 제외
+    assert projects_to_resume({}, set(), 700) == []
+    assert projects_to_resume(None, set(), 700) == []   # 레지스트리 부재에도 안전
