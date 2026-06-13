@@ -401,6 +401,16 @@ def _speech_clip(s, n=1500) -> str:
     return s if len(s) <= n else s[:n] + f" …(발언 {len(s)}자 — {n}자 안전망에서 잘림)"
 
 
+def _count_goal_items(goal: str) -> int:
+    """goal의 '번호 매긴 항목' 수 — 줄 시작 'N)'·'N.'뿐 아니라 한 줄에 '/'·','로 나열한 인라인
+    'N)'과 원문자(①②③)도 센다. 라이브 버그(P-011): goal을 '1) … / 2) … / 3) … / 4) …'로 한 줄에
+    써서 줄 시작만 보던 정규식이 1항목으로 오판 → 4항목 분해 안내가 발동 안 함(Task 1개로 마감)."""
+    import re as _r
+    n = len(_r.findall(r"(?:^\s*|/\s*)\d+[).]", goal or "", _r.M))   # 줄 시작 또는 '/' 뒤 'N)'/'N.'(쉼표 제외 — '2.5초' 오탐 방지)
+    n += len(_r.findall(r"[①-⑮]", goal or ""))                          # 원문자 ①~⑮
+    return n
+
+
 def make_guide_tools(flow: Flow, me_id: int, role: str):
     g = flow.guide
     tools = []
@@ -1152,7 +1162,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             await flow.refresh(flow.current)
             _ckpt(flow)                       # 크래시-세이프: 확정된 Purpose·Goal 영속
             import re as _re
-            n_items = len(_re.findall(r"^\s*\d+[).]", goal, _re.M))
+            n_items = _count_goal_items(goal)
             tip = ""
             if n_items >= 4:
                 # [공급 원칙 — 정보는 구조가, 판단은 리더가] 다항목 goal을 Task 1개로 가면 검증·마감
@@ -1212,7 +1222,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 idle_note = (f"\n[정보] 이 Task 팀에서 **실작업·검증 참여 0**인 멤버: {flow._names(idle)} — "
                              f"goal에 이들의 전문 영역이 있다면 그 부분의 검증·보완을 이들에게 맡기는 것이 "
                              f"자연스럽습니다." if idle else "")
-                n_items = len(re.findall(r"^\s*\d+[).]", flow.current.status.goal or "", re.M))
+                n_items = _count_goal_items(flow.current.status.goal or "")
                 per_item = (f"goal {n_items}항목 **각각**의 충족/결함을" if n_items >= 2 else "goal의 충족/결함을")
                 # [RFC-008 P0 — 직무 기준을 검증 루브릭으로] owner 산출물 도메인의 craft profile을 검증
                 # 루브릭으로 제공한다. QA가 "작동하는가"(holistic)가 아니라 "이 기준 대비 충분한가"를
