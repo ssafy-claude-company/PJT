@@ -1262,6 +1262,23 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     if flow.log:
                         flow.log("task_contrib_idle", task=flow.current.task_id,
                                  idle=[int(m) for m in contrib_idle])
+                    # [RFC-009 2단계 정수 — 발언→책임] 회의록(meet 미니츠는 '[NR] 직군: 발언'으로 화자
+                    # 귀속)에서 잠수 직군 '본인의 발언'을 끌어와 게이트에 그대로 되돌린다 — "당신이 회의에서
+                    # 한 이 말이 산출물에 들어갔나?"(발언≠구현). 직군 키워드 없이 본인 발언만 에코(보편
+                    # 이치). 발언은 collab_notes로 Work 위임에 자동 동봉되므로(577·1562) ①로 맡기면 본인
+                    # 약속이 구현자=본인에게 전달돼 루프가 닫힌다 — 별도 '발언→Task' 게이트가 불필요(중복).
+                    notes_lines = (getattr(flow.current, "collab_notes", "") or "").splitlines()
+                    commits = []
+                    for m in contrib_idle:
+                        role = (flow._info(m) or "").strip()
+                        said = [ln.split(":", 1)[1].strip() for ln in notes_lines
+                                if role and f"] {role}:" in ln]
+                        said = [s for s in said if s]
+                        if said:
+                            commits.append(f"· {role}: “{_speech_clip(' / '.join(said), 240)}”")
+                    commit_note = ("\n[회의 발언 대조 — 발언≠구현] 아래는 이 직군들이 회의에서 한 말입니다 — "
+                                   "각 발언이 실제 산출물에 반영됐는지 직접 확인하고, 안 됐으면 ①로 맡기세요:\n"
+                                   + "\n".join(commits)) if commits else ""
                     return _ok(
                         f"완료 보류(팀 기여 의무 — RFC-009): 팀의 {flow._names(contrib_idle)}이(가) 이 흐름에서 "
                         f"**회의 발언 외 실작업·검증이 0**입니다(Write/Edit/run 0회) — 이 직군의 도메인(예: "
@@ -1270,7 +1287,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         f"**실제로 만들게** 하고 그 산출물을 교차 검증까지 받으세요 ② 애초에 불필요했으면 "
                         f"팀에서 빼세요(왜 불렀나=다음 학습) ③ 둘 다 아니면 complete_task 재호출로 통과(판단은 "
                         f"당신). 특히 회의에서 '중요하다'고 한 부분이 실제 산출물에 들어갔는지 확인하세요 — "
-                        f"발언만으로는 작품이 바뀌지 않습니다.")
+                        f"발언만으로는 작품이 바뀌지 않습니다.{commit_note}")
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.

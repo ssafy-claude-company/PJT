@@ -1893,6 +1893,32 @@ def test_팀기여의무_부른직군이_실작업0이면_1회보류_RFC009():
     assert f.current is None and "보류" not in r2["content"][0]["text"]   # 통과(판단은 리더)
 
 
+def test_팀기여의무_게이트는_잠수직군_회의발언을_되돌린다_RFC009():
+    """[RFC-009 2단계 정수 — 발언→책임] 기여 게이트가 잠수 직군 '본인의 회의 발언'을 collab_notes
+    (화자 귀속 미니츠 '[NR] 직군: 발언')에서 끌어와 그대로 보여준다 — '당신이 회의에서 한 말이
+    산출물에 들어갔나?'(발언≠구현). 직군 키워드 없이 본인 발언만 에코. 별도 '발언→Task' 게이트
+    없이 1단계 back-pressure + collab_notes 동봉으로 발언→구현 루프가 닫히는 것을 게이트가 환기."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[14] = "VFX"
+    f.project_team.append(14)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,14"}))
+    f.current.participated.add(12); f.current.participated.add(14)
+    asyncio.run(t["set_goal"].handler({"goal": "타격감 있는 게임"}))
+    # 회의록: VFX가 발언했으나(화자 귀속) 실작업은 0 — 백엔드 발언은 오귀속 안 돼야
+    f.current.collab_notes = ("[회의] 스펙 (2R)\n[1R] 백엔드: 상태머신 5단계\n"
+                              "[1R] VFX: 타격감은 히트스톱+화면진동이 핵심")
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5                      # owner만 실작업, VFX(14)는 act_by==0
+    f.current.cross_checks = 1
+    r = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    txt = r["content"][0]["text"]
+    assert "완료 보류(팀 기여 의무" in txt and "회의 발언 대조" in txt
+    assert "히트스톱+화면진동" in txt              # VFX 본인 발언을 그대로 되돌림
+    assert "상태머신" not in txt                   # 백엔드 발언은 잠수자(VFX)에 오귀속 안 됨
+
+
 def test_팀기여의무_전원_실작업하면_보류없음_RFC009():
     """[팀 기여 의무 — RFC-009 음성 케이스] 팀 전원(리더·owner 제외)이 실작업·검증을 했으면(act_by>0)
     기여 게이트는 발동하지 않는다 — 폴리시 직군도 실제로 만들면 즉시 통과(부른 직군이 기여하면 OK)."""
