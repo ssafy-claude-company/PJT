@@ -1968,6 +1968,37 @@ def test_setgoal_품질차원_팀구성유도_폴리시채용_환기_RFC009():
     assert "recruit" in txt and "폴리시" in txt  # 없으면 채용 환기
 
 
+def test_setgoal_발산수렴_완성재정의_RFC010():
+    """[RFC-010 P3·P5] set_goal 안내가 ① 자명한 1개로 수렴 말고 복수 접근안 비교(발산→수렴) ②
+    '작동=완성'이 아니라 '써보니 좋다'가 완성(작동≠좋음, 마감 전 실플레이 비평+1회 개선)을 환기."""
+    g = FakeGuide()
+    f = _flow(g)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    txt = asyncio.run(t["set_goal"].handler({"goal": "게임"}))["content"][0]["text"]
+    assert "발산→수렴" in txt or "2~3개" in txt        # P3 복수안 비교
+    assert "작동≠좋음" in txt and "써보니 좋다" in txt   # P5 완성 재정의(경험 기반)
+
+
+def test_교차검증_경험적_비평_요구_RFC010():
+    """[RFC-010 P1·P2] 교차검증 거부가 '코드만 읽지 말고 실제 실행·플레이 + 재밌나/아쉽나 비평'을 요구하고
+    '만든 사람 아닌 다른 멤버'(자기검증 무효)를 못박는다 — 라이브 QA 0런(코드만 읽음)·노잼 구멍 처방."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[13] = "QA"; f.project_team.append(13)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.add(12); f.current.participated.add(13)
+    asyncio.run(t["set_goal"].handler({"goal": "게임"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5                              # cross_checks=0 → 교차검증 게이트 발동
+    txt = asyncio.run(t["complete_task"].handler({"result": "끝"}))["content"][0]["text"]
+    assert "완료 거부(교차 검증" in txt
+    assert "실제로 실행" in txt and "재밌" in txt   # P1 경험적 + 플레이어 비평
+    assert "만든 사람이 아닌" in txt               # P2 분리된 검증자(자기검증 무효)
+
+
 def test_기여미흡_재호출_마감은_기록과_로그에_남는다_RFC009():
     """[게이트 강화 — 침묵 강행 불가] 잠수 직군이 실작업 0인 채 기여 게이트를 재호출로 통과해 마감하면
     (옵션③), '[기여 미흡: … 실작업 0 — 리더 판단 마감]'이 Task 결과에 박히고 task_contrib_overridden
