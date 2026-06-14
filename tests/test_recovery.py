@@ -60,3 +60,16 @@ def test_미완Task_프로젝트는_부팅복구가_이어서_재개():
     assert {p["id"] for p in out} == {"P-010"}     # P-012(이미 큐)·P-002(완료)·P-MAIN(메인) 모두 제외
     assert projects_to_resume({}, set(), 700) == []
     assert projects_to_resume(None, set(), 700) == []   # 레지스트리 부재에도 안전
+
+
+def test_복구_이어가기_본문은_조기완료_새Task_금지_명시():
+    """[복구 충돌 교정 — 사용자 지적 2026-06-14] 미완 Task 복원 복구에서 원요청을 그대로 재발사하면 리더가
+    복원 Task를 조기 완료하고 새 Task를 연다(라이브 054013-1 조기완료→074010-1 신설, "기존 안 끝났는데 새로
+    열림"). resume_continue_body는 원요청을 보존하면서 앞에 '새 Task 금지·복원 Task 이어서 완성·조기
+    complete 금지'를 명시해 그 사고를 막는다."""
+    from src.main import resume_continue_body
+    out = resume_continue_body("게임성을 보완해줘")
+    assert "게임성을 보완해줘" in out                 # 원요청 보존(시스템이 말 지어내지 않음)
+    assert "이어가기" in out and "새 Task" in out      # 새 Task 금지·이어가기 명시
+    assert "complete" in out.lower()                   # 조기 complete 금지
+    assert resume_continue_body("") and resume_continue_body(None)   # 빈/None에도 안전(크래시 없음)
