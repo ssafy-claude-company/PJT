@@ -78,6 +78,11 @@ class DiscordGuide:
         return first_id or "0"
 
     async def _send_one(self, ch, content: str, reply_to) -> Optional[str]:
+        # [견고화] reply_to는 Discord 메시지 id(정수 스노우플레이크)만 답글 대상이 된다. 비숫자
+        # (예: 부팅 복구 합성 id 'recover-open-P-010')면 답글 불가 — int() 폭발로 첫 전송이 낭비되고
+        # 에러 로그가 찍히던 것 방지(답글 없이 일반 전송으로 강등). 실 id가 아니어도 흐름은 안 깨진다.
+        if reply_to is not None and not str(reply_to).isdigit():
+            reply_to = None
         # 일시 오류(특히 503/DNS resolution failure)는 점증 백오프로 여러 번 재시도 — 네트워크
         # 블립에 Response·보고가 '조용히 유실'되던 문제(완료됐는데 응답 안 보임) 방지.
         for attempt in range(1, 5):

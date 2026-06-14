@@ -99,6 +99,28 @@ def test_send_response_보낸봇으로_reply():
     assert any(m.content == "[Response]\nBody: 완료" for m in thread.sent)
 
 
+def test_비숫자_reply_to는_int폭발없이_답글강등_견고():
+    """[견고화] reply_to가 비숫자(부팅 복구 합성 id 'recover-open-…')면 fetch_message(int) 호출 전에
+    답글을 강등(reply_to=None)해 일반 전송한다 — int() ValueError로 첫 전송이 낭비·에러 로그되던 것
+    방지(라이브: 'recover-open-P-010'이 reply_to로 들어가 ValueError). 숫자 id는 정상 답글 경로."""
+    sysc = Client()
+    g = DiscordGuide(sysc, {})
+    ch = sysc.get_channel(10)
+    calls = {"fetch": 0}
+    orig = ch.fetch_message
+    async def counting(mid):
+        calls["fetch"] += 1
+        return await orig(mid)
+    ch.fetch_message = counting
+    mid = asyncio.run(g.post(10, 0, "복구 안내", reply_to="recover-open-P-010"))
+    assert mid is not None and ch.sent[-1].content == "복구 안내"   # 크래시 없이 정상 전송
+    assert calls["fetch"] == 0                                      # 비숫자엔 fetch 시도조차 안 함(강등)
+    real = asyncio.run(ch.send("원본"))                            # 숫자 id는 정상 답글 경로
+    calls["fetch"] = 0
+    asyncio.run(g.post(10, 0, "답글", reply_to=str(real.id)))
+    assert calls["fetch"] == 1                                      # 숫자면 fetch_message로 답글
+
+
 def test_invite_url_원터치_초대링크():
     """봇 user.id(=application id)로 클릭 한 번에 합류하는 OAuth2 초대 URL을 만든다 — 새 봇 추가 자동화."""
     url = DiscordGuide.invite_url(987654321)
