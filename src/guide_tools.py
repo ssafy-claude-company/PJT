@@ -278,6 +278,7 @@ class TaskRef:
     cross_checks: int = 0                            # owner 인도 후 '다른 멤버'의 검증 참여 수(0이면 complete 1회 보류 — 품질 판정 독점 방지)
     complete_retry: bool = False                     # (구) 1회 보류 시절 잔재 — 교차 검증 의무 하드화(Rule/Task 6)로 미사용, 호환 위해 유지
     leader_writes: int = 0                           # 리더가 이 Task에서 직접 쓴 파일 수(위임 없이 독식하면 차단)
+    contrib_checked: bool = False                    # 팀 기여 의무 게이트(RFC-009) 1회 통과 여부 — 부른 직군이 실작업·검증 0(회의 발언만)이면 1회 보류 후 재호출 통과
     run_count: int = 0                               # 이 Task의 run 실행 횟수(체리픽 노출용)
     evidence: str = ""                               # 시스템이 직접 캡처한 마지막 run 영수증(허위보고 차단)
 
@@ -1091,12 +1092,25 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             tid = flow.next_task_id()
             pool = flow.project_team or flow.pool
             picked = _resolve_members(args.get("members", ""), flow, pool)
-            # 팀은 담당자(리더)가 '일에 맞게' 동적으로 고른다 — 자동 전원 소집 아님(직군 고정·놀던 인력까지
-            # 무조건 소집 방지). members=로 필요한 직군 동료만 지정하면 그들로, 비우면 프로젝트팀(예비 제외)을
-            # 기본으로 한다. 모자란 직군은 recruit(role=)로 채워 합류시킨다. set_goal은 '담당자가 고른 이 팀
-            # 전원'의 협의로 통과 → 팀 구성·규모는 담당자가 이 일에 맞게 결정한다(중앙이 고정 X, 전원 강제 X).
-            base = picked if picked else [m for m in flow.project_team
-                                          if m != flow.leader and not _is_spare(flow, m)]
+            # 팀은 담당자(리더)가 '일에 맞게' 동적으로 고른다 — 자동 전원 소집 아님. members=로 필요한 직군만
+            # 지정하면 그들로. 비우면 기본 팀은 **직군당 1명**(실행 핵심)으로 둔다 — [팀 비대 차단, 라이브
+            # 2026-06-14: 역할 드리프트(과거 recruit가 Discord 역할로 영속)로 백엔드 5명 등이 기본 팀에 다
+            # 들어와, set_goal '전원 협의' × 비대 = meet 4회·6 잠수·override 노이즈·136분 미수렴]. 같은 직군
+            # 중복은 협의·게이트 비용만 키우므로(Brooks: 소통비용~인원²) 기본에서 빼고, 정말 병렬 일손이
+            # 필요하면 recruit/members=로 더한다(리더 자율). 매직넘버 아님 — '한 도메인 한 책임자'는 이미
+            # 시스템의 단일-owner 보편 이치. set_goal은 '이 (슬림한) 팀 전원' 협의로 통과.
+            if picked:
+                base = picked
+            else:
+                base, _seen = [], set()
+                for m in flow.project_team:
+                    if m == flow.leader or _is_spare(flow, m):
+                        continue
+                    r = (flow._info(m) or "").strip()
+                    if r and r in _seen:
+                        continue        # 같은 직군 중복은 기본 팀에서 제외(recruit로 추가 가능)
+                    _seen.add(r)
+                    base.append(m)
             team = _uniq([flow.leader] + base)
             # 'PM 혼자 Task' 차단(구조): 프로젝트에 직군 동료가 있는데 리더 혼자만 멤버로 여는 건 팀을 버리고
             # 단독작업·독식하는 패턴(사용자가 본 'PM 혼자 있는 Task'). 동료가 무응답이라고 새 솔로 Task로 도망가지
@@ -1128,16 +1142,19 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                          "인원이 늘수록 가파르게 커집니다(필요 이상 큰 실행 팀은 비효율). 회의·검증엔 전원, "
                          "실행엔 핵심만.")
             return _ok(f"task={tid} (빈 껍데기·담당자가 팀 선정) thread={thread_id} 팀={flow._names(team)}{size_note} — 이 팀은 "
-                       f"당신이 고른 구성입니다(직군이 부족하면 recruit(role=)로 더하세요). 배정된 팀 **전원**에게 "
-                       f"request(Info)로 'Purpose(풀 문제)·Goal(성공기준)·각자 도메인 할 일'을 물어 함께 정한 뒤 "
-                       f"set_goal로 확정하세요(전원 협의 전엔 set_goal 거부됨). 그 다음 일을 맡길 동료에게 Work로 위임.")
+                       f"당신이 고른 구성입니다(직군이 부족하면 recruit(role=)로 더하세요). 배정된 팀과 **meet(회의)로 "
+                       f"'Purpose(풀 문제)·Goal(성공기준)·각자 도메인 할 일'을 함께 정한 뒤** set_goal로 확정하세요 — "
+                       f"meet은 독립의견을 동시에 모으고(앵커링 방지) 토론·회의록(합의)까지 남깁니다(1:1 request(Info)를 "
+                       f"여러 번 도는 것보다 합의가 또렷하고 빠름 — 개별 후속 확인만 Info로). 전원 협의 전엔 set_goal "
+                       f"거부됨. 그 다음 일을 맡길 동료에게 Work로 위임.")
         tools.append(create_task)
 
         @tool("set_goal",
               "팀 회의로 정한 이번 Task의 **Purpose(풀 문제)와 Goal(측정가능한 성공기준)**을 확정·기록한다. 리더 "
-              "단독/선지정 금지 — **이 Task의 멤버 전원**에게 request(Info)로 'Purpose·네 도메인의 목표·성공기준'을 "
-              "물어 수렴한 결과를 적는다. Goal엔 '무엇이 되면 성공인가'(결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·"
-              "스택으로 만들지'(구현 방법)는 쓰지 말 것 — 그건 owner가 정한다. Work 위임은 확정 뒤에만 가능.",
+              "단독/선지정 금지 — **이 Task의 멤버 전원**과 meet(회의)로 'Purpose·각 도메인의 목표·성공기준'을 "
+              "수렴한 결과를 적는다(1:1 request(Info)보다 meet 권장 — 앵커링↓·회의록 자동 기록). Goal엔 '무엇이 "
+              "되면 성공인가'(결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·스택으로 만들지'(구현 방법)는 쓰지 말 것 — "
+              "그건 owner가 정한다. Work 위임은 확정 뒤에만 가능.",
               {"purpose": str, "goal": str})
         async def set_goal(args):
             if flow.current is None:
@@ -1153,9 +1170,26 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             missing = [m for m in members if m not in flow.current.participated]
             if missing:
                 return _ok(f"확정 거부: 이 Task의 Purpose·Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
-                           f"아직 의견을 안 받은 멤버: {flow._names(missing)} — 그들에게 request(Info)로 '이 Task에서 "
-                           f"풀 문제·네 도메인의 목표·성공기준'을 먼저 물어 수렴한 뒤 set_goal로 기록하세요(파일·"
-                           f"엔드포인트 같은 구현 스펙 말고 '측정가능한 결과'로).")
+                           f"아직 의견을 안 받은 멤버: {flow._names(missing)} — 그들과 **meet(회의)로 '풀 문제·각 "
+                           f"도메인의 목표·성공기준'을 함께 정한 뒤** set_goal로 기록하세요(meet 발언이 협의로 인정됨 — "
+                           f"1:1 request(Info)도 인정되나 회의가 앵커링↓·합의 기록↑). 파일·엔드포인트 같은 구현 스펙 "
+                           f"말고 '측정가능한 결과'로.")
+            # [P7 — 범주적 완성 점검: recognition→action 강제, RFC-010] 확정 전 1회, 장르 예시 대비 '통째로
+            # 없는 범주'를 goal에 '구축 대상'으로 반영(없으면 recruit)하거나 불필요 사유를 명시하게 강제한다 —
+            # 라이브: P6 넛지로 사운드를 grep '점검'만 하고 구현 0(인지≠행동). 점검을 '구축'으로 한 칸 올림.
+            # 1회 보류 후 재호출 통과(막지 않되 의식적 결정 — override 게이트와 같은 정신). 직군 키워드 하드코딩
+            # 없음 — 장르·범주 판단은 리더(비체험형이면 'N/A 불필요'로 재호출). set_goal_gap_check 로그로 가시화.
+            if not getattr(flow, "gap_checked", False):       # 흐름당 1회(per-flow) — 작품의 범주 점검은 한 번
+                flow.gap_checked = True
+                if flow.log:
+                    flow.log("set_goal_gap_check", task=flow.current.task_id)
+                return _ok("확정 보류(범주적 완성 점검 — RFC-010 P7): 확정 전 한 번만 — **이 작품과 같은 종류의 "
+                           "'훌륭한 예'를 하나 떠올리고, 그것이 *당연히 갖춘* 요소 중 우리 작품엔 *통째로 빠진* 범주가 "
+                           "있는지** 보세요. 무엇이 그런 범주인지는 **작품 종류를 아는 당신이 판단**합니다(시스템이 "
+                           "특정 범주·직군을 지정하지 않음 — 하드코딩 없음). 있으면 그건 '개선'이 아니라 신규 구축이니 "
+                           "**goal에 '구축 대상'으로 넣으세요**(담당 직군이 팀에 없으면 recruit). 정말 없어도 되면 "
+                           "goal에 그 이유를 적은 뒤 set_goal을 재호출해 확정하세요(인지를 *점검*에서 *구축*으로). "
+                           "재호출은 통과합니다(판단은 당신).")
             if purpose:
                 flow.current.status.purpose = purpose
             flow.current.status.goal = goal
@@ -1174,12 +1208,36 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # (Holmström-Milgrom 다중작업: 측정가능한 것만 보상 → 품질 이탈이 최적). 기능 체크리스트와
             # 별도로 '이 도메인의 훌륭함'(완성도·UX·재미)을 품질 차원으로 의식하게 — 정의 불가한 품질도
             # 부분 operationalize는 가능(Graham). 강제 아닌 공급(암묵지라 다 못 적음 — Polanyi).
-            qbar = ("\n[품질 차원 — 기능과 별개] goal의 '기능 체크리스트'는 '되는가'만 봅니다. 하지만 "
-                    "'작동≠훌륭함'입니다(라이브: 작동하나 품질 낮은 게임). 마감 검증 때 각 전문가의 직무 "
-                    "기준(품질 루브릭)으로 '이 도메인 기준에 충분한가'를 함께 봅니다 — 지금 그 품질 기대치를 "
-                    "팀과 한 줄 공유해두면(예: '프로그래머 아트가 아닌 일관된 비주얼', '첫 30초에 재미') "
-                    "검증이 명확해집니다.")
-            return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}{tip}{qbar}")
+            team_roles = [r for r in flow._names([m for m in flow.current.team if m != me_id]) if r]
+            qbar = ("\n[품질 차원 — '되는가'≠'배포할 만한가'] 측정가능한 기능만 goal에 담으면 측정 어려운 품질"
+                    "(완성도·UX·재미·연출)이 빠집니다(라이브: 작동하나 폴리시 0인 게임). 지금 두 가지를 의식하세요: "
+                    f"① **이 팀 구성에서 품질 축을 유도** — 팀의 각 직군({', '.join(team_roles) or '동료'})이 "
+                    "*자기 도메인에서 '훌륭함'으로 치는 기준*이 곧 '완성'의 축입니다(무엇이 훌륭함인지는 그 직군이 "
+                    "정의 — 시스템이 특정 항목을 박지 않음). goal에 기능 체크리스트와 함께 그 품질 기대치를 한 줄씩 "
+                    "담으세요. ② **폴리시(기능을 넘는 품질) 직군이 팀에 있는가** — 이 작품이 그런 사용 경험을 "
+                    "요구하는 종류면(판단은 당신) 그 전문가가 팀에 있는지 보고 없으면 recruit하세요 — 안 부르면 그 "
+                    "품질은 아무도 책임지지 않습니다(라이브: 폴리시 직군 미채용/잠수로 '최소 기능'만 배포됨).")
+            # [RFC-010 P3·P5 — 발산→수렴 + '완성' 재정의] LLM은 정렬(RLHF)으로 '전형적·자명한 1개 완성'으로
+            # 수렴한다(mode collapse) → "언급한 것만" 구현(라이브 사용자 지적). 창의/체험형은 ① 복수 접근안을
+            # 내고 골라야 뻔함을 깬다(발산→수렴, CreativeDC) ② '작동=완성'이 아니라 '경험돼서 좋음'이 완성이다
+            # (Pirsig·Craftsmanship). 강제 아닌 환기 — 취향의 천장은 LLM이라 최종 판단은 리더/사용자(RFC-010 §3).
+            creative = ("\n[창의·완성 기준 — 자명한 1개로 수렴 금지] 이 작품이 경험·재미·디자인이 중요한 "
+                        "종류라면: ① **'언급된 것'만 하지 말고** 더 좋게 만들 접근을 2~3개 떠올려 비교한 뒤 "
+                        "고르세요(LLM은 시키면 가장 뻔한 1개로 수렴 — 의식적 발산→수렴). ② '완성'의 기준은 "
+                        "'작동한다'가 아니라 **'사용자로서 써보니 좋다'**입니다 — 마감 전 누군가 실제로 써보고"
+                        "(플레이) '재밌나·뭐가 아쉽나'를 비평하고 최소 1회 개선하세요(작동≠좋음).")
+            # [RFC-010 P6 — 장르 예시 대비 '범주적 부재' 점검(라이브: 게임에 사운드 0인데 아무도 인지·채용
+            # 안 함). LLM은 '있는 것 개선'엔 강하나 '통째로 없는 범주'를 못 본다(mode collapse는 확장만 한다).
+            # 처방: 같은 '종류의 훌륭한 예'와 비교해 그쪽엔 있는데 우리엔 없는 범주를 찾고, 그건 '개선'이
+            # 아니라 '신규 구축'이며 필요 직군이 없으면 recruit한다(Graham '최고를 알아야 목표가 보인다' +
+            # exemplar anchoring). 직군 키워드 하드코딩 없음 — 장르 판단·예시는 LLM 지식, 채용은 리더.
+            gapcheck = ("\n[범주적 부재 점검 — '있는 것 개선'에만 머물지 말 것] 이 작품과 **같은 종류의 훌륭한 "
+                        "예**를 하나 떠올려, 그것이 *당연히 갖춘* 요소 중 우리에겐 **통째로 없는 범주**가 있는지 "
+                        "보세요. 무엇이 그런 범주인지는 **작품 종류를 아는 당신이 판단**합니다(시스템이 특정 범주를 "
+                        "지정하지 않음 — 직군·키워드 하드코딩 안 함). 있으면 그건 '개선'이 아니라 **신규 구축**이고, "
+                        "담당 직군이 팀에 없으면 **recruit**하세요. 라이브 교훈: 기존 것만 깊게 파고 *통째로 빠진 "
+                        "범주*는 아무도 본 적이 없었음 — 훌륭한 예라면 당연히 있을 범주를 먼저 점검(다듬기 전에).")
+            return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}{tip}{qbar}{creative}{gapcheck}")
         tools.append(set_goal)
 
         @tool("complete_task",
@@ -1225,11 +1283,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 idle_note = (f"\n[정보] 이 Task 팀에서 **실작업·검증 참여 0**인 멤버: {flow._names(idle)} — "
                              f"goal에 이들의 전문 영역이 있다면 그 부분의 검증·보완을 이들에게 맡기는 것이 "
                              f"자연스럽습니다." if idle else "")
-                per_item = "goal의 각 부분·기준 **각각**의 충족/결함을"   # 항목 '수' 카운트 제거(매직넘버 함정) — '각 부분'은 수 무관
-                # [RFC-008 P0 — 직무 기준을 검증 루브릭으로] 산출물 도메인(owner 직군, 리더 독식이면 리더 직군)의
-                # craft profile을 검증 루브릭으로 제공한다. QA가 "작동하는가"(holistic)가 아니라 "이 기준 대비
-                # 충분한가"를 차원별로 보게 — rubric-guided judge가 인간 일치를 +20pt(arXiv 2603.13391).
-                # 루브릭은 평가 가능하게 끌어올리는 장치 — binary 점수가 아니라 전문가 판단의 보조.
+                per_item = ("goal의 각 부분·기준 충족을 넘어 **사용자/플레이어 관점의 비평**까지 — "
+                            "'재밌나·쓸 만한가? 뭐가 아쉽고 답답한가? 더 좋은 버전이라면 뭘 더하거나 바꿀까?'를")
+                # [RFC-008 P0 + RFC-010 P4 — 직무 기준을 '좋은가' 비평 루브릭으로] 산출물 도메인의 craft
+                # profile을 검증 루브릭으로 제공한다. 검증자가 "작동하는가"(holistic)가 아니라 "**실제로
+                # 써보니 이 도메인 기준에 비춰 좋은가·뭐가 아쉬운가**"를 차원별로 보게 — rubric-guided judge가
+                # 인간 일치 2배(LLM-Rubric 2501.00274). 단일 점수 아닌 차원별 비평 + 사용자가 최종 취향 앵커.
                 rubric = ""
                 owner_job = ((flow._info(flow.current.owner) if flow.current.owner
                               else flow._info(flow.leader)) or "").strip()
@@ -1238,14 +1297,60 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     parts = [p for p in parts if p]
                     if parts:
                         rubric = (f"\n[검증 루브릭 — 산출물 도메인 '{owner_job}'의 품질 기준. 검증 위임 본문에 "
-                                  f"**이 기준을 그대로 전달**하고, 검증자에게 각 항목을 '실제 사용해 충족/미달'로 "
-                                  f"채점하게 하세요. '돌아가는가'가 아니라 '이 기준에 비춰 충분한가'가 검증의 "
-                                  f"질문입니다(미달 항목은 구체적 결함으로):\n" + _speech_clip("\n---\n".join(parts), 2500) + "]")
-                return _ok(f"완료 거부(교차 검증 의무 — Rule/Task): 산출물 인도 후 **다른 멤버의 검증 참여가 "
-                           f"0**입니다. 팀의 다른 멤버에게 request(Work)로 '**사용자처럼 처음부터 끝까지 실제로 "
-                           f"사용·플레이해 보고** {per_item} 위 루브릭 기준으로 채점·보고하라'고 검증을 맡긴 뒤 "
-                           f"마감하세요(검증자의 결함 보고는 Redo의 근거). 검증 응답이 돌아오면 게이트는 자동으로 "
+                                  f"**이 기준을 그대로 전달**하고, 검증자가 **실제로 실행/플레이한 뒤** 각 항목을 "
+                                  f"'써보니 좋은가·충분한가'로 평가하게 하세요 — '돌아가는가'가 아니라 '이 기준에 "
+                                  f"비춰 좋은가, 뭐가 아쉬운가'가 질문입니다(미달은 구체적 결함으로):\n"
+                                  + _speech_clip("\n---\n".join(parts), 2500) + "]")
+                return _ok(f"완료 거부(교차 검증 의무 — Rule/Task + RFC-010 P1·P2): 산출물 인도 후 **다른 "
+                           f"멤버의 검증 참여가 0**입니다. **만든 사람이 아닌** 다른 멤버에게 request(Work)로 "
+                           f"'**코드만 읽지 말고 산출물을 처음부터 끝까지 실제로 실행·사용·플레이해 본 뒤**(라이브 "
+                           f"근거: 실제로 써본 검증자가 읽기만 한 쪽보다 결함을 훨씬 많이 잡음 — TITAN 82% vs 18%) "
+                           f"{per_item} 보고하라'고 맡긴 뒤 마감하세요 — 검증자의 결함·아쉬움 보고가 Redo(창의적 "
+                           f"개선)의 근거입니다. **자기 산출물 자기검증은 무효**(편향 — Pride&Prejudice): 반드시 "
+                           f"만든 사람이 아닌, 실제로 써본 다른 멤버. 검증 응답이 오면 게이트는 자동으로 "
                            f"열립니다.{rubric}{idle_note}")
+            # [팀 기여 의무 게이트 — RFC-009] 교차 검증(cross_checks)과 **독립**. 검증이 됐어도(검증은
+            # 기능 위주라 폴리시 부재를 못 잡음 — RFC-009 §3), 팀에 부른 직군이 이 흐름에서 회의 발언만 하고
+            # 실작업·검증 0(act_by==0: Write/Edit/run 한 번도 없음)이면 그 도메인(타격감·그래픽·사운드·디자인·
+            # UX 등 폴리시)은 작품에 '반영되지 않은' 것이다 — 라이브 P-010: VFX·디자이너·모션·게임비주얼이
+            # 실구현 0인 채 마감돼 "단순 나열 웹·타격감 없는 게임"이 됨(발언≠기여). 직군 키워드 없이 '실작업
+            # 0'만 본다(보편 이치: 부른 직군은 기여한다, 회의 참석≠기여). 1회 보류 후 재호출 통과(무한 반려
+            # 금지 — 판단은 리더). 동면 복구로 act_by가 0에서 재시작한 경우에도 1회 환기되나 '복구 후 기여
+            # 재확인'으로 무해(검증 누계 리셋과 같은 정신) — 재호출 통과.
+            if has_product and not flow.current.contrib_checked:
+                contrib_idle = [m for m in third if flow.act_by.get(m, 0) == 0]
+                if contrib_idle:
+                    flow.current.contrib_checked = True
+                    if flow.log:
+                        flow.log("task_contrib_idle", task=flow.current.task_id,
+                                 idle=[int(m) for m in contrib_idle])
+                    # [RFC-009 2단계 정수 — 발언→책임] 회의록(meet 미니츠는 '[NR] 직군: 발언'으로 화자
+                    # 귀속)에서 잠수 직군 '본인의 발언'을 끌어와 게이트에 그대로 되돌린다 — "당신이 회의에서
+                    # 한 이 말이 산출물에 들어갔나?"(발언≠구현). 직군 키워드 없이 본인 발언만 에코(보편
+                    # 이치). 발언은 collab_notes로 Work 위임에 자동 동봉되므로(577·1562) ①로 맡기면 본인
+                    # 약속이 구현자=본인에게 전달돼 루프가 닫힌다 — 별도 '발언→Task' 게이트가 불필요(중복).
+                    notes_lines = (getattr(flow.current, "collab_notes", "") or "").splitlines()
+                    commits = []
+                    for m in contrib_idle:
+                        role = (flow._info(m) or "").strip()
+                        said = [ln.split(":", 1)[1].strip() for ln in notes_lines
+                                if role and f"] {role}:" in ln]
+                        said = [s for s in said if s]
+                        if said:
+                            commits.append(f"· {role}: “{_speech_clip(' / '.join(said), 240)}”")
+                    commit_note = ("\n[회의 발언 대조 — 발언≠구현] 아래는 이 직군들이 회의에서 한 말입니다 — "
+                                   "각 발언이 실제 산출물에 반영됐는지 직접 확인하고, 안 됐으면 ①로 맡기세요:\n"
+                                   + "\n".join(commits)) if commits else ""
+                    return _ok(
+                        f"완료 보류(팀 기여 의무 — RFC-009): 팀의 {flow._names(contrib_idle)}이(가) 이 흐름에서 "
+                        f"**회의 발언 외 실작업·검증이 0**입니다(Write/Edit/run 0회) — 이 직군의 도메인"
+                        f"('되는가'를 넘는 그 직군의 품질·폴리시)이 **작품에 반영되지 "
+                        f"않았습니다**. 셋 중 하나를 택하세요: ① 필요한 도메인이면 request(Work)로 맡겨 "
+                        f"**실제로 만들게** 하고 그 산출물을 교차 검증까지 받으세요 ② 애초에 불필요했으면 "
+                        f"팀에서 빼세요(왜 불렀나=다음 학습) ③ 둘 다 아니면 complete_task 재호출로 통과(판단은 "
+                        f"당신) — **단, 재호출로 통과하면 '이 직군들을 뺀 채 마감'이 Task 기록에 남습니다**(정말 "
+                        f"불필요하면 result에 그 이유를 적으세요; 반사적 통과 방지). 특히 회의에서 '중요하다'고 한 "
+                        f"부분이 실제 산출물에 들어갔는지 확인하세요 — 발언만으로는 작품이 바뀌지 않습니다.{commit_note}")
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.
@@ -1257,9 +1362,19 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         and flow.current.cross_checks == 0)
             if solo and flow.log:
                 flow.log("task_solo_completed", task=flow.current.task_id, owner=int(flow.current.owner or 0))
+            # [기여 미흡 마감 가시화 — RFC-009, 침묵 강행 불가] 게이트 1회 보류를 재호출로 통과해(옵션③)
+            # 잠수 직군이 여전히 실작업 0인 채 마감되면, '이 직군들을 뺀 채 마감'을 결과에 박아 영속한다 —
+            # 라이브 3/3 게이트가 전부 반사적 재호출로 통과해 폴리시가 또 빠짐(사용자 지적). 행동은 막지
+            # 않되(리더 자율) 사후 분석·사용자·학습이 한눈에 보게(단독 마감 마커와 같은 정신). 직군 키워드 없음.
+            contrib_idle_now = [m for m in third if flow.act_by.get(m, 0) == 0] if has_product else []
+            if contrib_idle_now and flow.log:
+                flow.log("task_contrib_overridden", task=flow.current.task_id,
+                         idle=[int(m) for m in contrib_idle_now])
             done_ref.status.status = "완료"
             done_ref.status.result = (
                 (f"[검증: 단독 마감 — 교차 검증 0, 리더 판정만]\n" if solo else "")
+                + (f"[기여 미흡: {flow._names(contrib_idle_now)} 실작업 0 — 리더 판단으로 마감(폴리시 미반영 가능)]\n"
+                   if contrib_idle_now else "")
                 + f"[보고] {report}\n"
                 f"[시스템 실행기록 {done_ref.run_count}회·마지막] {done_ref.evidence or '(없음)'}"
             )[:1400]

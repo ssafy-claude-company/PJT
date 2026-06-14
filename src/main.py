@@ -109,6 +109,36 @@ def graduated_project(projects: dict, message_id) -> Optional[dict]:
     return None
 
 
+def projects_to_resume(projects: dict, already_channels: set, main_channel) -> list:
+    """[복구 갭 보완 — 사용자 지적 2026-06-13] 미완 Task(open_task)가 남은 등록 프로젝트를 '이어서
+    재개' 대상으로 돌려준다. 프로젝트 채널 평문 개입이 부분 처리된 채(마지막 메시지에 봇 응답이 달려
+    find_pending_request가 '완료'로 보고 못 잡음) 동면하면, 졸업 라우팅(main 출신만 커버)에도 안 걸려
+    영영 재개되지 않던 구멍 — 라이브: '게임성 고도화' 개입이 부팅 복구에서 누락(사용자가 수동 재전송).
+    open_task는 Task 완료 시 None으로 비워지므로(체크포인트), 남아 있으면 '미완 작업 존재'의 신뢰
+    신호다. 이미 복구 큐에 든 채널(졸업 라우팅 등 중복)·메인 채널은 제외한다(유령·이중 발사 방지)."""
+    out = []
+    for ch, p in (projects or {}).items():
+        try:
+            if int(ch) == int(main_channel) or int(ch) in already_channels:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if isinstance(p, dict) and p.get("open_task"):
+            out.append(p)
+    return out
+
+
+def resume_continue_body(body) -> str:
+    """[복구 이어가기 본문 — 사용자 지적 2026-06-14] 미완 Task(open_task)가 복원되는 복구에서 원요청을
+    '새 요청'처럼 재처리하면, 리더가 복원된 미완 Task를 **섣불리 complete하고 새 Task를 여는** 사고가 난다
+    (라이브: 054013-1 조기완료→074010-1 신설, "기존 안 끝났는데 새로 열림"). 그래서 재발사 본문 앞에
+    '복원 Task를 이어서 완성, 새 Task·조기 complete 금지'를 명시한다. 원요청은 그대로 뒤에 보존(시스템이
+    말을 지어내지 않되, 이어가기 맥락만 앞에 붙인다)."""
+    return ("[부팅 복구 — 이어가기] 직전 세션에서 이 요청으로 시작한 **미완 Task가 복원**됐습니다. **새 "
+            "Task를 열지 말고, 복원된 그 Task를 이어서 완성**하세요 — 미완인데 섣불리 complete_task 하거나 "
+            "새 create_task 하지 마세요(라이브 사고: 미완을 조기 완료하고 새로 엶). 원요청: " + (body or ""))
+
+
 async def _connect(token: str, message_content: bool = False,
                    members: bool = False) -> Tuple[discord.Client, asyncio.Task]:
     """봇 하나를 연결하고 on_ready까지 기다린다. 일시적 TLS/클럭 스큐 블립엔 재시도.
@@ -425,19 +455,38 @@ async def run() -> None:
                 if grad.get("open_task"):
                     log.info("부팅 복구: 원요청이 %s로 졸업 + 미완 Task 존재 → 프로젝트 채널 개입으로 이어가기",
                              grad.get("id"))
-                    # 개입 본문은 시스템 작문이 아니라 **사용자 원문 그대로**(사용자 지적: 이미 한 채팅
-                    # 요청이 있는데 시스템이 말을 지어내 상태에 띄우지 말 것) — '이어가기' 맥락은
-                    # open_task 복원 노트(새 Task 금지·복원 Task 잇기)와 프로젝트 스코프 세션 기억이 담당.
+                    # 개입 본문은 사용자 원문을 보존하되(시스템이 말 지어내기 금지) 앞에 '이어가기'를 명시한다
+                    # — 복원 노트만으론 리더가 원요청을 새 요청처럼 보고 복원 Task를 조기 완료·새 Task 신설하던
+                    # 사고(라이브 054013-1→074010-1)를 막기 위해(resume_continue_body).
                     pendings.append((int(grad["channel"]), Request(
                         to_id=grad.get("leader"), kind=pending.kind or Kind.WORK,
-                        body=pending.body,
+                        body=resume_continue_body(pending.body),
                         from_id=pending.from_id, message_id=pending.message_id)))
                 else:
                     log.info("부팅 복구: 원요청이 %s로 졸업(미완 Task 없음) → 재발사 안 함", grad.get("id"))
                 continue
         if pending.to_id is None:        # 프로젝트 채널이면 그 프로젝트의 등록 리더가 기본 담당
             pending.to_id = sysm.projects[ch]["leader"] if ch in sysm.projects else leader_id
+        # [복구 충돌 교정 — 사용자 지적] 이 프로젝트에 미완 Task가 있으면 원요청을 '새 요청'으로 재처리하면
+        # 리더가 복원 Task를 조기 완료하고 새 Task를 연다(라이브: 054013-1 조기완료→074010-1 신설). 본문에
+        # '이어가기'를 명시해 그 사고를 막는다(원요청은 보존).
+        if ch in sysm.projects and sysm.projects[ch].get("open_task"):
+            pending.body = resume_continue_body(pending.body)
         pendings.append((ch, pending))
+    # [복구 갭 보완 — 사용자 지적] 위 스캔은 '미응답 마지막 [Request]'만 잡는다 — 프로젝트 채널 평문
+    # 개입이 부분 처리(봇 응답 후 동면)되면 '완료'로 보여 누락된다. open_task가 남은 등록 프로젝트는
+    # 그 채널 개입으로 이어 재개(졸업 라우팅의 open_task 이어가기를 프로젝트 채널 개입에도 동일 적용).
+    if not skip_recovery:
+        already = {int(c) for c, _ in pendings}
+        for p in projects_to_resume(sysm.projects, already, cfg.channel_id):
+            # 본문은 시스템 작문이 아니라 '프로젝트 존재 이유'(=사용자 원문, 등록 시 보존)로 — 이어가기
+            # 맥락(새 Task 금지·복원 Task 잇기)은 open_task 복원이 담당(사용자: 시스템이 말 짓지 말 것).
+            body = (p.get("purpose") or "").strip() or "이어서 미완 작업을 마저 진행"
+            pendings.append((int(p["channel"]), Request(
+                to_id=p.get("leader") or leader_id, kind=Kind.WORK, body=body,
+                from_id=system_client.user.id,
+                message_id="recover-open-%s" % (p.get("id") or p["channel"]))))
+            log.info("부팅 복구: %s 미완 Task(open_task) 존재 → 프로젝트 채널 개입으로 이어가기", p.get("id"))
     if pendings:
         async def _recover_all():
             for ch, req in pendings:

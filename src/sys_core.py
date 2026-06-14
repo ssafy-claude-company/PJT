@@ -1320,8 +1320,12 @@ class Sys:
             # **원요청 채널의 시초 상태 메시지를 이어서 갱신**한다. 시작 시각도 시초의 것을
             # 유지 — 재개마다 '작업 중 0분'부터 새로 재고 동면 1회당 계기판이 1개씩 쌓이던
             # 노이즈(라이브 관측) 제거. 시초가 사라졌으면(삭제 등) 새로 단다(폴백).
-            o = (proj.get("origin_status") if proj and root_id
-                 and str(root_id) == str(proj.get("origin_msg") or "") else None) or {}
+            # [개입 대시보드 재사용 — 중복 금지, 사용자 설계 "개입은 그대로 남게"] 등록 프로젝트의
+            # 흐름(졸업 재개든 프로젝트 채널 평문 개입이든)은 그 프로젝트의 **단일 대시보드**를 잇는다.
+            # 종전엔 root_id==origin_msg(졸업 재개)일 때만 재사용해, 새 개입은 매번 새 대시보드를 달았다
+            # (라이브 2026-06-13: 동면 후 개입마다 '작업 중 0분' 계기판이 1개씩 누적 — 사용자 지적).
+            # 개입(proj 존재)이면 무조건 재사용한다. 신규 흐름(proj None)만 새로 단다.
+            o = (proj.get("origin_status") if proj else None) or {}
             if o.get("id"):
                 try:
                     t0_resume = time.monotonic() - max(0.0, time.time() - float(o.get("started") or time.time()))
@@ -1334,6 +1338,12 @@ class Sys:
                 try:
                     status_mid = await self.guide.post(channel_id, 0, self._status_text(flow, status_t0))
                     status_ch = int(channel_id)
+                    # 개입에 새 대시보드를 달았으면(시초가 없거나 삭제됨) 프로젝트에 기록 → 다음 개입이
+                    # 재사용(중복 누적 방지 + 시초 삭제 시 자가 치유). 신규 흐름(proj None)은 _reg가 기록.
+                    if proj is not None and status_mid:
+                        proj["origin_status"] = {"channel": status_ch, "id": str(status_mid),
+                                                 "started": int(time.time() - (time.monotonic() - status_t0))}
+                        self._save_projects()
                 except Exception:
                     status_mid = None
             if status_mid:
