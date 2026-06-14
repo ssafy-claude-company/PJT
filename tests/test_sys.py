@@ -1938,6 +1938,62 @@ def test_팀기여의무_전원_실작업하면_보류없음_RFC009():
     assert f.current is None and "보류" not in r["content"][0]["text"]    # 즉시 마감
 
 
+def test_의견수렴_안내는_meet_권장한다_라이브0퍼센트채택():
+    """[meet 채택 유도 — 라이브 분석: meet/vote 0% 채택, 리더가 1:1 Info로만 폴링→앵커링·합의 미기록]
+    create_task와 set_goal(미협의) 안내가 의견 수렴을 **meet(회의)**로 권장한다(1:1 Info 순차가 아니라).
+    합의가 또렷·빠르고 회의록(collab_notes)이 자동으로 남아 구현자에게 전달된다."""
+    g = FakeGuide()
+    f = _flow(g)
+    t = _tools(f, 11, "leader")
+    rc = asyncio.run(t["create_task"].handler({"members": "12"}))["content"][0]["text"]
+    assert "meet" in rc and "회의" in rc                       # meet 권장
+    assert ("앵커링" in rc) or ("회의록" in rc)                 # 이유 명시
+    rg = asyncio.run(t["set_goal"].handler({"goal": "g"}))["content"][0]["text"]  # 12 미협의 → 거부
+    assert "확정 거부" in rg and "meet" in rg                  # 거부 안내도 meet 권장
+
+
+def test_setgoal_품질차원_팀구성유도_폴리시채용_환기_RFC009():
+    """[RFC-009 3단계 — 상류 폴리시 의식] set_goal 안내가 ① 팀 구성에서 품질 축을 유도(팀 직군을
+    나열해 각 도메인 품질을 '완성'의 축으로) ② 폴리시 직군이 팀에 있는지 보고 없으면 recruit하라고
+    환기 — '게임이면 VFX' 같은 직군 키워드 하드코딩 없이(작품 종류 판단은 리더)."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[13] = "VFX 전문가"; f.project_team.append(13)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.add(12); f.current.participated.add(13)
+    txt = asyncio.run(t["set_goal"].handler({"goal": "게임"}))["content"][0]["text"]
+    assert "품질 차원" in txt
+    assert "VFX 전문가" in txt                  # 팀 직군 나열(구성에서 품질 축 유도)
+    assert "recruit" in txt and "폴리시" in txt  # 없으면 채용 환기
+
+
+def test_기여미흡_재호출_마감은_기록과_로그에_남는다_RFC009():
+    """[게이트 강화 — 침묵 강행 불가] 잠수 직군이 실작업 0인 채 기여 게이트를 재호출로 통과해 마감하면
+    (옵션③), '[기여 미흡: … 실작업 0 — 리더 판단 마감]'이 Task 결과에 박히고 task_contrib_overridden
+    로그가 남는다 — 라이브 3/3 게이트가 반사적 재호출로 통과해 폴리시가 또 빠짐. 막진 않되(리더 자율)
+    사후 분석·사용자·학습이 한눈에 보게(단독 마감 마커와 같은 정신). 보류 메시지도 '기록에 남는다' 경고."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[13] = "VFX 전문가"; f.project_team.append(13)
+    logs = []
+    f.log = lambda ev, **k: logs.append((ev, k))
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.add(12); f.current.participated.add(13)
+    asyncio.run(t["set_goal"].handler({"goal": "타격감 있는 게임"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5; f.act_by[13] = 0          # owner 실작업, VFX 잠수
+    f.current.cross_checks = 1
+    r1 = asyncio.run(t["complete_task"].handler({"result": "끝"}))   # 1회차: 보류
+    assert "완료 보류(팀 기여 의무" in r1["content"][0]["text"] and f.current is not None
+    assert "기록에 남습니다" in r1["content"][0]["text"]              # 재호출 통과 경고
+    r2 = asyncio.run(t["complete_task"].handler({"result": "VFX 불필요 판단"}))   # 2회차: 재호출 통과
+    assert f.current is None                                          # 마감됨(리더 자율)
+    assert "기여 미흡" in f.tasks[0].status.result and "VFX 전문가" in f.tasks[0].status.result
+    assert any(ev == "task_contrib_overridden" for ev, _ in logs)    # 로그에 영속
+
+
 def test_협의기록은_Work위임에_동봉되고_스냅샷에_생존한다(tmp_path):
     """[스펙 증발 방지] 회의·표결 합의(collab_notes)는 ① 이후 모든 Work 위임 본문에 자동 동봉되고
     ② Task 스냅샷에 영속돼 재개 후 위임에도 살아있다 — 라이브 P-009: 9직군이 회의로 정한 스펙이

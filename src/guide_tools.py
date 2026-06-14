@@ -1129,16 +1129,19 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                          "인원이 늘수록 가파르게 커집니다(필요 이상 큰 실행 팀은 비효율). 회의·검증엔 전원, "
                          "실행엔 핵심만.")
             return _ok(f"task={tid} (빈 껍데기·담당자가 팀 선정) thread={thread_id} 팀={flow._names(team)}{size_note} — 이 팀은 "
-                       f"당신이 고른 구성입니다(직군이 부족하면 recruit(role=)로 더하세요). 배정된 팀 **전원**에게 "
-                       f"request(Info)로 'Purpose(풀 문제)·Goal(성공기준)·각자 도메인 할 일'을 물어 함께 정한 뒤 "
-                       f"set_goal로 확정하세요(전원 협의 전엔 set_goal 거부됨). 그 다음 일을 맡길 동료에게 Work로 위임.")
+                       f"당신이 고른 구성입니다(직군이 부족하면 recruit(role=)로 더하세요). 배정된 팀과 **meet(회의)로 "
+                       f"'Purpose(풀 문제)·Goal(성공기준)·각자 도메인 할 일'을 함께 정한 뒤** set_goal로 확정하세요 — "
+                       f"meet은 독립의견을 동시에 모으고(앵커링 방지) 토론·회의록(합의)까지 남깁니다(1:1 request(Info)를 "
+                       f"여러 번 도는 것보다 합의가 또렷하고 빠름 — 개별 후속 확인만 Info로). 전원 협의 전엔 set_goal "
+                       f"거부됨. 그 다음 일을 맡길 동료에게 Work로 위임.")
         tools.append(create_task)
 
         @tool("set_goal",
               "팀 회의로 정한 이번 Task의 **Purpose(풀 문제)와 Goal(측정가능한 성공기준)**을 확정·기록한다. 리더 "
-              "단독/선지정 금지 — **이 Task의 멤버 전원**에게 request(Info)로 'Purpose·네 도메인의 목표·성공기준'을 "
-              "물어 수렴한 결과를 적는다. Goal엔 '무엇이 되면 성공인가'(결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·"
-              "스택으로 만들지'(구현 방법)는 쓰지 말 것 — 그건 owner가 정한다. Work 위임은 확정 뒤에만 가능.",
+              "단독/선지정 금지 — **이 Task의 멤버 전원**과 meet(회의)로 'Purpose·각 도메인의 목표·성공기준'을 "
+              "수렴한 결과를 적는다(1:1 request(Info)보다 meet 권장 — 앵커링↓·회의록 자동 기록). Goal엔 '무엇이 "
+              "되면 성공인가'(결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·스택으로 만들지'(구현 방법)는 쓰지 말 것 — "
+              "그건 owner가 정한다. Work 위임은 확정 뒤에만 가능.",
               {"purpose": str, "goal": str})
         async def set_goal(args):
             if flow.current is None:
@@ -1154,9 +1157,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             missing = [m for m in members if m not in flow.current.participated]
             if missing:
                 return _ok(f"확정 거부: 이 Task의 Purpose·Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
-                           f"아직 의견을 안 받은 멤버: {flow._names(missing)} — 그들에게 request(Info)로 '이 Task에서 "
-                           f"풀 문제·네 도메인의 목표·성공기준'을 먼저 물어 수렴한 뒤 set_goal로 기록하세요(파일·"
-                           f"엔드포인트 같은 구현 스펙 말고 '측정가능한 결과'로).")
+                           f"아직 의견을 안 받은 멤버: {flow._names(missing)} — 그들과 **meet(회의)로 '풀 문제·각 "
+                           f"도메인의 목표·성공기준'을 함께 정한 뒤** set_goal로 기록하세요(meet 발언이 협의로 인정됨 — "
+                           f"1:1 request(Info)도 인정되나 회의가 앵커링↓·합의 기록↑). 파일·엔드포인트 같은 구현 스펙 "
+                           f"말고 '측정가능한 결과'로.")
             if purpose:
                 flow.current.status.purpose = purpose
             flow.current.status.goal = goal
@@ -1175,11 +1179,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # (Holmström-Milgrom 다중작업: 측정가능한 것만 보상 → 품질 이탈이 최적). 기능 체크리스트와
             # 별도로 '이 도메인의 훌륭함'(완성도·UX·재미)을 품질 차원으로 의식하게 — 정의 불가한 품질도
             # 부분 operationalize는 가능(Graham). 강제 아닌 공급(암묵지라 다 못 적음 — Polanyi).
-            qbar = ("\n[품질 차원 — 기능과 별개] goal의 '기능 체크리스트'는 '되는가'만 봅니다. 하지만 "
-                    "'작동≠훌륭함'입니다(라이브: 작동하나 품질 낮은 게임). 마감 검증 때 각 전문가의 직무 "
-                    "기준(품질 루브릭)으로 '이 도메인 기준에 충분한가'를 함께 봅니다 — 지금 그 품질 기대치를 "
-                    "팀과 한 줄 공유해두면(예: '프로그래머 아트가 아닌 일관된 비주얼', '첫 30초에 재미') "
-                    "검증이 명확해집니다.")
+            team_roles = [r for r in flow._names([m for m in flow.current.team if m != me_id]) if r]
+            qbar = ("\n[품질 차원 — '되는가'≠'배포할 만한가'] 측정가능한 기능만 goal에 담으면 측정 어려운 품질"
+                    "(완성도·UX·재미·연출)이 빠집니다(라이브: 작동하나 폴리시 0인 게임). 지금 두 가지를 의식하세요: "
+                    f"① **이 팀 구성에서 품질 축을 유도** — 팀의 각 직군({', '.join(team_roles) or '동료'})의 도메인 "
+                    "품질(예: 일관된 비주얼·타격감·사운드·반응성)이 곧 '완성'의 축입니다. goal에 기능 체크리스트와 "
+                    "함께 그 품질 기대치를 한 줄씩 담으세요(예: '프로그래머 아트가 아닌 일관된 비주얼', '첫 30초에 재미'). "
+                    "② **폴리시 직군이 팀에 있는가** — 이 작품이 사용 경험(비주얼·연출·사운드 등)을 요구하는 종류면"
+                    "(판단은 당신) 그 전문가가 팀에 있는지 보고 없으면 recruit하세요 — 안 부르면 그 품질은 아무도 "
+                    "책임지지 않습니다(라이브: 폴리시 직군 미채용/잠수로 '최소 기능'만 배포됨).")
             return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}{tip}{qbar}")
         tools.append(set_goal)
 
@@ -1286,8 +1294,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         f"않았습니다**. 셋 중 하나를 택하세요: ① 필요한 도메인이면 request(Work)로 맡겨 "
                         f"**실제로 만들게** 하고 그 산출물을 교차 검증까지 받으세요 ② 애초에 불필요했으면 "
                         f"팀에서 빼세요(왜 불렀나=다음 학습) ③ 둘 다 아니면 complete_task 재호출로 통과(판단은 "
-                        f"당신). 특히 회의에서 '중요하다'고 한 부분이 실제 산출물에 들어갔는지 확인하세요 — "
-                        f"발언만으로는 작품이 바뀌지 않습니다.{commit_note}")
+                        f"당신) — **단, 재호출로 통과하면 '이 직군들을 뺀 채 마감'이 Task 기록에 남습니다**(정말 "
+                        f"불필요하면 result에 그 이유를 적으세요; 반사적 통과 방지). 특히 회의에서 '중요하다'고 한 "
+                        f"부분이 실제 산출물에 들어갔는지 확인하세요 — 발언만으로는 작품이 바뀌지 않습니다.{commit_note}")
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.
@@ -1299,9 +1308,19 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         and flow.current.cross_checks == 0)
             if solo and flow.log:
                 flow.log("task_solo_completed", task=flow.current.task_id, owner=int(flow.current.owner or 0))
+            # [기여 미흡 마감 가시화 — RFC-009, 침묵 강행 불가] 게이트 1회 보류를 재호출로 통과해(옵션③)
+            # 잠수 직군이 여전히 실작업 0인 채 마감되면, '이 직군들을 뺀 채 마감'을 결과에 박아 영속한다 —
+            # 라이브 3/3 게이트가 전부 반사적 재호출로 통과해 폴리시가 또 빠짐(사용자 지적). 행동은 막지
+            # 않되(리더 자율) 사후 분석·사용자·학습이 한눈에 보게(단독 마감 마커와 같은 정신). 직군 키워드 없음.
+            contrib_idle_now = [m for m in third if flow.act_by.get(m, 0) == 0] if has_product else []
+            if contrib_idle_now and flow.log:
+                flow.log("task_contrib_overridden", task=flow.current.task_id,
+                         idle=[int(m) for m in contrib_idle_now])
             done_ref.status.status = "완료"
             done_ref.status.result = (
                 (f"[검증: 단독 마감 — 교차 검증 0, 리더 판정만]\n" if solo else "")
+                + (f"[기여 미흡: {flow._names(contrib_idle_now)} 실작업 0 — 리더 판단으로 마감(폴리시 미반영 가능)]\n"
+                   if contrib_idle_now else "")
                 + f"[보고] {report}\n"
                 f"[시스템 실행기록 {done_ref.run_count}회·마지막] {done_ref.evidence or '(없음)'}"
             )[:1400]
