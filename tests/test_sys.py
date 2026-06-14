@@ -2005,6 +2005,7 @@ def test_교차검증_체험대조_요구하고_누적취향_주입_RFC011():
     assert "완료 거부" in txt
     assert "'작동'이지 '좋음'" in txt                       # presence-only 반려(M2)
     assert "WebSearch로 실제로 찾아 대조" in txt             # 체험·예시대조(M1+M2)
+    assert "스크린샷" in txt and "눈으로 보고" in txt          # 자율 비전 검증 — DOM 존재가 아니라 '실제로 보이는 것'(M2')
     assert "사용자가 반복해 지적한 것" in txt and "브금 없음" in txt   # 누적 취향 주입(M3)
 
 
