@@ -2109,7 +2109,7 @@ def test_교차검증_경험적_비평_요구_RFC010():
     f.act_by[12] = 5                              # cross_checks=0 → 교차검증 게이트 발동
     txt = asyncio.run(t["complete_task"].handler({"result": "끝"}))["content"][0]["text"]
     assert "완료 거부(교차 검증" in txt
-    assert "실제로 실행" in txt and "재밌" in txt   # P1 경험적 + 플레이어 비평
+    assert "실제로 실행" in txt and "써보니 좋은가" in txt   # P1 경험적 비평(범용 — '재밌나' 게임 프라이밍 제거)
     assert "만든 사람이 아닌" in txt               # P2 분리된 검증자(자기검증 무효)
 
 
