@@ -1979,6 +1979,9 @@ def test_setgoal_발산수렴_완성재정의_RFC010():
     txt = asyncio.run(t["set_goal"].handler({"goal": "게임"}))["content"][0]["text"]
     assert "발산→수렴" in txt or "2~3개" in txt        # P3 복수안 비교
     assert "작동≠좋음" in txt and "써보니 좋다" in txt   # P5 완성 재정의(경험 기반)
+    # P6: 장르 예시 대비 '범주적 부재' 점검 + 신규 구축/recruit (라이브: 사운드 0 미인지)
+    assert "범주적 부재" in txt and "신규 구축" in txt
+    assert "recruit" in txt and "사운드" in txt          # 예시로 사운드(키워드 하드코딩 아님 — 장르판단은 리더)
 
 
 def test_교차검증_경험적_비평_요구_RFC010():
