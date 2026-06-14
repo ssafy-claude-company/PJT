@@ -1123,6 +1123,27 @@ class Sys:
             except CommError:
                 break
 
+    def record_user_feedback(self, channel_id, text):
+        """사용자가 프로젝트 채널에 남긴 말을 그 프로젝트에 누적한다(RFC-011 M3 — 취향 축적).
+
+        상용 품질의 천장은 LLM 취향(인간 상관 ~0.5)이라 유일한 신뢰 앵커는 사용자다. 사용자가
+        이 프로젝트에서 반복해 지적·요구한 것(되풀이되는 불만)을 쌓아 두면 set_goal·검증에서 그걸
+        '이 작품의 품질 기준'으로 되돌릴 수 있다 — 직군·도메인 키워드 하드코딩 없이(사용자 자신의
+        말), 배포→플레이→비평이 돌수록 기준이 스스로 올라가는 학습 고리. projects.json에 영속해
+        동면·재시작 후에도 누적이 유지된다(신규 채널은 아직 미등록이라 자동 skip — 원문은 purpose로 보존)."""
+        text = (text or "").strip()
+        if not text:
+            return
+        p = self.projects.get(int(channel_id))
+        if p is None:
+            return
+        fb = p.setdefault("feedback", [])
+        if fb and fb[-1].get("text") == text:   # 복구 재발사·중복 전송 가드(연속 동일 무시)
+            return
+        fb.append({"ts": int(time.time()), "text": text[:600]})
+        del fb[:-50]   # 저장 위생: 최근 50개만(품질 게이트 아님 — 용량 바운드)
+        self._save_projects()
+
     async def handle_user_input(self, channel_id, leader_id, user_text, root_id=None) -> dict:
         proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'(이어지는 작업)
         # [신규×신규 병렬 완화] 신규 요청도 고유 스코프로 동시 진행한다 — 과거 'main' 직렬은 등록
@@ -1182,6 +1203,9 @@ class Sys:
         lead = proj["leader"] if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
         flow.session_scope = session_scope
+        # [RFC-011 M3] 이 프로젝트에 누적된 사용자 취향(반복된 비평·요구)을 흐름에 부착 — set_goal·검증이
+        # '상용 수준'의 외부 앵커로 되돌린다(사용자 자신의 말이라 하드코딩 0, 회차가 쌓일수록 기준 상승).
+        flow.user_feedback = (proj.get("feedback") if proj else None) or []
         # [선점 — 레이스 봉쇄] 게이트 통과 직후·첫 await 이전에 스코프를 점유한다. 등록이 늦으면
         # (개입 복원 등 await 사이) 같은 채널의 연속 메시지가 둘 다 게이트를 통과해 '같은 프로젝트에
         # 흐름 2개'가 생길 수 있다(작업공간·베턴 이중화). 병렬 도입 전부터 있던 창을 함께 봉쇄.

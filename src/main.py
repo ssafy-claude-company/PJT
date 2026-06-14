@@ -29,6 +29,11 @@ from .permissions import make_pre_tool_use_hook
 from .protocol import Kind, Request, Response, parse
 from .sys_core import Sys
 
+# 워커 공통 기본 도구: 파일(Read/Write/Edit)·탐색(Glob/Grep/ToolSearch)에 더해 WebSearch/WebFetch —
+# '같은 종류의 훌륭한 예'를 상상이 아니라 실제로 찾아 대조하는 현실 기준 도구(RFC-011 M1). LLM은 자기
+# 산출을 기준 삼아 '평범=충분'으로 수렴하므로(취향 천장 ~0.5), 외부 레퍼런스 검색이 '상용 수준'의 기준이 된다.
+WORKER_BASE_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", "WebSearch", "WebFetch"]
+
 
 def load_roster() -> List[Tuple[str, str]]:
     """ORGANT_ROSTER → [(token, 역할), ...]. 첫 항목이 리더. 없으면 TEST_BOT 단독.
@@ -180,7 +185,7 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
         # 리더도 한 명의 직원 — 구현 도구(Write/Edit)를 그대로 갖는다. 차이는 권한이 아니라
         # 역할: 목표는 팀 합의로 정하고(set_goal), Work 위임 본문은 '스펙'이 아니라
         # '측정가능한 목표'이며, 받은 owner가 구현·검증까지 끝까지 책임진다.
-        allowed = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", *FLOW_TOOLS]
+        allowed = [*WORKER_BASE_TOOLS, *FLOW_TOOLS]   # 기본 도구(WebSearch 포함, RFC-011 M1) + 흐름 도구
         # 턴 한도 = 폭주(무한 루프) 브레이크일 뿐, 작업을 자르는 수단이 아니다 — 끊겨도 작업·세션은
         # 보존되고 '이어서' 재위임으로 잇는다. 다만 큰 산출물(대형 클라 본체 등)이 한 위임 안에 끝나도록
         # 워커 예산을 넉넉히 두고, 운영 중 조정은 환경변수로(코드 수정·재배포 불필요).
@@ -415,6 +420,13 @@ async def run() -> None:
                 req.to_id = sysm.projects[ch]["leader"] if is_project else leader_id
             audit.record("user_request", to=req.to_id, body=req.body[:200])
             log.info("요청 수신: to=%s body=%r", req.to_id, (req.body or '')[:60])
+            # [RFC-011 M3 — 취향 축적] 등록 프로젝트 채널의 사용자 발화를 그 프로젝트에 누적(라우팅 전에 —
+            # 이번 흐름의 set_goal도 최신 비평을 품질 기준으로 보게). 반복되는 불만이 곧 '상용 수준'의 앵커.
+            if is_project:
+                try:
+                    sysm.record_user_feedback(ch, req.body)
+                except Exception:
+                    pass
             await sysm.route_channel_request(ch, req)   # 실제 채널 id로 라우팅
             log.info("요청 처리 완료: to=%s", req.to_id)
         except Exception:

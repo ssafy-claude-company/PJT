@@ -1834,7 +1834,7 @@ def test_교차검증_의무_제3멤버가_있으면_단독마감_불가():
     r1 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
     txt1 = r1["content"][0]["text"]
     assert "완료 거부" in txt1 and f.current is not None           # 거부
-    assert "각 부분·기준" in txt1                                  # 항목 '수' 아닌 '각 부분' 검증 요구(매직넘버 제거)
+    assert "각 부분이 '존재하나'가 아니라" in txt1                 # 항목 '수'·'존재' 아닌 '체험'으로 각 부분 검증(RFC-011 M2)
     assert "실작업·검증 참여 0" in txt1                            # 잠수 멤버(13) 가시화
     r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
     assert "완료 거부" in r2["content"][0]["text"] and f.current is not None   # 재호출도 거부(우회 없음)
@@ -1943,6 +1943,89 @@ def test_팀기여의무_게이트는_잠수직군_회의발언을_되돌린다_
     assert "완료 보류(팀 기여 의무" in txt and "회의 발언 대조" in txt
     assert "히트스톱+화면진동" in txt              # VFX 본인 발언을 그대로 되돌림
     assert "상태머신" not in txt                   # 백엔드 발언은 잠수자(VFX)에 오귀속 안 됨
+
+
+# ── RFC-011: 상용 품질 구조(현실 기준·체험대조 검증·취향 축적) ────────────────────────────
+def test_워커도구에_WebSearch_포함_RFC011():
+    """[RFC-011 M1] 워커 기본 도구에 WebSearch/WebFetch가 있어야 '훌륭한 예'를 상상이 아니라
+    실제로 검색해 대조한다(취향 천장 ~0.5 → 외부 레퍼런스가 '상용 수준'의 기준)."""
+    from src.main import WORKER_BASE_TOOLS
+    assert "WebSearch" in WORKER_BASE_TOOLS and "WebFetch" in WORKER_BASE_TOOLS
+
+
+def test_범주점검_보류가_WebSearch_실제예시_요구_RFC011():
+    """[RFC-011 M1] P7 범주적 완성 점검 보류는 '훌륭한 예를 떠올려'가 아니라 'WebSearch로 실제로
+    찾아' 대조하라고 요구한다(상상=자기 산출 기준 → '평범=충분' 수렴 차단)."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.gap_checked = False                          # P7 보류를 실제로 발동
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    txt = asyncio.run(t["set_goal"].handler({"goal": "g"}))["content"][0]["text"]
+    assert "확정 보류" in txt and "WebSearch로 실제로" in txt
+
+
+def test_set_goal_누적사용자취향_품질기준으로_재생_RFC011():
+    """[RFC-011 M3] 흐름에 누적된 사용자 취향(반복 비평)을 set_goal이 '진짜 품질 기준'으로 되돌린다 —
+    사용자 자신의 말이라 직군·키워드 하드코딩 0. 피드백이 없으면 그 노트는 안 붙는다."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.user_feedback = [{"ts": 1, "text": "이펙트 구림 캐릭터 디자인 구림"},
+                       {"ts": 2, "text": "기본공격 없어서 지루"}]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    txt = asyncio.run(t["set_goal"].handler({"goal": "1) 개선 A"}))["content"][0]["text"]
+    assert "누적 사용자 취향" in txt
+    assert "이펙트 구림" in txt and "기본공격" in txt        # 사용자 말이 그대로 기준으로
+    # 누적 취향이 없으면(빈 프로젝트) 그 노트는 붙지 않는다
+    f2 = _flow(g)
+    t2 = _tools(f2, 11, "leader")
+    asyncio.run(t2["create_task"].handler({"members": "12"}))
+    f2.current.participated.add(12)
+    txt2 = asyncio.run(t2["set_goal"].handler({"goal": "g"}))["content"][0]["text"]
+    assert "누적 사용자 취향" not in txt2
+
+
+def test_교차검증_체험대조_요구하고_누적취향_주입_RFC011():
+    """[RFC-011 M2] 교차검증 거부 메시지는 'presence(요소 존재·에러0·기동)는 좋음의 증거 아님'을
+    명시하고, '체험+WebSearch 예시대조'를 요구하며, 누적 사용자 취향을 검증에 주입한다."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.user_feedback = [{"ts": 1, "text": "브금 없음 사운드 애매"}]
+    f.bot_info[13] = "QA"; f.project_team.append(13)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.add(12); f.current.participated.add(13)
+    asyncio.run(t["set_goal"].handler({"goal": "1) A\n2) B"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5
+    txt = asyncio.run(t["complete_task"].handler({"result": "요소 다 존재, JS 에러 0"}))["content"][0]["text"]
+    assert "완료 거부" in txt
+    assert "'작동'이지 '좋음'" in txt                       # presence-only 반려(M2)
+    assert "WebSearch로 실제로 찾아 대조" in txt             # 체험·예시대조(M1+M2)
+    assert "사용자가 반복해 지적한 것" in txt and "브금 없음" in txt   # 누적 취향 주입(M3)
+
+
+def test_record_user_feedback_프로젝트에_누적_dedup_바운드_RFC011():
+    """[RFC-011 M3] 사용자 발화를 그 프로젝트에 누적(연속 동일 dedup, 미등록 채널 skip, 최근 50 바운드,
+    영속 호출). 누적이 set_goal·검증의 품질 앵커가 된다(배포→플레이→비평 회차마다 기준 상승)."""
+    from types import SimpleNamespace
+    saved = []
+    stub = SimpleNamespace(projects={500: {"id": "P-010"}},
+                           _save_projects=lambda: saved.append(1))
+    Sys.record_user_feedback(stub, 500, "이펙트 구림 사운드 애매함")
+    Sys.record_user_feedback(stub, 500, "이펙트 구림 사운드 애매함")   # 연속 동일 → dedup
+    Sys.record_user_feedback(stub, 500, "기본공격이 없어 지루")
+    fb = stub.projects[500]["feedback"]
+    assert [x["text"] for x in fb] == ["이펙트 구림 사운드 애매함", "기본공격이 없어 지루"]
+    assert saved                                            # 영속 호출됨
+    Sys.record_user_feedback(stub, 999, "x")               # 미등록 채널 → skip
+    assert 999 not in stub.projects
+    for i in range(60):                                    # 용량 바운드(최근 50)
+        Sys.record_user_feedback(stub, 500, f"비평{i}")
+    assert len(stub.projects[500]["feedback"]) == 50
 
 
 def test_팀기여의무_전원_실작업하면_보류없음_RFC009():
