@@ -454,6 +454,29 @@ def test_Task팀은_담당자가_동적선정():
     assert set(f.current.team) == {11, 12, 13} and 14 not in f.current.team
 
 
+def test_create_task_기본팀은_직군당_1명_비대차단():
+    """[팀 비대 차단 — 라이브 2026-06-14: 역할 드리프트로 백엔드 5명이 기본 팀에 다 들어와 set_goal
+    전원협의×비대로 meet 4회·6 잠수·136분 미수렴]. members= 없이 create_task하면 기본 팀은 **직군당 1명**
+    (실행 핵심·단일 owner 보편 이치) — 같은 직군 중복은 기본에서 제외(recruit/members=로 추가). 명시
+    members=는 중복도 그대로 존중(리더가 일부러 고른 것)."""
+    from collections import Counter
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드", 13: "백엔드", 14: "백엔드", 15: "프론트엔드", 16: "프론트엔드", 17: "QA"})
+    f.start_root("root"); f.project_team = [11, 12, 13, 14, 15, 16, 17]
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({}))                     # members 없음 → 기본팀(직군당 1명)
+    c = Counter(f._info(m) for m in f.current.team if m != 11)
+    assert c["백엔드"] == 1 and c["프론트엔드"] == 1 and c["QA"] == 1   # 백엔드 3→1, 프론트 2→1
+    assert len(f.current.team) == 4                                # 리더 + 3직군 각 1명(비대 차단)
+    # 명시 members=는 중복 직군도 존중 — 새 흐름으로 확인
+    f2 = Flow(g, channel_id=501, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "백엔드"})
+    f2.start_root("r2"); f2.project_team = [11, 12, 13]
+    t2 = {x.name: x for x in make_guide_tools(f2, 11, "leader")}
+    asyncio.run(t2["create_task"].handler({"members": "12,13"}))  # 백엔드 2명 명시
+    assert set(f2.current.team) == {11, 12, 13}                   # 명시하면 중복도 그대로(자율)
+
+
 def test_create_task_빈껍데기_purpose는_팀이_set_goal로():
     """create_task는 Purpose를 비운 '빈 껍데기'로 연다(리더가 할 일 선지정 금지) — Purpose·Goal은 그 Task
     멤버 협의 후 set_goal(purpose, goal)로 함께 확정된다(분산: 무엇을 풀지도 팀이 정함)."""

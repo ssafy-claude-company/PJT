@@ -1092,12 +1092,25 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             tid = flow.next_task_id()
             pool = flow.project_team or flow.pool
             picked = _resolve_members(args.get("members", ""), flow, pool)
-            # 팀은 담당자(리더)가 '일에 맞게' 동적으로 고른다 — 자동 전원 소집 아님(직군 고정·놀던 인력까지
-            # 무조건 소집 방지). members=로 필요한 직군 동료만 지정하면 그들로, 비우면 프로젝트팀(예비 제외)을
-            # 기본으로 한다. 모자란 직군은 recruit(role=)로 채워 합류시킨다. set_goal은 '담당자가 고른 이 팀
-            # 전원'의 협의로 통과 → 팀 구성·규모는 담당자가 이 일에 맞게 결정한다(중앙이 고정 X, 전원 강제 X).
-            base = picked if picked else [m for m in flow.project_team
-                                          if m != flow.leader and not _is_spare(flow, m)]
+            # 팀은 담당자(리더)가 '일에 맞게' 동적으로 고른다 — 자동 전원 소집 아님. members=로 필요한 직군만
+            # 지정하면 그들로. 비우면 기본 팀은 **직군당 1명**(실행 핵심)으로 둔다 — [팀 비대 차단, 라이브
+            # 2026-06-14: 역할 드리프트(과거 recruit가 Discord 역할로 영속)로 백엔드 5명 등이 기본 팀에 다
+            # 들어와, set_goal '전원 협의' × 비대 = meet 4회·6 잠수·override 노이즈·136분 미수렴]. 같은 직군
+            # 중복은 협의·게이트 비용만 키우므로(Brooks: 소통비용~인원²) 기본에서 빼고, 정말 병렬 일손이
+            # 필요하면 recruit/members=로 더한다(리더 자율). 매직넘버 아님 — '한 도메인 한 책임자'는 이미
+            # 시스템의 단일-owner 보편 이치. set_goal은 '이 (슬림한) 팀 전원' 협의로 통과.
+            if picked:
+                base = picked
+            else:
+                base, _seen = [], set()
+                for m in flow.project_team:
+                    if m == flow.leader or _is_spare(flow, m):
+                        continue
+                    r = (flow._info(m) or "").strip()
+                    if r and r in _seen:
+                        continue        # 같은 직군 중복은 기본 팀에서 제외(recruit로 추가 가능)
+                    _seen.add(r)
+                    base.append(m)
             team = _uniq([flow.leader] + base)
             # 'PM 혼자 Task' 차단(구조): 프로젝트에 직군 동료가 있는데 리더 혼자만 멤버로 여는 건 팀을 버리고
             # 단독작업·독식하는 패턴(사용자가 본 'PM 혼자 있는 Task'). 동료가 무응답이라고 새 솔로 Task로 도망가지
