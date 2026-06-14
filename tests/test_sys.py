@@ -2005,9 +2005,10 @@ def test_setgoal_발산수렴_완성재정의_RFC010():
     txt = asyncio.run(t["set_goal"].handler({"goal": "게임"}))["content"][0]["text"]
     assert "발산→수렴" in txt or "2~3개" in txt        # P3 복수안 비교
     assert "작동≠좋음" in txt and "써보니 좋다" in txt   # P5 완성 재정의(경험 기반)
-    # P6: 장르 예시 대비 '범주적 부재' 점검 + 신규 구축/recruit (라이브: 사운드 0 미인지)
+    # P6(범용): 장르 예시 대비 '범주적 부재' 점검 + 신규 구축/recruit — 특정 범주(사운드 등) 미지정(하드코딩 없음)
     assert "범주적 부재" in txt and "신규 구축" in txt
-    assert "recruit" in txt and "사운드" in txt          # 예시로 사운드(키워드 하드코딩 아님 — 장르판단은 리더)
+    assert "recruit" in txt and "훌륭한 예" in txt        # 장르 예시 대비(리더가 범주 도출 — 시스템이 안 박음)
+    assert "사운드" not in txt                            # 범용: 시스템이 특정 범주를 프라이밍하지 않음
 
 
 def test_교차검증_경험적_비평_요구_RFC010():
@@ -2040,7 +2041,8 @@ def test_setgoal_범주적완성_점검_1회보류_RFC010_P7():
     f.current.participated.add(12)
     r1 = asyncio.run(t["set_goal"].handler({"goal": "게임"}))            # 1회차: P7 보류
     assert "확정 보류(범주적 완성 점검" in r1["content"][0]["text"] and not f.current.status.goal
-    assert "사운드" in r1["content"][0]["text"] and "구축" in r1["content"][0]["text"]   # 범주 예시 + 구축 강제
+    assert "훌륭한 예" in r1["content"][0]["text"] and "구축" in r1["content"][0]["text"]   # 범용: 장르 예시 대비 + 구축
+    assert "사운드" not in r1["content"][0]["text"]      # 시스템이 특정 범주를 지정·프라이밍하지 않음(하드코딩 없음)
     r2 = asyncio.run(t["set_goal"].handler({"goal": "게임 + 사운드 구축"}))   # 재호출: 통과
     assert f.current.status.goal == "게임 + 사운드 구축" and f.gap_checked is True   # 확정 + 흐름당 1회 마킹
 
