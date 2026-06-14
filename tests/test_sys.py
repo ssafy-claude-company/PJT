@@ -38,6 +38,7 @@ class FakeGuide:
 def _flow(g, leader=11):
     f = Flow(g, channel_id=500, guild_id=1, leader_id=leader, bot_info={11: "L", 12: "M"})
     f.start_root("root")
+    f.gap_checked = True   # P7 범주적 완성 점검 보류를 테스트 기본 우회(전용 테스트만 False로 검증)
     return f
 
 
@@ -386,6 +387,7 @@ def test_owner는_work수신자_goal합의후():
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "A백엔드", 13: "B프론트"})
     f.start_root("root")
+    f.gap_checked = True   # P7 범주점검 보류 우회(이 테스트 범위 밖)
     waked = []
 
     async def wake(to, b, k):
@@ -419,6 +421,7 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백", 13: "프"})
     f.start_root("root")
+    f.gap_checked = True   # P7 범주점검 보류 우회(이 테스트는 participated 게이트 검증)
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
     asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
@@ -2025,6 +2028,23 @@ def test_교차검증_경험적_비평_요구_RFC010():
     assert "만든 사람이 아닌" in txt               # P2 분리된 검증자(자기검증 무효)
 
 
+def test_setgoal_범주적완성_점검_1회보류_RFC010_P7():
+    """[RFC-010 P7 — recognition→action 강제] set_goal 확정 전 1회(흐름당), 장르 예시 대비 '통째로 없는
+    범주'(사운드 등)를 goal에 구축 대상으로 반영하거나 사유하게 보류한다 — 라이브: P6 넛지로 사운드를 grep
+    점검만 하고 구현 0(인지≠행동). 1회 보류 후 재호출 통과(막지 않되 의식적 결정). participated 통과 후 발동."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.gap_checked = False            # 이 테스트는 P7 보류를 검증(_flow 기본 우회 해제)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    r1 = asyncio.run(t["set_goal"].handler({"goal": "게임"}))            # 1회차: P7 보류
+    assert "확정 보류(범주적 완성 점검" in r1["content"][0]["text"] and not f.current.status.goal
+    assert "사운드" in r1["content"][0]["text"] and "구축" in r1["content"][0]["text"]   # 범주 예시 + 구축 강제
+    r2 = asyncio.run(t["set_goal"].handler({"goal": "게임 + 사운드 구축"}))   # 재호출: 통과
+    assert f.current.status.goal == "게임 + 사운드 구축" and f.gap_checked is True   # 확정 + 흐름당 1회 마킹
+
+
 def test_기여미흡_재호출_마감은_기록과_로그에_남는다_RFC009():
     """[게이트 강화 — 침묵 강행 불가] 잠수 직군이 실작업 0인 채 기여 게이트를 재호출로 통과해 마감하면
     (옵션③), '[기여 미흡: … 실작업 0 — 리더 판단 마감]'이 Task 결과에 박히고 task_contrib_overridden
@@ -2658,6 +2678,7 @@ def test_Task_체크포인트_전이마다_영속_마감시_해제(tmp_path):
                         "leader": 11, "summary": ""}}
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드"})
     f.start_root("root")
+    f.gap_checked = True   # P7 범주점검 보류 우회(체크포인트 검증 범위 밖)
     f.project_channel = 500
     f.workspace = str(tmp_path)
     f.checkpoint_task = lambda: s._checkpoint_open_task(f)

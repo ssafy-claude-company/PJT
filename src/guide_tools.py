@@ -1174,6 +1174,21 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            f"도메인의 목표·성공기준'을 함께 정한 뒤** set_goal로 기록하세요(meet 발언이 협의로 인정됨 — "
                            f"1:1 request(Info)도 인정되나 회의가 앵커링↓·합의 기록↑). 파일·엔드포인트 같은 구현 스펙 "
                            f"말고 '측정가능한 결과'로.")
+            # [P7 — 범주적 완성 점검: recognition→action 강제, RFC-010] 확정 전 1회, 장르 예시 대비 '통째로
+            # 없는 범주'를 goal에 '구축 대상'으로 반영(없으면 recruit)하거나 불필요 사유를 명시하게 강제한다 —
+            # 라이브: P6 넛지로 사운드를 grep '점검'만 하고 구현 0(인지≠행동). 점검을 '구축'으로 한 칸 올림.
+            # 1회 보류 후 재호출 통과(막지 않되 의식적 결정 — override 게이트와 같은 정신). 직군 키워드 하드코딩
+            # 없음 — 장르·범주 판단은 리더(비체험형이면 'N/A 불필요'로 재호출). set_goal_gap_check 로그로 가시화.
+            if not getattr(flow, "gap_checked", False):       # 흐름당 1회(per-flow) — 작품의 범주 점검은 한 번
+                flow.gap_checked = True
+                if flow.log:
+                    flow.log("set_goal_gap_check", task=flow.current.task_id)
+                return _ok("확정 보류(범주적 완성 점검 — RFC-010 P7): 확정 전 한 번만 점검하세요 — 이 작품을 "
+                           "**같은 종류의 훌륭한 예**와 비교해 *통째로 없는 범주*(예: 사운드·음악·온보딩/튜토리얼·"
+                           "콘텐츠 분량·접근성 — 종류 판단은 당신)가 있나요? **있으면 그건 '개선'이 아니라 신규 "
+                           "구축이니 goal에 '구축 대상'으로 넣으세요**(담당 직군이 팀에 없으면 recruit). 정말 "
+                           "불필요하면 goal에 그 이유를 한 줄 적은 뒤 set_goal을 재호출해 확정하세요(라이브 교훈: "
+                           "사운드를 점검만 하고 안 만듦 — 인지를 *구축*으로). 재호출은 통과합니다(판단은 당신).")
             if purpose:
                 flow.current.status.purpose = purpose
             flow.current.status.goal = goal
