@@ -900,7 +900,7 @@ def test_개입_미완Task_영속과_되살리기_담당자가_이어감(tmp_pat
     async def fake_complete(flow, oid, body, kind, role):
         flow.current.verified = True
         flow.current.owner = 0                                   # 리더 직접 완료(owner_delivered 게이트 우회)
-        flow.external_sourced = True                            # percept 게이트 증거(외부소싱 발생 — 마감 메커니즘 테스트라 모사)
+        flow.percept_checked = True                            # percept 게이트 우회(마감 메커니즘 테스트 — 실에셋 검증은 별도)
         t = _tools(flow, 11, "leader")
         await t["complete_task"].handler({"result": "스킬 3종 완성"})
         return "완료"
@@ -2224,15 +2224,15 @@ def test_setgoal_범주적완성_점검_1회보류_RFC010_P7():
 
 
 def test_지각비대칭_증거명시통과_반사적재호출은_불가():
-    """[지각 비대칭 — 증거/명시 통과(2026-06-15 라이브 실증 교정)] soft '1회 보류 후 재호출 통과'는
-    마감 관성에 무력했다(라이브: percept 게이트 3/3이 +0초 재호출로 패스스루, WebSearch 0회 — 인식만
-    찍히고 행동 0). 작동하는 verified 게이트처럼 강화 — 외부소싱(WebSearch/WebFetch/recruit) 증거나
-    '[지각차원 없음]' 의식적 명시가 있어야 통과하고, **반사적 재호출로는 안 닫힌다**. 도메인 중립(특정
-    범주 프라이밍 없음), 무한 반려 아님(명시 탈출구 상시 — 판단은 리더)."""
+    """[지각 비대칭 — 실제 자원/명시 통과(2026-06-15 P-015 라이브 재강화)] soft '1회 보류 후 통과'는 마감
+    관성에 무력했고, 그 뒤 외부소싱(WebFetch) 증거도 '레퍼런스 읽기'를 통과시켜 합성 placeholder가 샜다
+    (P-015: 사운드=오실레이터, 에셋 0인데 WebFetch 11회). 증거를 '실제 에셋 파일 통합'으로 강화 — 작업공간에
+    코드 아닌 실재 에셋이 있거나 '[지각차원 없음]' 의식적 명시가 있어야 통과하고, **반사적 재호출·읽기로는
+    안 닫힌다**. 도메인 중립(에셋=실재물 파일), 무한 반려 아님(명시 탈출구 상시 — 판단은 리더)."""
     g = FakeGuide()
     f = _flow(g)
     f.percept_checked = False        # 이 테스트는 지각 비대칭 게이트를 검증(_flow 기본 우회 해제)
-    f.external_sourced = False        # 외부소싱 증거 없음(자급 placeholder 상황)
+    # 작업공간에 실제 에셋 파일 없음(_flow는 workspace=None) — 합성 placeholder 상황
     t = _tools(f, 11, "leader")
     asyncio.run(t["create_task"].handler({"members": "12"}))
     f.current.participated.add(12)
@@ -2253,21 +2253,22 @@ def test_지각비대칭_증거명시통과_반사적재호출은_불가():
     assert f.percept_checked is True                       # 통과 시점에 마킹
 
 
-def test_지각비대칭_외부소싱_증거있으면_명시없이_통과():
-    """외부소싱(WebSearch/WebFetch/recruit) 증거가 있으면 percept 게이트는 명시 없이도 통과 — '자급
-    말고 실제 자원을 찾아봤다/전문가를 불렀다'가 곧 증거(훅·recruit가 flow.external_sourced를 set).
-    이로써 '실제로 외부 접촉을 한' 정상 경로는 마찰 없이 닫히고, 0초 패스스루(아무것도 안 함)만 막힌다."""
+def test_지각비대칭_실에셋있으면_명시없이_통과(tmp_path):
+    """실제 제작 자원 파일(사운드·이미지 등 코드 아닌 에셋)이 작업공간에 있으면 percept 게이트는 명시
+    없이도 통과 — '합성 placeholder가 아니라 실재 자원을 받아 통합했다'가 곧 증거(레퍼런스 *읽기*와 구분 —
+    P-015 허점 교정). 진짜 자원을 받은 정상 경로는 마찰 없이 닫히고, 코드만(에셋 0)인 placeholder만 막힌다."""
     g = FakeGuide()
     f = _flow(g)
     f.percept_checked = False
+    f.workspace = str(tmp_path)
+    (tmp_path / "sfx_hit.mp3").write_bytes(b"\x00\x01ID3")   # 실제 에셋 파일(다운로드·통합 모사)
     t = _tools(f, 11, "leader")
     asyncio.run(t["create_task"].handler({"members": "12"}))
     f.current.participated.add(12)
     asyncio.run(t["set_goal"].handler({"goal": "게임 동작"}))
     f.current.verified = True
-    f.external_sourced = True          # WebSearch/WebFetch/recruit가 일어남(PreToolUse 훅·recruit가 set)
-    r = asyncio.run(t["complete_task"].handler({"result": "효과음 CC0 받아 통합"}))
-    assert "지각 비대칭" not in r["content"][0]["text"] and f.current is None   # 증거로 통과·마감
+    r = asyncio.run(t["complete_task"].handler({"result": "효과음 CC0 mp3 받아 통합"}))
+    assert "지각 비대칭" not in r["content"][0]["text"] and f.current is None   # 실에셋 증거로 통과·마감
     assert f.percept_checked is True
 
 

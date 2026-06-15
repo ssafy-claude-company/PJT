@@ -92,6 +92,36 @@ def _looks_transient(text: str) -> bool:
     return t.startswith("api error") or t.startswith("(동료 처리 중 오류")
 
 
+# [실제 제작 자원 검증 — percept 마감 게이트의 증거(2026-06-15)] '코드 아닌 실재 자원'(사운드·이미지·3D·
+# 폰트·영상) 파일 확장자. 지각 비대칭 차원(특히 사운드)을 코드로 합성한 placeholder가 아니라 실제 받아온
+# 자원으로 채웠는지의 **도메인 중립** 증거 — 특정 직군·장르 하드코딩이 아니라 '실재물 파일 존재'다.
+_ASSET_EXTS = {
+    ".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".opus", ".mid", ".midi",            # 사운드
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif", ".tga", ".svg",    # 이미지
+    ".glb", ".gltf", ".obj", ".fbx", ".dae",                                              # 3D
+    ".ttf", ".otf", ".woff", ".woff2",                                                    # 폰트
+    ".mp4", ".webm", ".mov", ".ogv", ".m4v",                                              # 영상
+    ".aseprite", ".psd", ".xcf",                                                          # 소스 아트
+}
+
+
+def _has_real_asset(workspace) -> bool:
+    """작업공간에 코드 아닌 실제 제작 자원 파일(_ASSET_EXTS)이 하나라도 있으면 True — 합성 placeholder가
+    아닌 '받아온 실재 자원'의 증거. node_modules·.git은 제외(의존성 번들의 에셋은 우리 제작물 아님)."""
+    import os
+    if not workspace:
+        return False
+    try:
+        for root, dirs, files in os.walk(str(workspace)):
+            dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "__pycache__", ".cache", "dist", "build")]
+            for f in files:
+                if os.path.splitext(f)[1].lower() in _ASSET_EXTS:
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 # 채용 대기 인력(직군 미배정). recruit(role=…)로 런타임에 '게임 기획자·UX 디자이너' 등 필요한 직군으로
 # 채용해 합류시킨다. 로스터에서 라벨이 '예비'인 봇들이며, 첫 '전원 기획'엔 안 들어가고 필요할 때 합류한다.
 _SPARE_LABEL = "예비"
@@ -321,9 +351,6 @@ class Flow:
         self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로
                                        #   일했나'를 wake 전후 스냅샷 차이로 판정(허위완료/독점 차단)
         self.act_by = {}               # 행위자별 작업 누계(actor→count) — 요청자 자신의 활동을 빼고 재기 위함
-        self.external_sourced = False  # 자급(self-synthesis)을 넘어선 신호: 워커가 WebSearch/WebFetch로 외부
-                                       #   자원을 찾았거나 전문가를 recruit함. percept 게이트의 '증거'(훅·recruit가 set) —
-                                       #   '반사적 재호출로는 마감 못 함, 외부 접촉·채용 증거나 의식적 명시가 있어야 통과'.
         self.consec_fail = 0           # 연속 '응답 실패(무응답/타임아웃)' 횟수 — 시스템 일시불안정 판별(충원 루프 차단)
         self.inflight_tasks = set()    # 진행 중 위임의 '완주 태스크'들 — CLI가 도구 호출을 포기해도 위임은
                                        #   계속 완주하며(중첩 가능), SYS가 이어가기 전에 이들의 완주를 기다린다
@@ -988,9 +1015,6 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.current.status.group = _group_of(flow, flow.current.team)
             await flow.refresh()
             await _add_members(g, flow.current.thread_id, [mid])   # 스레드에 합류(멤버십=팀)
-        # 전문가 채용은 percept 게이트가 인정하는 '자급 너머' 행동 둘 중 하나(WebSearch 외부자원 / recruit) —
-        # 채용했으면 그 차원을 전문가가 책임지므로 마감 시 외부소싱 증거로 인정한다(게이트 메시지와 정합).
-        flow.external_sourced = True
         return _ok(f"{flow._info(mid) or mid} 합류{hired}(사유: {args.get('reason', '')}). "
                    f"현재 팀: {flow._names(flow.current.team)}")
 
@@ -1297,29 +1321,27 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 지각 불가 차원은 '자기 판정'이 구조적으로 불가하므로, 자급을 완성으로 닫지 말고 '검증된 실제
             # 자원 또는 전문성'을 의무화한다(외부현실·전문화 원칙의 비시각 차원 확장). 흐름당 1회 보류 후
             # 재호출 통과(막지 않되 보이게 — 판단·범주는 리더. 직군·도메인 하드코딩 없음, 'gap_checked' 패턴).
-            # [지각 비대칭 — 증거/명시 통과(2026-06-15 라이브 실증으로 교정). soft '1회 보류 후 재호출 통과'는
-            # 마감 관성에 무력했다: percept 게이트 3/3이 +0초 재호출로 패스스루, WebSearch 0회(인식만 찍히고
-            # 행동 0). 작동하는 verified 게이트처럼 '증거 없으면 못 닫게'로 강화한다 — 외부소싱(WebSearch/
-            # WebFetch/recruit) 증거가 있거나, 그런 지각 불가 차원이 애초에 없음을 result 첫 줄 '[지각차원 없음]'
-            # 으로 의식적으로 명시해야 통과. 반사적 재호출로는 안 닫힌다. 무한 반려 아님(명시 탈출구 상시 — '판단은
-            # 리더' 보존). 도메인 하드코딩 없음(증거=외부접촉/채용 발생 여부, 특정 범주 아님).]
+            # [지각 비대칭 — 실제 자원 통합 요구(2026-06-15 P-015 라이브 규명으로 재강화). 외부소싱(WebFetch)
+            # 증거게이트는 '레퍼런스 읽기'를 '자원 통합'으로 오인해 합성 placeholder를 통과시켰다(라이브: 사운드=
+            # 오실레이터 합성, 작업공간 에셋 파일 0인데 WebFetch 11회로 읽기만 함). 증거를 '외부 접촉'→'실제 제작
+            # 자원 파일 존재'로 강화: 작업공간에 코드 아닌 실재 에셋(_has_real_asset)이 있거나, 그런 자원이 필요
+            # 없음을 result 첫 줄 '[지각차원 없음]'으로 의식적 명시해야 통과. 읽기만으론 안 닫힌다. 도메인 중립
+            # (에셋=실재물 파일, 특정 장르/직군 아님), 명시 탈출구 상시(판단은 리더). 품질>과제한(사용자 승인).]
             if not getattr(flow, "percept_checked", False):
                 _pd = bool(re.match(r"^\s*\[\s*지각차원\s*없음\s*\]", args.get("result") or ""))
-                if not getattr(flow, "external_sourced", False) and not _pd:
+                if not _has_real_asset(getattr(flow, "workspace", None)) and not _pd:
                     if flow.log:
                         flow.log("complete_percept_gate", task=flow.current.task_id)
-                    return _ok("마감 보류(지각 비대칭 — 증거/명시 필요, 반사적 재호출로는 통과 안 됨): 이 작품이 "
-                               "만든 것 중 **화면으로 보거나 코드로 '됐다' 확인할 수 없고, 직접 경험해야만(보는 것 "
-                               "말고 듣거나 느껴야) 품질을 아는 차원**이 있습니까? — 있다면 LLM 검증자는 그것을 "
-                               "지각할 수 없어 '코드가 호출되는가'까지만 검증되고 '좋은가'는 판정 불가입니다. 코드로 "
-                               "합성한 placeholder('있긴 하나 상용 아님')를 완성으로 닫지 마세요. 통과하려면 둘 중 "
-                               "하나: ① **WebSearch/WebFetch로 실제 제작 자원(CC0 등)을 찾아 통합**하거나 그 분야 "
-                               "**전문 직군을 recruit**하세요(그 행동이 증거로 남아 게이트가 열립니다) ② 그런 지각 "
-                               "불가 차원이 애초에 없으면(전부 화면·코드로 검증 가능) result **첫 줄에 "
-                               "'[지각차원 없음] <왜 없는지>'**를 적어 재호출하세요(의식적 판단 — 그냥 재호출로는 "
-                               "안 닫힙니다). 무엇이 그런 차원인지는 작품을 아는 당신이 판단합니다(시스템은 특정 "
-                               "범주·직군을 지정하지 않음).")
-                flow.percept_checked = True   # 증거(외부소싱)·명시 확보 → 이 흐름에선 다시 묻지 않음
+                    return _ok("마감 보류(지각 비대칭 — 실제 자원 필요, 읽기·합성으론 통과 안 됨): 이 작품이 만든 것 "
+                               "중 **직접 경험해야만(보는 것 말고 듣거나 느껴야) 품질을 아는 차원**이 있습니까? — 있다면 "
+                               "LLM 검증자는 지각할 수 없어 코드로 합성한 placeholder가 '완성'으로 통과됩니다. 통과하려면 "
+                               "둘 중 하나: ① **실제 제작 자원(코드로 합성한 게 아니라 외부에서 받아온 실재 에셋 파일)을 "
+                               "WebSearch로 찾아 다운로드(CC0 등)해 작업공간에 통합**하세요 — *읽기만으론 안 됩니다, 실제 "
+                               "파일이 있어야 게이트가 열립니다*. 직접 못 받으면 그 분야 **전문가를 recruit**해 받게 "
+                               "하세요. ② 그런 실재 자원이 필요 없으면(순수 코드 작품, 또는 손맛처럼 코드로 구현·교차검증되는 "
+                               "차원) result **첫 줄에 '[지각차원 없음] <이유>'**를 적어 재호출하세요(의식적 판단). 무엇이 "
+                               "그런 차원인지는 작품을 아는 당신이 판단합니다(시스템은 특정 범주·직군을 지정하지 않음).")
+                flow.percept_checked = True   # 실제 에셋·명시 확보 → 이 흐름에선 다시 묻지 않음
             # [검증 분업 — 1회 보류] 품질 판정이 리더 1인에게 독점되는 것을 구조적으로 흔든다(라이브
             # P-009: QA·교차 검증 0인 채 단독 마감 → 브라우저 렉·적 돌진 등 사용성 결함이 그대로 통과,
             # 사용자가 첫 발견). owner 인도 후 '다른 멤버'의 검증 참여가 0이면 첫 호출만 보류하고 검증
