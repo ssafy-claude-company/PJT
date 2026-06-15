@@ -40,6 +40,7 @@ def _flow(g, leader=11):
     f.start_root("root")
     f.gap_checked = True   # P7 범주적 완성 점검 보류를 테스트 기본 우회(전용 테스트만 False로 검증)
     f.percept_checked = True  # 지각 비대칭 점검(complete) 보류도 기본 우회(전용 테스트만 False로 검증)
+    f.acceptance_checked = True  # 수용 계약 마감 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     return f
 
 
@@ -446,6 +447,7 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     f.start_root("root")
     f.gap_checked = True   # P7 범주점검 보류 우회(이 테스트는 participated 게이트 검증)
     f.percept_checked = True   # 지각 비대칭 점검 보류 우회(범위 밖)
+    f.acceptance_checked = True   # 수용 계약 게이트 보류 우회(범위 밖)
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
     asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
@@ -477,6 +479,7 @@ def test_Task팀은_담당자가_동적선정():
     asyncio.run(t["set_goal"].handler({"purpose": "서버", "goal": "동작"}))
     f.current.verified = True
     f.percept_checked = True   # 지각 비대칭 점검 보류 우회(이 테스트는 팀 동적선정 검증)
+    f.acceptance_checked = True   # 수용 계약 게이트 보류 우회(범위 밖)
     asyncio.run(t["complete_task"].handler({"result": "ok"}))
     asyncio.run(t["create_task"].handler({"members": ""}))        # 비우면 프로젝트팀(11,12,13) 기본 — 14는 안 부름
     assert set(f.current.team) == {11, 12, 13} and 14 not in f.current.team
@@ -923,6 +926,7 @@ def test_개입_미완Task_영속과_되살리기_담당자가_이어감(tmp_pat
         flow.current.verified = True
         flow.current.owner = 0                                   # 리더 직접 완료(owner_delivered 게이트 우회)
         flow.percept_checked = True                            # percept 게이트 우회(마감 메커니즘 테스트 — 실에셋 검증은 별도)
+        flow.acceptance_checked = True                         # 수용 계약 게이트 우회(범위 밖)
         t = _tools(flow, 11, "leader")
         await t["complete_task"].handler({"result": "스킬 3종 완성"})
         return "완료"
@@ -2294,6 +2298,58 @@ def test_지각비대칭_실에셋있으면_명시없이_통과(tmp_path):
     assert f.percept_checked is True
 
 
+def test_수용계약_포착과_마감바인딩_회의전문성_코드도달_강제():
+    """[수용 계약 — 회의 전문성이 '코드'에 도달했는가] 회의가 합의한 '좋음'의 구체 기준(set_goal acceptance)이
+    마감에 구속된다 — 각 항목 충족 증거('[수용기준 검증]' 회계) 또는 의식적 드롭/N·A 명시가 있어야 통과하고,
+    반사적 재호출로는 안 닫힌다(percept·contrib와 동 원리). 라이브 P-015: 회의 제안 6개 중 코드 반영 0인데
+    마감('플레이하면 감이 없다')의 정확한 차단점. 도메인 중립(기준은 팀 자작), 자율 보존(드롭/N·A 상시)."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.acceptance_checked = False        # 이 테스트는 수용 계약 게이트를 검증(_flow 기본 우회 해제)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    # set_goal에 acceptance(수용 기준) 박기 — 회의 제안이 구속력 있는 계약이 됨(포착·누적)
+    asyncio.run(t["set_goal"].handler({"goal": "게임 동작", "acceptance": "처치 시 히트스톱 80ms"}))
+    asyncio.run(t["set_goal"].handler({"goal": "게임 동작", "acceptance": "콤보 사운드 스택"}))   # 누적
+    assert "히트스톱" in (f.current.acceptance or "") and "콤보" in (f.current.acceptance or "")   # 포착·누적됨
+    f.current.verified = True
+    # ① 계약 있는데 항목별 회계(마커) 없이 마감 시도 → 보류(합의 기준을 되돌려 대조 강제)
+    r1 = asyncio.run(t["complete_task"].handler({"result": "다 됐음"}))
+    assert "수용 계약" in r1["content"][0]["text"] and f.current is not None   # 보류(마감 안 됨)
+    assert "히트스톱" in r1["content"][0]["text"]            # 합의 기준을 되돌려 '코드 도달' 확인 강제
+    # ② 반사적 재호출(마커 없음)도 여전히 보류 — soft no-op 차단(P-015 +0초 패스스루 교정)
+    r2 = asyncio.run(t["complete_task"].handler({"result": "그냥 통과 시도"}))
+    assert "수용 계약" in r2["content"][0]["text"] and f.current is not None
+    assert f.acceptance_checked is False                    # 보류는 통과 아님 → 아직 미마킹
+    # ③ '[수용기준 검증]' 헤더 + 항목별 회계(충족·증거/드롭)로만 통과 — 판단은 리더
+    r3 = asyncio.run(t["complete_task"].handler(
+        {"result": "[수용기준 검증] 히트스톱: app.js 구현·run 확인 / 콤보 사운드: [드롭] 다음 흐름으로"}))
+    assert "수용 계약" not in r3["content"][0]["text"] and f.current is None   # 회계로 통과·마감
+    assert f.acceptance_checked is True
+
+
+def test_수용계약_미정의시_구체기준_요구_또는_NA명시로만_통과():
+    """수용 계약이 아예 없으면(set_goal에 acceptance 미입력) 마감은 '좋음(상용)의 구체 기준'을 요구한다 —
+    훌륭한 예 대조로 기준을 세워 회계하거나, 정말 품질 기준이랄 게 없는 단순 산출물이면 '[수용기준 N/A]'로
+    의식적 명시해야 통과(반사적 재호출 불가). 단순 요청을 죽이지 않는 명시 탈출구 — 판단은 리더."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.acceptance_checked = False
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "동작"}))   # acceptance 미입력
+    f.current.verified = True
+    r1 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert "수용 계약 미정의" in r1["content"][0]["text"] and f.current is not None  # 구체 기준 요구
+    assert "훌륭한 예" in r1["content"][0]["text"]          # 외부 실재 대조로 기준 도출 유도
+    # N/A 의식적 명시로만 통과(단순 산출물 — 판단은 리더)
+    r2 = asyncio.run(t["complete_task"].handler({"result": "[수용기준 N/A] 내부 유틸 스크립트라 체감 품질 차원 없음"}))
+    assert "수용 계약" not in r2["content"][0]["text"] and f.current is None
+    assert f.acceptance_checked is True
+
+
 def test_기여미흡_명시마감은_기록과_로그에_남는다_RFC009():
     """[게이트 강화 — 침묵 강행 불가] 잠수 직군이 실작업 0인 채 기여 게이트를 '[기여 불필요]' 명시로
     통과해 마감하면(옵션③), '[기여 미흡: … 실작업 0 — 리더 판단 마감]'이 Task 결과에 박히고
@@ -2929,6 +2985,7 @@ def test_Task_체크포인트_전이마다_영속_마감시_해제(tmp_path):
     f.start_root("root")
     f.gap_checked = True   # P7 범주점검 보류 우회(체크포인트 검증 범위 밖)
     f.percept_checked = True   # 지각 비대칭 점검 보류 우회(범위 밖)
+    f.acceptance_checked = True   # 수용 계약 게이트 보류 우회(범위 밖)
     f.project_channel = 500
     f.workspace = str(tmp_path)
     f.checkpoint_task = lambda: s._checkpoint_open_task(f)
