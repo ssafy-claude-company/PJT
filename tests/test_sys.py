@@ -369,6 +369,28 @@ def test_원문요청_프롬프트주입_탈중앙():
     assert "사용자 원문 요청" not in s._prompt("x", Kind.INFO, "member", 12, leader_id=11)
 
 
+def test_원문요청_흐름별격리_동시흐름_교차오염없음():
+    """[교차오염 차단] 동시 흐름이 두 개 돌 때, 각 흐름의 봇 프롬프트엔 '자기 흐름의 사용자 원문'만
+    주입돼야 한다. 과거엔 원문이 SYS 전역 단일 필드(self._origin_request)였어서, 흐름 A가 진행 중인데
+    흐름 B 개입이 도착하면 전역이 덮어써져 흐름 A의 봇이 '흐름 B의 원문'을 진짜 의도로 받았다(라이브:
+    웹 프로젝트 리더가 게임 개입 원문 '게임성을 강화해'를 받아 게임을 짓기 시작 → 웹 흐름에 게임 난입).
+    이제 원문은 흐름 객체에 박제되고 _prompt가 흐름의 것을 읽으므로 전역이 덮어써져도 격리된다."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "프론트엔드", 12: "게임 기획자"})
+    fa = _flow(s.guide, leader=11)            # 흐름 A: 웹
+    fa.origin_request = "지방선거 공공데이터로 웹 사이트 만들어줘"
+    fb = _flow(s.guide, leader=12)            # 흐름 B: 게임
+    fb.origin_request = "게임성을 강화해 사운드 이펙트 디자인 다 챙겨"
+    # 흐름 B 개입이 전역 필드를 덮어쓴 상태(가장 최근 개입) — 과거 버그의 트리거 조건 재현
+    s._origin_request = "게임성을 강화해 사운드 이펙트 디자인 다 챙겨"
+    # 흐름 A의 봇 프롬프트: 전역이 게임으로 덮였어도 '웹 원문'만 보여야 한다
+    pa = s._prompt("x", Kind.WORK, "leader", 11, leader_id=11, flow=fa)
+    assert "지방선거 공공데이터로 웹 사이트 만들어줘" in pa
+    assert "게임성을 강화해" not in pa        # ← 핵심: 게임 원문이 웹 흐름에 새지 않음
+    # 흐름 B의 봇 프롬프트: 자기 게임 원문을 본다
+    pb = s._prompt("x", Kind.WORK, "leader", 12, leader_id=12, flow=fb)
+    assert "게임성을 강화해" in pb and "지방선거" not in pb
+
+
 def test_예비_담당자는_자기직군_먼저채용_지시받음():
     """'예비'(직군 미배정) 봇이 담당자(To)로 호명되면, 프롬프트가 '먼저 recruit로 자기 직군을 부여해 한 직원으로
     참여하라'고 지시한다(사용자: 자길 예비로 두지 말고 프로젝트의 일원으로 참여). 또 팀은 자동 전원이 아니라

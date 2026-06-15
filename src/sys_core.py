@@ -628,7 +628,7 @@ class Sys:
                 f"잡습니다:\n[직무기준] {missing[0]}\n(기준 줄들)\n좋은 예: …\n나쁜 예(흔한 미달): …\n[/직무기준]")
         return ("\n\n".join(notes) + "\n\n") if notes else ""
 
-    def _prompt(self, body, kind, role, me, leader_id=None):
+    def _prompt(self, body, kind, role, me, leader_id=None, flow=None):
         # '담당자'는 고정 직책이 아니라 이번 흐름의 To 수신자(=leader)다. 동료 목록엔 직군만 적고, 담당자에게만
         # '(담당자)' 표식을 단다(다른 흐름에선 같은 봇이 한 직원으로 참여).
         def _peer(i):
@@ -638,7 +638,11 @@ class Sys:
         domain = self.bot_info.get(me, "")
         # 탈중앙(퍼실리테이터): 모두가 '담당자의 요약'이 아니라 '사용자 원문'을 직접 본다 → 한 명의 해석을
         # 거치며 의도가 왜곡되는 걸 막는다. 받은 지시가 원문과 어긋나면 원문 의도를 우선·되물음.
-        orig = (getattr(self, "_origin_request", "") or "").strip()
+        # [흐름별 원문 우선] 흐름에 박제된 원문을 먼저 본다 — 전역 self._origin_request는 다음 개입이
+        # 덮어쓰므로 동시 흐름에서 교차 오염된다(웹 흐름이 게임 원문을 받던 라이브 버그). flow가 없을
+        # 때만(도구 형식용 빈 흐름 등) 전역으로 폴백.
+        orig = ((getattr(flow, "origin_request", "") if flow is not None else "")
+                or getattr(self, "_origin_request", "") or "").strip()
         origin_note = (f"[사용자 원문 요청 — 진짜 의도(누구의 요약·해석도 아닌, 사용자가 실제로 한 말)]: {orig}\n"
                        f"이 원문이 기준입니다. 받은 지시·질문이 원문과 어긋나 보이면 원문 의도를 우선하고, 모호하면 되물으세요.\n\n"
                        if orig else "")
@@ -1094,8 +1098,8 @@ class Sys:
                 async def _do():
                     if tcm is not None:
                         async with tcm(ch, organt_id):
-                            return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader))
-                    return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader))
+                            return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader, flow))
+                    return await organt.handle(self._prompt(body, kind, role, organt_id, flow.leader, flow))
 
                 # 리더 턴은 '흐름 전체'(중첩 워커 포함)를 품으므로 여기선 타임아웃 안 건다 — 상위 무진행
                 # 워치독이 흐름 전체를 본다. 워커(비-리더) 턴은 '도구 활동이 turn_timeout 동안 완전히 멈춘'
@@ -1267,6 +1271,12 @@ class Sys:
         lead = self._valid_leader(proj) if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
         flow.session_scope = session_scope
+        # [교차오염 차단 — 흐름별 원문 스냅샷] 사용자 원문을 흐름 객체에 '박제'한다. self._origin_request는
+        # 다음 개입이 오면 덮어쓰이는 전역 단일 필드라, 동시 흐름이 있으면 먼저 돌던 흐름의 봇들이 _prompt에서
+        # '나중 개입의 원문'을 진짜 의도로 받아 엉뚱한 작업으로 새 버린다(라이브 관측: P-016 웹 흐름이 진행 중일
+        # 때 P-015 게임 개입이 도착→웹 리더가 '게임성을 강화해'를 자기 원문으로 받아 게임을 짓기 시작). 여기서
+        # 박제하면(이후 await로 다른 개입이 끼어들어도) 이 흐름의 모든 프롬프트는 자기 원문만 본다.
+        flow.origin_request = self._origin_request
         # [RFC-011 M3] 이 프로젝트에 누적된 사용자 취향(반복된 비평·요구)을 흐름에 부착 — set_goal·검증이
         # '상용 수준'의 외부 앵커로 되돌린다(사용자 자신의 말이라 하드코딩 0, 회차가 쌓일수록 기준 상승).
         flow.user_feedback = (proj.get("feedback") if proj else None) or []
@@ -1282,10 +1292,13 @@ class Sys:
         def _reg(ch, name):
             # [신원 재사용 권한] 개입(proj)은 자기 프로젝트 연장이 자명 → 무제한(None).
             # 메인 채널 신규 흐름은 사용자 원문에 명시된 P-번호만 재사용 가능(주소 지정의 이치).
+            # 흐름에 박제된 원문 사용(전역 self._origin_request는 동시 개입에 덮어쓰여 — 이 closure는
+            # 흐름 도중 실행되므로 전역을 읽으면 '남의 프로젝트 원문'으로 등록될 수 있다).
+            _orig = (getattr(flow, "origin_request", "") or self._origin_request or "")
             reuse_ok = None if proj is not None else {
-                f"P-{m}" for m in re.findall(r"[Pp]-?(\d{3})", self._origin_request or "")}
+                f"P-{m}" for m in re.findall(r"[Pp]-?(\d{3})", _orig)}
             pid = self._register_project(ch, name, flow.workspace, flow.leader,
-                                         purpose=self._origin_request,  # 존재 이유 = 사용자 원문
+                                         purpose=_orig,  # 존재 이유 = 사용자 원문
                                          origin_msg=root_id or "",      # 원요청 링크(부팅 복구의 개입 라우팅 근거)
                                          reuse_ok=reuse_ok)
             p0 = self.projects.get(int(ch))

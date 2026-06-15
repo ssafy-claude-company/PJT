@@ -344,6 +344,10 @@ class Flow:
         self.register_project = None   # (channel_id, name) -> project_id (SYS 주입)
         self.project_id = None         # [Project-XXXX] 식별번호
         self.intervention = None       # 기존 프로젝트 개입이면 그 정보(dict)
+        self.origin_request = ""       # 이 흐름의 '사용자 원문 요청'(SYS 주입) — 모든 프롬프트에 '진짜 의도'로 주입.
+                                       #   반드시 흐름별 격리: 전역 단일 필드면 동시 흐름이 서로의 원문을 덮어써
+                                       #   한 프로젝트의 봇이 '남의 프로젝트 원문'을 진짜 의도로 받아 엉뚱한 걸
+                                       #   만든다(라이브: 웹 흐름이 게임 개입 원문을 받아 게임을 짓기 시작).
         self.deployed = None           # deploy 툴이 불리면 결과 문자열(배포 강제용 추적)
         self.pending_clarify = None    # 위임자에게 되묻기(확인요청 반환) 임시 보관
         self.leader_segment = 0        # 리더 턴 세그먼트 번호(시작=1, continue마다 +1) — 관측용
