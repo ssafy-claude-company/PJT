@@ -1156,10 +1156,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               "단독/선지정 금지 — **이 Task의 멤버 전원**과 meet(회의)로 'Purpose·각 도메인의 목표·성공기준'을 "
               "수렴한 결과를 적는다(1:1 request(Info)보다 meet 권장 — 앵커링↓·회의록 자동 기록). Goal엔 '무엇이 "
               "되면 성공인가'(결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·스택으로 만들지'(구현 방법)는 쓰지 말 것 — "
-              "그건 owner가 정한다. Work 위임은 확정 뒤에만 가능. required_roles=이 goal에 필요한 전문 직군 목록"
-              "(쉼표구분, 예: '프론트엔드, 사운드 디자이너') — 팀에 해당 전문가 없으면 확정 거부→recruit 강제"
-              "(전문화 파이프라인 보장: 정확한 직군에게 맡겨야 경험 축적→증류→개선이 작동).",
-              {"purpose": str, "goal": str, "required_roles": str})
+              "그건 owner가 정한다. Work 위임은 확정 뒤에만 가능.",
+              {"purpose": str, "goal": str})
         async def set_goal(args):
             if flow.current is None:
                 return _ok("오류: 진행 중인 Task가 없습니다. create_task로 먼저 여세요.")
@@ -1195,75 +1193,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            "특정 범주·직군을 지정하지 않음 — 하드코딩 없음). 있으면 그건 '개선'이 아니라 신규 구축이니 "
                            "**goal에 '구축 대상'으로 넣으세요**(담당 직군이 팀에 없으면 recruit). 정말 없어도 되면 "
                            "goal에 그 이유를 적은 뒤 set_goal을 재호출해 확정하세요(인지를 *점검*에서 *구축*으로). "
-                           "재호출 시 **required_roles에 이 goal에 필요한 전문 직군을 모두 나열**하세요"
-                           "(예: '프론트엔드, 백엔드, 디자이너'). 팀에 해당 전문가가 없으면 확정이 "
-                           "거부되고 recruit가 강제됩니다 — 정확한 직군에게 맡겨야 경험 축적→증류→개선이 작동합니다"
-                           "(1봇1직업 전문화 파이프라인 보장). 재호출은 통과합니다(판단은 당신).")
-            # [팀 전문성 커버리지 — 전문화 파이프라인의 구조적 보장(사용자 교정 2026-06-15)]
-            # P7(범주 인식)이 '무엇이 빠졌는가'를 밝히지만, '그 전문가가 팀에 있는가'까지 검증하지
-            # 않았다 → 리더가 범주를 인지해도 비전문가에게 시켜 placeholder가 나오고, 경험이 그 직군에
-            # 안 쌓여 학습 플라이휠(craft→경험→증류→개선)이 안 도는 근본 원인이었다. required_roles
-            # 로 리더가 필요 직군을 선언하면, 시스템이 팀 구성을 대조해 부재 시 recruit를 강제한다.
-            # 직군·도메인 하드코딩 없음 — 판단(무엇이 필요한가)은 리더, 검증(있는가)은 시스템.
-            required = [r.strip() for r in (args.get("required_roles") or "").split(",") if r.strip()]
-            # [per-task 팀 전문성 확인] P7은 flow-level(흐름당 1회)이라 2번째 Task부터 required_roles
-            # 안내가 사라진다. 이 프롬프트는 task-level로 required_roles가 비었을 때마다 팀 구성을
-            # 보여주고 선언을 유도한다(1회 보류, 재호출 통과). P7이 범주 인식(flow-level)이면 이건
-            # 팀 커버리지 확인(task-level) — 두 게이트가 시점을 나눠 멀티-Task 빈틈을 메운다.
-            if (not required
-                    and not getattr(flow.current, "roles_prompted", False)
-                    and not getattr(flow, "_skip_roles_prompt", False)):
-                flow.current.roles_prompted = True
-                t_roles = []
-                for m in flow.current.team:
-                    info = (flow._info(m) or "").strip()
-                    if info and not info.startswith(_SPARE_LABEL):
-                        t_roles.append(info)
-                t_str = ", ".join(sorted(set(t_roles))) if t_roles else "(없음)"
-                if flow.log:
-                    flow.log("set_goal_roles_prompt", task=flow.current.task_id, team_roles=t_str)
-                return _ok(
-                    f"확정 보류(팀 전문성 확인 — 전문화 파이프라인): 현재 Task 팀의 전문 직군: "
-                    f"**{t_str}**. 이 goal의 모든 도메인에 맞는 전문가가 이 팀에 있습니까? "
-                    f"**required_roles**에 이 goal에 필요한 전문 직군을 나열하세요"
-                    f"(예: '프론트엔드, 사운드 디자이너'). 팀에 없는 직군이 있으면 확정이 거부되고 "
-                    f"recruit가 강제됩니다(전문화 파이프라인: 정확한 직군→경험 축적→증류→개선). "
-                    f"현재 팀으로 충분하면 required_roles='현재 팀 충분'으로 재호출하세요.")
-            if required:
-                _skip = {_norm_job(s) for s in ("현재 팀 충분", "현재팀충분", "n/a", "없음", "")}
-                real_required = [r for r in required if _norm_job(r) not in _skip]
-                if real_required:
-                    team_roles = set()
-                    for m in flow.current.team:
-                        info = (flow._info(m) or "").strip()
-                        if info and not info.startswith(_SPARE_LABEL):
-                            for j in _jobs_of(info):
-                                if j.strip():
-                                    team_roles.add(j.strip())
-                    missing = []
-                    for r in real_required:
-                        rn = _norm_job(r)
-                        if not rn:
-                            continue
-                        if any(_norm_job(j) == rn for j in team_roles):
-                            continue
-                        if _find_variant_job(r, team_roles):
-                            continue
-                        missing.append(r)
-                    if missing:
-                        spares = [s for s in flow.pool if _is_spare(flow, s)]
-                        if flow.log:
-                            flow.log("set_goal_team_gap", task=flow.current.task_id,
-                                     missing=missing, team_roles=sorted(team_roles))
-                        return _ok(
-                            f"확정 거부(팀 전문성 부재 — 1봇1직업 전문화 파이프라인): goal에 필요하다고 "
-                            f"선언한 전문 직군 중 현재 Task 팀에 없는 것: **{', '.join(missing)}**. "
-                            f"recruit(role='{missing[0]}')로 해당 전문가를 먼저 채용한 뒤 set_goal을 "
-                            f"다시 호출하세요(예비 인력 {len(spares)}명). "
-                            f"정확한 전문 직군에게 맡겨야 경험이 그 직군에 쌓이고 전문화 파이프라인"
-                            f"(craft profile → 경험 축적 → 수면 증류 → 기준 개선)이 작동합니다 — "
-                            f"'할 수 있다'가 아니라 '그 분야 전문성으로 잘한다'가 배정 기준입니다"
-                            f"(현재 팀: {', '.join(sorted(team_roles)) or '(없음)'}).")
+                           "재호출은 통과합니다(판단은 당신).")
             if purpose:
                 flow.current.status.purpose = purpose
             flow.current.status.goal = goal
@@ -1300,11 +1230,18 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         "고르세요(LLM은 시키면 가장 뻔한 1개로 수렴 — 의식적 발산→수렴). ② '완성'의 기준은 "
                         "'작동한다'가 아니라 **'사용자로서 써보니 좋다'**입니다 — 마감 전 누군가 실제로 써보고"
                         "(플레이) '재밌나·뭐가 아쉽나'를 비평하고 최소 1회 개선하세요(작동≠좋음).")
-            # [RFC-010 P6 — 범주적 부재. P7 게이트가 flow-level WebSearch 강제를 담당하고(첫 Task),
-            # 이 넛지는 이후 Task에서 required_roles 행동 경로를 상기시킨다(적층 축소: P7과 동일 내용 반복 제거).]
-            gapcheck = ("\n[범주적 부재 — 있는 것만 다듬지 말 것] 훌륭한 예에 '당연히 있는데' 우리에겐 "
-                        "통째로 없는 범주가 남아 있다면 신규 구축+recruit입니다. 이후 Task에서도 "
-                        "set_goal(required_roles=…)로 필요 직군을 선언하면 팀 전문성을 확인합니다.")
+            # [RFC-010 P6 — 장르 예시 대비 '범주적 부재' 점검(라이브: 게임에 사운드 0인데 아무도 인지·채용
+            # 안 함). LLM은 '있는 것 개선'엔 강하나 '통째로 없는 범주'를 못 본다(mode collapse는 확장만 한다).
+            # 처방: 같은 '종류의 훌륭한 예'와 비교해 그쪽엔 있는데 우리엔 없는 범주를 찾고, 그건 '개선'이
+            # 아니라 '신규 구축'이며 필요 직군이 없으면 recruit한다(Graham '최고를 알아야 목표가 보인다' +
+            # exemplar anchoring). 직군 키워드 하드코딩 없음 — 장르 판단·예시는 LLM 지식, 채용은 리더.
+            gapcheck = ("\n[범주적 부재 점검 — '있는 것 개선'에만 머물지 말 것] 이 작품과 **같은 종류의 훌륭한 "
+                        "예**를 하나 **WebSearch로 실제로 찾아보고**(상상 말 것 — 자기 산출 기준으론 '평범=충분'으로 "
+                        "수렴), 그것이 *당연히 갖춘* 요소 중 우리에겐 **통째로 없는 범주**가 있는지 "
+                        "보세요. 무엇이 그런 범주인지는 **작품 종류를 아는 당신이 판단**합니다(시스템이 특정 범주를 "
+                        "지정하지 않음 — 직군·키워드 하드코딩 안 함). 있으면 그건 '개선'이 아니라 **신규 구축**이고, "
+                        "담당 직군이 팀에 없으면 **recruit**하세요. 라이브 교훈: 기존 것만 깊게 파고 *통째로 빠진 "
+                        "범주*는 아무도 본 적이 없었음 — 훌륭한 예라면 당연히 있을 범주를 먼저 점검(다듬기 전에).")
             # [RFC-011 M3 — 누적 사용자 취향을 '진짜 품질 기준'으로] 상용 품질의 천장은 LLM 취향이라
             # (인간 상관 ~0.5) 유일한 신뢰 앵커는 사용자다. 이 프로젝트에서 사용자가 반복해 지적·요구한
             # 말을 그대로 되돌린다 — '언급된 것'만 고치지 말고 *되풀이되는 불만의 범주*를 goal의 품질 축으로

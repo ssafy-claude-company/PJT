@@ -40,7 +40,6 @@ def _flow(g, leader=11):
     f.start_root("root")
     f.gap_checked = True   # P7 범주적 완성 점검 보류를 테스트 기본 우회(전용 테스트만 False로 검증)
     f.percept_checked = True  # 지각 비대칭 점검(complete) 보류도 기본 우회(전용 테스트만 False로 검증)
-    f._skip_roles_prompt = True  # per-task 팀 전문성 프롬프트 기본 우회(전용 테스트만 해제해 검증)
     return f
 
 
@@ -389,7 +388,6 @@ def test_owner는_work수신자_goal합의후():
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "A백엔드", 13: "B프론트"})
     f.start_root("root")
-    f.gap_checked = True; f._skip_roles_prompt = True
     f.gap_checked = True   # P7 범주점검 보류 우회(이 테스트 범위 밖)
     waked = []
 
@@ -424,7 +422,7 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백", 13: "프"})
     f.start_root("root")
-    f.gap_checked = True; f._skip_roles_prompt = True   # P7·per-task 프롬프트 우회(이 테스트는 participated 게이트 검증)
+    f.gap_checked = True   # P7 범주점검 보류 우회(이 테스트는 participated 게이트 검증)
     f.percept_checked = True   # 지각 비대칭 점검 보류 우회(범위 밖)
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
@@ -2136,162 +2134,6 @@ def test_setgoal_범주적완성_점검_1회보류_RFC010_P7():
     assert f.current.status.goal == "게임 + 사운드 구축" and f.gap_checked is True   # 확정 + 흐름당 1회 마킹
 
 
-def test_팀전문성_커버리지_게이트_미비직군_확정거부_채용후_통과():
-    """[전문화 파이프라인 구조적 보장 — 사용자 교정 2026-06-15] set_goal에 required_roles를
-    선언하면, 팀에 해당 전문가가 없을 때 확정이 거부되고 recruit가 강제된다. 정확한 전문 직군에게
-    맡겨야 경험 축적→증류→개선의 학습 플라이휠이 작동한다(라이브: 사운드 직군 0인데 프론트가
-    흡수해 placeholder만 나옴). 채용 후 재호출은 통과."""
-    g = FakeGuide()
-    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
-             bot_info={11: "게임 기획자", 12: "프론트엔드", 13: "예비"})
-    f.start_root("root")
-    f.gap_checked = True
-    f.percept_checked = True
-    logs = []
-    f.log = lambda ev, **k: logs.append((ev, k))
-    t = {t.name: t for t in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_task"].handler({"members": "12"}))
-    f.current.participated.add(12)
-    # 1) required_roles에 '사운드 디자이너'가 있지만 팀에 없음 → 확정 거부
-    r1 = asyncio.run(t["set_goal"].handler({
-        "goal": "2인 협동 웹게임(사운드 포함)",
-        "required_roles": "프론트엔드, 사운드 디자이너"
-    }))
-    txt = r1["content"][0]["text"]
-    assert "사운드 디자이너" in txt              # 부재 직군이 명시됨
-    assert "recruit" in txt                       # recruit 강제
-    assert "전문화 파이프라인" in txt              # 전문화 근거(경험→증류→개선)
-    assert f.current.status.goal == ""            # 확정 안 됨
-    assert any(ev == "set_goal_team_gap" for ev, _ in logs)   # 관측 로그
-    # 2) recruit로 사운드 디자이너 채용(시뮬레이션) 후 재호출 → 통과
-    f.bot_info[13] = "사운드 디자이너"
-    f.current.team.append(13)
-    f.current.participated.add(13)
-    r2 = asyncio.run(t["set_goal"].handler({
-        "goal": "2인 협동 웹게임(사운드 포함)",
-        "required_roles": "프론트엔드, 사운드 디자이너"
-    }))
-    txt2 = r2["content"][0]["text"]
-    assert "정의 확정" in txt2
-    assert f.current.status.goal == "2인 협동 웹게임(사운드 포함)"
-
-
-def test_팀전문성_커버리지_required_roles_미제공시_확정통과():
-    """required_roles가 비어있으면(제공 안 함) 팀 커버리지 게이트를 건너뛰고 확정된다
-    — 기존 흐름과의 하위호환."""
-    g = FakeGuide()
-    f = _flow(g)
-    t = _tools(f, 11, "leader")
-    asyncio.run(t["create_task"].handler({"members": "12"}))
-    f.current.participated.add(12)
-    r = asyncio.run(t["set_goal"].handler({"goal": "간단한 작업"}))
-    assert "정의 확정" in r["content"][0]["text"]
-    assert f.current.status.goal == "간단한 작업"
-
-
-def test_팀전문성_커버리지_변형직군명은_기존직군으로_인정():
-    """required_roles='VFX 아티스트'인데 팀에 'VFX 전문가'가 있으면 변형으로 인정해 통과한다
-    — 직군 변형 감지(_find_variant_job)와 통합."""
-    g = FakeGuide()
-    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
-             bot_info={11: "게임 기획자", 12: "VFX 전문가"})
-    f.start_root("root")
-    f.gap_checked = True
-    f.percept_checked = True
-    t = {t.name: t for t in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_task"].handler({"members": "12"}))
-    f.current.participated.add(12)
-    r = asyncio.run(t["set_goal"].handler({
-        "goal": "시각 효과",
-        "required_roles": "VFX 아티스트"
-    }))
-    assert "정의 확정" in r["content"][0]["text"]
-
-
-def test_팀전문성_per_task_프롬프트_required_roles_비면_1회보류():
-    """[P7 flow-level 빈틈 보완] P7은 flow당 1회라 2번째 Task부터 required_roles 안내가 사라진다.
-    per-task 프롬프트가 required_roles 비었을 때 Task별 1회 보류로 팀 구성을 보여주고 선언을 유도.
-    재호출은 통과(판단은 리더)."""
-    g = FakeGuide()
-    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
-             bot_info={11: "게임 기획자", 12: "프론트엔드"})
-    f.start_root("root")
-    f.gap_checked = True      # P7 이미 통과된 상태(2번째 Task 시뮬)
-    f.percept_checked = True
-    t = {t.name: t for t in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_task"].handler({"members": "12"}))
-    f.current.participated.add(12)
-    # required_roles 없이 set_goal → per-task 프롬프트 발동
-    r1 = asyncio.run(t["set_goal"].handler({"goal": "사운드 포함 게임"}))
-    txt = r1["content"][0]["text"]
-    assert "팀 전문성 확인" in txt
-    assert "프론트엔드" in txt                    # 현재 팀 직군이 표시됨
-    assert "required_roles" in txt
-    assert f.current.status.goal == ""            # 확정 안 됨
-    # 재호출(required_roles='현재 팀 충분') → 통과
-    r2 = asyncio.run(t["set_goal"].handler({"goal": "사운드 포함 게임", "required_roles": "현재 팀 충분"}))
-    assert "정의 확정" in r2["content"][0]["text"]
-    assert f.current.status.goal == "사운드 포함 게임"
-
-
-def test_팀전문성_멀티Task_2번째도_프롬프트_발동():
-    """[멀티-Task 시나리오] 첫 Task에서 P7+커버리지로 사운드 채용 후, 2번째 Task에서도
-    per-task 프롬프트가 독립 발동해 팀 커버리지를 확인한다(P7 flow-level 1회성 보완)."""
-    g = FakeGuide()
-    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
-             bot_info={11: "게임 기획자", 12: "프론트엔드", 13: "사운드 디자이너"})
-    f.start_root("root")
-    f.gap_checked = True
-    f.percept_checked = True
-    t = {t.name: t for t in make_guide_tools(f, 11, "leader")}
-    # 1번째 Task — required_roles 제공해서 per-task 프롬프트 skip
-    asyncio.run(t["create_task"].handler({"members": "12,13"}))
-    f.current.participated.update([12, 13])
-    r1 = asyncio.run(t["set_goal"].handler({
-        "goal": "기본 구조", "required_roles": "프론트엔드, 사운드 디자이너"}))
-    assert "정의 확정" in r1["content"][0]["text"]
-    # complete_task로 마감(시뮬)
-    f.current.verified = True
-    f.current.cross_checks = 1
-    asyncio.run(t["complete_task"].handler({"result": "done"}))
-    # 2번째 Task — required_roles 없이 호출 → per-task 프롬프트 발동
-    asyncio.run(t["create_task"].handler({"members": "12"}))
-    f.current.participated.add(12)
-    r2 = asyncio.run(t["set_goal"].handler({"goal": "사운드 통합"}))
-    assert "팀 전문성 확인" in r2["content"][0]["text"]   # 2번째 Task에서도 프롬프트 발동
-
-
-def test_팀전문성_skip값_현재팀충분_통과():
-    """required_roles='현재 팀 충분', 'N/A', '없음' 등은 커버리지 체크를 건너뛴다."""
-    g = FakeGuide()
-    f = _flow(g)
-    t = _tools(f, 11, "leader")
-    asyncio.run(t["create_task"].handler({"members": "12"}))
-    f.current.participated.add(12)
-    f.current.roles_prompted = True   # per-task 프롬프트 우회
-    for skip_val in ("현재 팀 충분", "N/A", "없음"):
-        f.current.status.goal = ""     # 리셋
-        r = asyncio.run(t["set_goal"].handler({"goal": "test", "required_roles": skip_val}))
-        assert "정의 확정" in r["content"][0]["text"], f"skip값 '{skip_val}'이 통과 안 됨"
-
-
-def test_팀전문성_겸직라벨_매칭():
-    """팀원이 겸직 라벨('백엔드·QA')이면 required_roles='QA'도 매칭된다."""
-    g = FakeGuide()
-    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
-             bot_info={11: "게임 기획자", 12: "백엔드·QA"})
-    f.start_root("root")
-    f.gap_checked = True
-    f.percept_checked = True
-    t = {t.name: t for t in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_task"].handler({"members": "12"}))
-    f.current.participated.add(12)
-    f.current.roles_prompted = True
-    r = asyncio.run(t["set_goal"].handler({
-        "goal": "품질 검증", "required_roles": "백엔드, QA"}))
-    assert "정의 확정" in r["content"][0]["text"]
-
-
 def test_지각비대칭_검증_complete_1회보류_재호출통과():
     """[범용 대문제 교정 — 지각 비대칭 검증 2026-06-15] LLM 외부현실 검증(비전 스크린샷→Read,
     WebSearch 대조)은 검증자가 '지각 가능한 차원'(시각·텍스트)을 암묵 전제한다. 직접 경험해야만
@@ -2950,8 +2792,8 @@ def test_Task_체크포인트_전이마다_영속_마감시_해제(tmp_path):
                         "leader": 11, "summary": ""}}
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드"})
     f.start_root("root")
-    f.gap_checked = True; f._skip_roles_prompt = True  # P7·per-task 우회(체크포인트 검증 범위 밖)
-    f.percept_checked = True
+    f.gap_checked = True   # P7 범주점검 보류 우회(체크포인트 검증 범위 밖)
+    f.percept_checked = True   # 지각 비대칭 점검 보류 우회(범위 밖)
     f.project_channel = 500
     f.workspace = str(tmp_path)
     f.checkpoint_task = lambda: s._checkpoint_open_task(f)
