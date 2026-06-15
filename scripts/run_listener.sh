@@ -29,7 +29,7 @@ export ORGANT_CANARY_PERIOD="${ORGANT_CANARY_PERIOD:-120}"
 # 이어가기 예산 = '연속 무진행 한도'(활동 기반 — 진행 시 카운터 리셋, 핸드오프 40). 진행하는 한
 # 무제한이고, 연속 N회 헛돌 때만 정체로 종결한다. 총량 한도 시절 '큰 작업이 마감 직전 절단'
 # 사고 2회(기본 6 시절 P-002 / 12 시절 P-010) — 의미 교정으로 재발 불가.
-export ORGANT_MAX_CONTINUE="${ORGANT_MAX_CONTINUE:-6}"
+export ORGANT_MAX_CONTINUE="${ORGANT_MAX_CONTINUE:-12}"
 export CHANNEL_ID="${CHANNEL_ID:-1510828120490643517}"
 # DEPLOY_NAME 주입은 제거됨(2026-06-12) — 배포 슬롯은 프로젝트 신원(P-번호)으로만 정해지며,
 # 미등록 흐름은 슬롯이 없다(공유 슬롯 폴백이 P-002 라이브를 덮어쓸 수 있던 위험 종결).
