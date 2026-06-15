@@ -2134,6 +2134,78 @@ def test_setgoal_범주적완성_점검_1회보류_RFC010_P7():
     assert f.current.status.goal == "게임 + 사운드 구축" and f.gap_checked is True   # 확정 + 흐름당 1회 마킹
 
 
+def test_팀전문성_커버리지_게이트_미비직군_확정거부_채용후_통과():
+    """[전문화 파이프라인 구조적 보장 — 사용자 교정 2026-06-15] set_goal에 required_roles를
+    선언하면, 팀에 해당 전문가가 없을 때 확정이 거부되고 recruit가 강제된다. 정확한 전문 직군에게
+    맡겨야 경험 축적→증류→개선의 학습 플라이휠이 작동한다(라이브: 사운드 직군 0인데 프론트가
+    흡수해 placeholder만 나옴). 채용 후 재호출은 통과."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "게임 기획자", 12: "프론트엔드", 13: "예비"})
+    f.start_root("root")
+    f.gap_checked = True
+    f.percept_checked = True
+    logs = []
+    f.log = lambda ev, **k: logs.append((ev, k))
+    t = {t.name: t for t in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    # 1) required_roles에 '사운드 디자이너'가 있지만 팀에 없음 → 확정 거부
+    r1 = asyncio.run(t["set_goal"].handler({
+        "goal": "2인 협동 웹게임(사운드 포함)",
+        "required_roles": "프론트엔드, 사운드 디자이너"
+    }))
+    txt = r1["content"][0]["text"]
+    assert "사운드 디자이너" in txt              # 부재 직군이 명시됨
+    assert "recruit" in txt                       # recruit 강제
+    assert "전문화 파이프라인" in txt              # 전문화 근거(경험→증류→개선)
+    assert f.current.status.goal == ""            # 확정 안 됨
+    assert any(ev == "set_goal_team_gap" for ev, _ in logs)   # 관측 로그
+    # 2) recruit로 사운드 디자이너 채용(시뮬레이션) 후 재호출 → 통과
+    f.bot_info[13] = "사운드 디자이너"
+    f.current.team.append(13)
+    f.current.participated.add(13)
+    r2 = asyncio.run(t["set_goal"].handler({
+        "goal": "2인 협동 웹게임(사운드 포함)",
+        "required_roles": "프론트엔드, 사운드 디자이너"
+    }))
+    txt2 = r2["content"][0]["text"]
+    assert "정의 확정" in txt2
+    assert f.current.status.goal == "2인 협동 웹게임(사운드 포함)"
+
+
+def test_팀전문성_커버리지_required_roles_미제공시_확정통과():
+    """required_roles가 비어있으면(제공 안 함) 팀 커버리지 게이트를 건너뛰고 확정된다
+    — 기존 흐름과의 하위호환."""
+    g = FakeGuide()
+    f = _flow(g)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    r = asyncio.run(t["set_goal"].handler({"goal": "간단한 작업"}))
+    assert "정의 확정" in r["content"][0]["text"]
+    assert f.current.status.goal == "간단한 작업"
+
+
+def test_팀전문성_커버리지_변형직군명은_기존직군으로_인정():
+    """required_roles='VFX 아티스트'인데 팀에 'VFX 전문가'가 있으면 변형으로 인정해 통과한다
+    — 직군 변형 감지(_find_variant_job)와 통합."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "게임 기획자", 12: "VFX 전문가"})
+    f.start_root("root")
+    f.gap_checked = True
+    f.percept_checked = True
+    t = {t.name: t for t in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    r = asyncio.run(t["set_goal"].handler({
+        "goal": "시각 효과",
+        "required_roles": "VFX 아티스트"
+    }))
+    assert "정의 확정" in r["content"][0]["text"]
+
+
 def test_지각비대칭_검증_complete_1회보류_재호출통과():
     """[범용 대문제 교정 — 지각 비대칭 검증 2026-06-15] LLM 외부현실 검증(비전 스크린샷→Read,
     WebSearch 대조)은 검증자가 '지각 가능한 차원'(시각·텍스트)을 암묵 전제한다. 직접 경험해야만

@@ -1156,8 +1156,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               "단독/선지정 금지 — **이 Task의 멤버 전원**과 meet(회의)로 'Purpose·각 도메인의 목표·성공기준'을 "
               "수렴한 결과를 적는다(1:1 request(Info)보다 meet 권장 — 앵커링↓·회의록 자동 기록). Goal엔 '무엇이 "
               "되면 성공인가'(결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·스택으로 만들지'(구현 방법)는 쓰지 말 것 — "
-              "그건 owner가 정한다. Work 위임은 확정 뒤에만 가능.",
-              {"purpose": str, "goal": str})
+              "그건 owner가 정한다. Work 위임은 확정 뒤에만 가능. required_roles=이 goal에 필요한 전문 직군 목록"
+              "(쉼표구분, 예: '프론트엔드, 사운드 디자이너') — 팀에 해당 전문가 없으면 확정 거부→recruit 강제"
+              "(전문화 파이프라인 보장: 정확한 직군에게 맡겨야 경험 축적→증류→개선이 작동).",
+              {"purpose": str, "goal": str, "required_roles": str})
         async def set_goal(args):
             if flow.current is None:
                 return _ok("오류: 진행 중인 Task가 없습니다. create_task로 먼저 여세요.")
@@ -1193,7 +1195,52 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            "특정 범주·직군을 지정하지 않음 — 하드코딩 없음). 있으면 그건 '개선'이 아니라 신규 구축이니 "
                            "**goal에 '구축 대상'으로 넣으세요**(담당 직군이 팀에 없으면 recruit). 정말 없어도 되면 "
                            "goal에 그 이유를 적은 뒤 set_goal을 재호출해 확정하세요(인지를 *점검*에서 *구축*으로). "
-                           "재호출은 통과합니다(판단은 당신).")
+                           "재호출 시 **required_roles에 이 goal에 필요한 전문 직군을 모두 나열**하세요"
+                           "(예: '프론트엔드, 백엔드, 디자이너'). 팀에 해당 전문가가 없으면 확정이 "
+                           "거부되고 recruit가 강제됩니다 — 정확한 직군에게 맡겨야 경험 축적→증류→개선이 작동합니다"
+                           "(1봇1직업 전문화 파이프라인 보장). 재호출은 통과합니다(판단은 당신).")
+            # [팀 전문성 커버리지 — 전문화 파이프라인의 구조적 보장(사용자 교정 2026-06-15)]
+            # P7(범주 인식)이 '무엇이 빠졌는가'를 밝히지만, '그 전문가가 팀에 있는가'까지 검증하지
+            # 않았다 → 리더가 범주를 인지해도 비전문가에게 시켜 placeholder가 나오고, 경험이 그 직군에
+            # 안 쌓여 학습 플라이휠(craft→경험→증류→개선)이 안 도는 근본 원인이었다. required_roles
+            # 로 리더가 필요 직군을 선언하면, 시스템이 팀 구성을 대조해 부재 시 recruit를 강제한다.
+            # 직군·도메인 하드코딩 없음 — 판단(무엇이 필요한가)은 리더, 검증(있는가)은 시스템.
+            required = [r.strip() for r in (args.get("required_roles") or "").split(",") if r.strip()]
+            if required:
+                _skip = {_norm_job(s) for s in ("현재 팀 충분", "현재팀충분", "n/a", "없음", "")}
+                real_required = [r for r in required if _norm_job(r) not in _skip]
+                if real_required:
+                    team_roles = set()
+                    for m in flow.current.team:
+                        info = (flow._info(m) or "").strip()
+                        if info and not info.startswith(_SPARE_LABEL):
+                            for j in _jobs_of(info):
+                                if j.strip():
+                                    team_roles.add(j.strip())
+                    missing = []
+                    for r in real_required:
+                        rn = _norm_job(r)
+                        if not rn:
+                            continue
+                        if any(_norm_job(j) == rn for j in team_roles):
+                            continue
+                        if _find_variant_job(r, team_roles):
+                            continue
+                        missing.append(r)
+                    if missing:
+                        spares = [s for s in flow.pool if _is_spare(flow, s)]
+                        if flow.log:
+                            flow.log("set_goal_team_gap", task=flow.current.task_id,
+                                     missing=missing, team_roles=sorted(team_roles))
+                        return _ok(
+                            f"확정 거부(팀 전문성 부재 — 1봇1직업 전문화 파이프라인): goal에 필요하다고 "
+                            f"선언한 전문 직군 중 현재 Task 팀에 없는 것: **{', '.join(missing)}**. "
+                            f"recruit(role='{missing[0]}')로 해당 전문가를 먼저 채용한 뒤 set_goal을 "
+                            f"다시 호출하세요(예비 인력 {len(spares)}명). "
+                            f"정확한 전문 직군에게 맡겨야 경험이 그 직군에 쌓이고 전문화 파이프라인"
+                            f"(craft profile → 경험 축적 → 수면 증류 → 기준 개선)이 작동합니다 — "
+                            f"'할 수 있다'가 아니라 '그 분야 전문성으로 잘한다'가 배정 기준입니다"
+                            f"(현재 팀: {', '.join(sorted(team_roles)) or '(없음)'}).")
             if purpose:
                 flow.current.status.purpose = purpose
             flow.current.status.goal = goal
