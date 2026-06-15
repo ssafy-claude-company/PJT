@@ -321,6 +321,9 @@ class Flow:
         self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로
                                        #   일했나'를 wake 전후 스냅샷 차이로 판정(허위완료/독점 차단)
         self.act_by = {}               # 행위자별 작업 누계(actor→count) — 요청자 자신의 활동을 빼고 재기 위함
+        self.external_sourced = False  # 자급(self-synthesis)을 넘어선 신호: 워커가 WebSearch/WebFetch로 외부
+                                       #   자원을 찾았거나 전문가를 recruit함. percept 게이트의 '증거'(훅·recruit가 set) —
+                                       #   '반사적 재호출로는 마감 못 함, 외부 접촉·채용 증거나 의식적 명시가 있어야 통과'.
         self.consec_fail = 0           # 연속 '응답 실패(무응답/타임아웃)' 횟수 — 시스템 일시불안정 판별(충원 루프 차단)
         self.inflight_tasks = set()    # 진행 중 위임의 '완주 태스크'들 — CLI가 도구 호출을 포기해도 위임은
                                        #   계속 완주하며(중첩 가능), SYS가 이어가기 전에 이들의 완주를 기다린다
@@ -985,6 +988,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             flow.current.status.group = _group_of(flow, flow.current.team)
             await flow.refresh()
             await _add_members(g, flow.current.thread_id, [mid])   # 스레드에 합류(멤버십=팀)
+        # 전문가 채용은 percept 게이트가 인정하는 '자급 너머' 행동 둘 중 하나(WebSearch 외부자원 / recruit) —
+        # 채용했으면 그 차원을 전문가가 책임지므로 마감 시 외부소싱 증거로 인정한다(게이트 메시지와 정합).
+        flow.external_sourced = True
         return _ok(f"{flow._info(mid) or mid} 합류{hired}(사유: {args.get('reason', '')}). "
                    f"현재 팀: {flow._names(flow.current.team)}")
 
@@ -1291,19 +1297,29 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 지각 불가 차원은 '자기 판정'이 구조적으로 불가하므로, 자급을 완성으로 닫지 말고 '검증된 실제
             # 자원 또는 전문성'을 의무화한다(외부현실·전문화 원칙의 비시각 차원 확장). 흐름당 1회 보류 후
             # 재호출 통과(막지 않되 보이게 — 판단·범주는 리더. 직군·도메인 하드코딩 없음, 'gap_checked' 패턴).
+            # [지각 비대칭 — 증거/명시 통과(2026-06-15 라이브 실증으로 교정). soft '1회 보류 후 재호출 통과'는
+            # 마감 관성에 무력했다: percept 게이트 3/3이 +0초 재호출로 패스스루, WebSearch 0회(인식만 찍히고
+            # 행동 0). 작동하는 verified 게이트처럼 '증거 없으면 못 닫게'로 강화한다 — 외부소싱(WebSearch/
+            # WebFetch/recruit) 증거가 있거나, 그런 지각 불가 차원이 애초에 없음을 result 첫 줄 '[지각차원 없음]'
+            # 으로 의식적으로 명시해야 통과. 반사적 재호출로는 안 닫힌다. 무한 반려 아님(명시 탈출구 상시 — '판단은
+            # 리더' 보존). 도메인 하드코딩 없음(증거=외부접촉/채용 발생 여부, 특정 범주 아님).]
             if not getattr(flow, "percept_checked", False):
-                flow.percept_checked = True
-                if flow.log:
-                    flow.log("complete_percept_gate", task=flow.current.task_id)
-                return _ok("마감 보류(지각 비대칭 점검 — 흐름당 1회): 이 작품이 만든 것 중 **화면으로 보거나 "
-                           "코드로 '됐다' 확인할 수 없고, 직접 경험해야만(보는 것 말고 듣거나 느껴야) 품질을 "
-                           "아는 차원**이 있습니까? — 있다면 LLM 검증자는 그것을 지각할 수 없어 '코드가 "
-                           "호출되는가'까지만 검증되고 '좋은가'는 판정 불가입니다. 그런 차원은 코드로 합성한 "
-                           "placeholder('있긴 하나 상용 아님')를 완성으로 닫지 마세요 — **WebSearch로 실제 제작 "
-                           "자원(CC0 등)을 받아 통합하거나, 그 분야 전문 직군을 recruit**하세요(지각 불가 차원은 "
-                           "자기판정이 불가하므로 자급을 완성으로 인정하지 않습니다). 그런 차원이 없으면(전부 "
-                           "화면·코드로 검증 가능) 그대로 complete_task를 재호출하세요(통과). 무엇이 그런 차원인지는 "
-                           "작품을 아는 당신이 판단합니다(시스템은 특정 범주·직군을 지정하지 않음).")
+                _pd = bool(re.match(r"^\s*\[\s*지각차원\s*없음\s*\]", args.get("result") or ""))
+                if not getattr(flow, "external_sourced", False) and not _pd:
+                    if flow.log:
+                        flow.log("complete_percept_gate", task=flow.current.task_id)
+                    return _ok("마감 보류(지각 비대칭 — 증거/명시 필요, 반사적 재호출로는 통과 안 됨): 이 작품이 "
+                               "만든 것 중 **화면으로 보거나 코드로 '됐다' 확인할 수 없고, 직접 경험해야만(보는 것 "
+                               "말고 듣거나 느껴야) 품질을 아는 차원**이 있습니까? — 있다면 LLM 검증자는 그것을 "
+                               "지각할 수 없어 '코드가 호출되는가'까지만 검증되고 '좋은가'는 판정 불가입니다. 코드로 "
+                               "합성한 placeholder('있긴 하나 상용 아님')를 완성으로 닫지 마세요. 통과하려면 둘 중 "
+                               "하나: ① **WebSearch/WebFetch로 실제 제작 자원(CC0 등)을 찾아 통합**하거나 그 분야 "
+                               "**전문 직군을 recruit**하세요(그 행동이 증거로 남아 게이트가 열립니다) ② 그런 지각 "
+                               "불가 차원이 애초에 없으면(전부 화면·코드로 검증 가능) result **첫 줄에 "
+                               "'[지각차원 없음] <왜 없는지>'**를 적어 재호출하세요(의식적 판단 — 그냥 재호출로는 "
+                               "안 닫힙니다). 무엇이 그런 차원인지는 작품을 아는 당신이 판단합니다(시스템은 특정 "
+                               "범주·직군을 지정하지 않음).")
+                flow.percept_checked = True   # 증거(외부소싱)·명시 확보 → 이 흐름에선 다시 묻지 않음
             # [검증 분업 — 1회 보류] 품질 판정이 리더 1인에게 독점되는 것을 구조적으로 흔든다(라이브
             # P-009: QA·교차 검증 0인 채 단독 마감 → 브라우저 렉·적 돌진 등 사용성 결함이 그대로 통과,
             # 사용자가 첫 발견). owner 인도 후 '다른 멤버'의 검증 참여가 0이면 첫 호출만 보류하고 검증
@@ -1364,13 +1380,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 실작업·검증 0(act_by==0: Write/Edit/run 한 번도 없음)이면 그 도메인(타격감·그래픽·사운드·디자인·
             # UX 등 폴리시)은 작품에 '반영되지 않은' 것이다 — 라이브 P-010: VFX·디자이너·모션·게임비주얼이
             # 실구현 0인 채 마감돼 "단순 나열 웹·타격감 없는 게임"이 됨(발언≠기여). 직군 키워드 없이 '실작업
-            # 0'만 본다(보편 이치: 부른 직군은 기여한다, 회의 참석≠기여). 1회 보류 후 재호출 통과(무한 반려
-            # 금지 — 판단은 리더). 동면 복구로 act_by가 0에서 재시작한 경우에도 1회 환기되나 '복구 후 기여
-            # 재확인'으로 무해(검증 누계 리셋과 같은 정신) — 재호출 통과.
+            # 0'만 본다(보편 이치: 부른 직군은 기여한다, 회의 참석≠기여). [증거/명시 통과(2026-06-15 라이브
+            # 교정): soft '1회 보류 후 재호출 통과'는 마감 관성에 무력(라이브 3/3 반사적 재호출로 폴리시 또 빠짐
+            # — 아래 task_contrib_overridden가 그 증거). percept와 같은 원리로 강화 — 잠수 직군이 실제로 기여하거나
+            # (idle 해소), 정말 불필요함을 result '[기여 불필요]'로 의식적으로 명시해야 통과. 무한 반려 아님(명시
+            # 탈출구 상시 — 판단은 리더). 동면 복구로 act_by가 0에서 재시작해도 명시/기여로 통과(반사적 재호출은 X).]
             if has_product and not flow.current.contrib_checked:
                 contrib_idle = [m for m in third if flow.act_by.get(m, 0) == 0]
-                if contrib_idle:
-                    flow.current.contrib_checked = True
+                _cd = bool(re.search(r"\[\s*기여\s*(?:불필요|제외|면제)\s*\]", args.get("result") or ""))
+                if contrib_idle and not _cd:
                     if flow.log:
                         flow.log("task_contrib_idle", task=flow.current.task_id,
                                  idle=[int(m) for m in contrib_idle])
@@ -1392,15 +1410,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                                    "각 발언이 실제 산출물에 반영됐는지 직접 확인하고, 안 됐으면 ①로 맡기세요:\n"
                                    + "\n".join(commits)) if commits else ""
                     return _ok(
-                        f"완료 보류(팀 기여 의무 — RFC-009): 팀의 {flow._names(contrib_idle)}이(가) 이 흐름에서 "
-                        f"**회의 발언 외 실작업·검증이 0**입니다(Write/Edit/run 0회) — 이 직군의 도메인"
-                        f"('되는가'를 넘는 그 직군의 품질·폴리시)이 **작품에 반영되지 "
-                        f"않았습니다**. 셋 중 하나를 택하세요: ① 필요한 도메인이면 request(Work)로 맡겨 "
-                        f"**실제로 만들게** 하고 그 산출물을 교차 검증까지 받으세요 ② 애초에 불필요했으면 "
-                        f"팀에서 빼세요(왜 불렀나=다음 학습) ③ 둘 다 아니면 complete_task 재호출로 통과(판단은 "
-                        f"당신) — **단, 재호출로 통과하면 '이 직군들을 뺀 채 마감'이 Task 기록에 남습니다**(정말 "
-                        f"불필요하면 result에 그 이유를 적으세요; 반사적 통과 방지). 특히 회의에서 '중요하다'고 한 "
+                        f"완료 보류(팀 기여 의무 — 증거/명시 필요, 반사적 재호출로는 통과 안 됨): 팀의 "
+                        f"{flow._names(contrib_idle)}이(가) 이 흐름에서 **회의 발언 외 실작업·검증이 0**입니다"
+                        f"(Write/Edit/run 0회) — 이 직군의 도메인('되는가'를 넘는 그 직군의 품질·폴리시)이 "
+                        f"**작품에 반영되지 않았습니다**. 셋 중 하나를 택하세요: ① 필요한 도메인이면 request(Work)로 "
+                        f"맡겨 **실제로 만들게** 하고 그 산출물을 교차 검증까지 받으세요 ② 애초에 불필요했으면 "
+                        f"팀에서 빼세요(왜 불렀나=다음 학습) ③ 정말 불필요하면 result **첫 줄/본문에 "
+                        f"'[기여 불필요] <이유>'**를 적어 재호출하세요(의식적 판단 — 그냥 재호출로는 통과 안 됨; "
+                        f"'이 직군들을 뺀 채 마감'이 Task 기록에 남습니다). 특히 회의에서 '중요하다'고 한 "
                         f"부분이 실제 산출물에 들어갔는지 확인하세요 — 발언만으로는 작품이 바뀌지 않습니다.{commit_note}")
+                flow.current.contrib_checked = True   # 기여(idle 해소)·명시 확보 → 이 Task에선 다시 묻지 않음
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.

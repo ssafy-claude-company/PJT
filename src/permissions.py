@@ -198,6 +198,13 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                     flow.act_by[actor] = flow.act_by.get(actor, 0) + 1
             except Exception:
                 pass
+        # 외부현실 접촉(WebSearch/WebFetch)은 percept 마감 게이트의 '증거'다 — 자급 placeholder를 반사적
+        # 재호출로 닫지 못하게, '외부 자원을 실제로 찾아봤나'를 흐름 단위로 기록한다(RFC-011 M1 자원동원).
+        if tool in ("WebSearch", "WebFetch") and flow is not None:
+            try:
+                flow.external_sourced = True
+            except Exception:
+                pass
 
         return {}
 
