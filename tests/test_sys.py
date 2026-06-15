@@ -39,6 +39,7 @@ def _flow(g, leader=11):
     f = Flow(g, channel_id=500, guild_id=1, leader_id=leader, bot_info={11: "L", 12: "M"})
     f.start_root("root")
     f.gap_checked = True   # P7 범주적 완성 점검 보류를 테스트 기본 우회(전용 테스트만 False로 검증)
+    f.percept_checked = True  # 지각 비대칭 점검(complete) 보류도 기본 우회(전용 테스트만 False로 검증)
     return f
 
 
@@ -422,6 +423,7 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백", 13: "프"})
     f.start_root("root")
     f.gap_checked = True   # P7 범주점검 보류 우회(이 테스트는 participated 게이트 검증)
+    f.percept_checked = True   # 지각 비대칭 점검 보류 우회(범위 밖)
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
     asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
@@ -452,6 +454,7 @@ def test_Task팀은_담당자가_동적선정():
     f.current.participated.update({12})
     asyncio.run(t["set_goal"].handler({"purpose": "서버", "goal": "동작"}))
     f.current.verified = True
+    f.percept_checked = True   # 지각 비대칭 점검 보류 우회(이 테스트는 팀 동적선정 검증)
     asyncio.run(t["complete_task"].handler({"result": "ok"}))
     asyncio.run(t["create_task"].handler({"members": ""}))        # 비우면 프로젝트팀(11,12,13) 기본 — 14는 안 부름
     assert set(f.current.team) == {11, 12, 13} and 14 not in f.current.team
@@ -2131,6 +2134,31 @@ def test_setgoal_범주적완성_점검_1회보류_RFC010_P7():
     assert f.current.status.goal == "게임 + 사운드 구축" and f.gap_checked is True   # 확정 + 흐름당 1회 마킹
 
 
+def test_지각비대칭_검증_complete_1회보류_재호출통과():
+    """[범용 대문제 교정 — 지각 비대칭 검증 2026-06-15] LLM 외부현실 검증(비전 스크린샷→Read,
+    WebSearch 대조)은 검증자가 '지각 가능한 차원'(시각·텍스트)을 암묵 전제한다. 직접 경험해야만
+    품질을 아는 차원(들어야 아는 소리 등)은 외부대조 불가 → presence('코드가 호출되나')로 회귀해
+    비전문가의 코드 합성 placeholder가 완성으로 통과(라이브 P-010: 사운드=오실레이터 자급, 사운드
+    직군 0·recruit 0). complete 첫 호출 1회 보류로 '자급 말고 실자원·전문성'을 의식시키고, 재호출은
+    통과(막지 않되 보이게). 도메인 중립 — 특정 범주(사운드) 프라이밍 없음."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.percept_checked = False        # 이 테스트는 지각 비대칭 보류를 검증(_flow 기본 우회 해제)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "게임 동작"}))   # gap_checked=True라 P7 통과
+    f.current.verified = True
+    r1 = asyncio.run(t["complete_task"].handler({"result": "playSound로 효과음 구현"}))
+    assert "지각 비대칭" in r1["content"][0]["text"] and f.current is not None   # 1회차 보류(마감 안 됨)
+    assert "WebSearch" in r1["content"][0]["text"] and "recruit" in r1["content"][0]["text"]  # 실자원·전문성 경로
+    assert "듣거나 느껴야" in r1["content"][0]["text"]      # 지각 불가 차원 개념(도메인 중립 표현)
+    assert "사운드" not in r1["content"][0]["text"]        # 특정 범주 프라이밍 없음(하드코딩 0)
+    assert f.percept_checked is True                       # 흐름당 1회 마킹
+    r2 = asyncio.run(t["complete_task"].handler({"result": "재확인 — 의도적 placeholder로 유지"}))
+    assert "지각 비대칭" not in r2["content"][0]["text"] and f.current is None   # 재호출 통과·마감
+
+
 def test_기여미흡_재호출_마감은_기록과_로그에_남는다_RFC009():
     """[게이트 강화 — 침묵 강행 불가] 잠수 직군이 실작업 0인 채 기여 게이트를 재호출로 통과해 마감하면
     (옵션③), '[기여 미흡: … 실작업 0 — 리더 판단 마감]'이 Task 결과에 박히고 task_contrib_overridden
@@ -2765,6 +2793,7 @@ def test_Task_체크포인트_전이마다_영속_마감시_해제(tmp_path):
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드"})
     f.start_root("root")
     f.gap_checked = True   # P7 범주점검 보류 우회(체크포인트 검증 범위 밖)
+    f.percept_checked = True   # 지각 비대칭 점검 보류 우회(범위 밖)
     f.project_channel = 500
     f.workspace = str(tmp_path)
     f.checkpoint_task = lambda: s._checkpoint_open_task(f)
