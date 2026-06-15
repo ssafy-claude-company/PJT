@@ -1648,6 +1648,52 @@ def test_SYS_자동이어가기_무진행이면_중단():
     assert f.current.owner_incomplete is True and st["n"] <= 3           # 무진행 반복 안 함
 
 
+def test_SYS_자동위임_리더가_위임0건_헛돌면_owner에게_직접발사():
+    """[헛돎 발생 차단 2026-06-15] 리더가 designated owner(스냅샷 복원 등)에게 위임 0건이고 솔로 독식
+    차단(leader_runs>3)에만 막혀 헛돌면, SYS가 직접 그 owner에게 '첫 위임'을 발사한다 — _auto_continue_owner는
+    '위임된 뒤 미완'만 잡으므로 '위임 0건'인 정체는 구조적 빈틈이었다(라이브: 신예준 P-014 거부11·위임0·헛돎).
+    헛돎을 한도 종결로 사후 차단하지 않고 발생 자체에서 막는다. 위임 한 번 나가면 work_delegated>0이라 재발사 X."""
+    g = FakeGuide()
+    f = _flow(g)
+    st = {"n": 0, "body": ""}
+
+    async def wake(to, b, k):
+        st["n"] += 1; st["body"] = b
+        f.act_count += 1
+        return "남은 부분 구현·검증 완료"
+
+    f.wake = wake
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"})
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    f.current.owner = 12          # 스냅샷 복원 모사: owner 지정됐으나
+    f.leader_runs = 4             # 위임 0건 + 솔로 독식 차단 발동(>3) = 헛돎 정체
+    assert f.current.work_delegated == 0
+    out = asyncio.run(s._auto_delegate_owner(f, 11))
+    assert st["n"] == 1                                  # SYS가 owner에게 위임 발사
+    assert "SYS 자동 위임" in st["body"]                  # 자동 위임 본문 전달
+    assert "자동 위임" in out                             # 결과 반환(침묵 금지)
+    assert any(e["event"] == "sys_auto_delegate" for e in s.flow_log)
+    st["n"] = 0                                          # 위임 나갔으니(work_delegated>0) 재발사 X
+    assert asyncio.run(s._auto_delegate_owner(f, 11)) == "" and st["n"] == 0
+
+
+def test_SYS_자동위임_정상흐름엔_무동작():
+    """자동 위임은 헛돎 정체(owner 지정 + 위임0 + leader_runs>3)에서만 발동 — 그 외엔 무동작(정상 흐름 방해 X)."""
+    g = FakeGuide()
+    f = _flow(g)
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"})
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    assert asyncio.run(s._auto_delegate_owner(f, 11)) == ""   # owner 미지정 → 무동작
+    f.current.owner = 12; f.leader_runs = 2                   # 아직 안 헛돎(leader_runs 낮음)
+    assert asyncio.run(s._auto_delegate_owner(f, 11)) == ""   # → 무동작
+
+
 def test_요청자_자기활동은_owner인도로_안침():
     """[구조 신호 정확성] 위임 측정창에서 '요청자(리더) 자신의 활동'(detach 뒤 모델 쪽 폴링 run 등)은
     owner 인도 신호(owner_acted)로 치지 않는다 — 이중 활성 잔재가 허위완료 게이트를 뚫지 못하게.

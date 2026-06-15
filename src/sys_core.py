@@ -1019,6 +1019,32 @@ class Sys:
                     + "\n".join(out))
         return ""
 
+    async def _auto_delegate_owner(self, flow, lead) -> str:
+        """[헛돎 발생 차단 — 구조적 위임(2026-06-15)] 리더가 현재 Task의 designated owner(스냅샷 복원
+        등으로 지정됨)에게 **위임을 0건** 하고 솔로 run만 반복해 독식 차단(leader_runs>3)에 막힌 정체면,
+        SYS가 직접 그 owner에게 '첫 위임'을 발사해 일이 굴러가게 한다. _auto_continue_owner는 '이미 위임된
+        뒤 미완'만 잡으므로 '위임 0건'인 정체는 구조적 빈틈이었다(라이브: 신예준 P-014 — 거부 11·위임 0·
+        헛돎). 헛돎을 '한도 N회 종결'로 사후 차단하지 않고 **발생 자체에서** 막는다(한도는 backstop). 위임이
+        한 번 나가면 work_delegated>0이라 재발사 안 됨(1회). 리더는 완성본을 받아 판정만."""
+        ref = flow.current
+        if (ref is None or not getattr(ref, "owner", 0)
+                or getattr(flow, "leader_runs", 0) <= 3
+                or sum(getattr(t, "work_delegated", 0) for t in getattr(flow, "tasks", [])) != 0
+                or flow.comm.alive != lead or flow.comm.done):
+            return ""
+        self._log("sys_auto_delegate", task=ref.task_id, owner=int(ref.owner),
+                  leader_runs=int(getattr(flow, "leader_runs", 0)))
+        tools = {t.name: t for t in make_guide_tools(flow, lead, "leader")}
+        body = ("[SYS 자동 위임 — 리더가 위임 없이 헛돌아 시스템이 담당 owner에게 직접 맡김] 이 Task의 "
+                "담당입니다. 작업공간에서 이미 된 부분은 두고 남은 부분을 직접 구현하고 run으로 검증해 보고하세요.")
+        try:
+            res = await tools["request"].handler({"to_id": str(ref.owner), "kind": "Work", "body": body})
+            txt = (res.get("content") or [{}])[0].get("text", "")
+        except Exception as e:
+            return f"\n(SYS 자동 위임 처리 오류: {e})"
+        from .guide_tools import _speech_clip as _sc
+        return "\n\n[SYS 자동 위임 — 리더 헛돎 차단, 담당자에게 직접 발사한 결과]\n" + _sc(txt, 4000)
+
     async def _run_until_silent(self, coro_factory, flow) -> str:
         """coro를 실행하되, '도구 활동(flow.last_activity)이 turn_timeout 동안 한 번도 갱신되지 않은'
         경우(=진짜 행)에만 취소하고 TimeoutError를 낸다. 도구가 하나라도 돌면 시계가 갱신되어 무한정
@@ -1452,6 +1478,9 @@ class Sys:
                 # [구조적 이어가기] 미완(턴한도·타임아웃) 위임은 리더 판단에 맡기지 않고 SYS가 직접
                 # 같은 owner에게 이어 보낸다 — 리더는 완성본을 받아 '판정'(검증·마감)만 한다.
                 drained += await self._auto_continue_owner(flow, lead)
+                # [헛돎 발생 차단] 리더가 designated owner에게 위임 0건이고 솔로 독식에만 막혀 헛돌면,
+                # SYS가 직접 owner에게 첫 위임을 발사한다(위 _auto_continue_owner의 '위임 0건' 빈틈 메움).
+                drained += await self._auto_delegate_owner(flow, lead)
                 # [활동 기반 예산 — "작업 중이면 얼마가 걸리든 안 끊는다"(확립 원칙)의 세그먼트 적용]
                 # 직전 세그먼트에 실작업(act_count 증가)이나 위임 완주 도착(drained)이 있었으면 예산을
                 # 소모하지 않는다 — 예산의 목적은 '무진행 루프 차단'이지 '대형 작업 총량 제한'이 아니다.
