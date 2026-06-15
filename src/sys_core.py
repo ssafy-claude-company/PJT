@@ -1153,6 +1153,35 @@ class Sys:
         del fb[:-50]   # 저장 위생: 최근 50개만(품질 게이트 아님 — 용량 바운드)
         self._save_projects()
 
+    def _valid_leader(self, proj):
+        """[프로젝트↔봇 결합 해제, 2026-06-15] 프로젝트 리더가 현재 로스터(연결된 봇)에 없으면 — 봇이
+        해고·예비환원·미연결된 경우 — 가용 봇으로 자동 재배정해 반환한다. 프로젝트가 특정 봇ID에 종속돼
+        깨지지 않게(봇은 자유롭게 넣고 뺄 수 있고, 기존 프로젝트는 유지). 우선순위: 옛 리더와 같은 직군 >
+        게임 기획자 > 아무 직군 보유자. 재배정은 영속(projects.json). 멀티봇 협업 구조엔 영향 없음 — 리더
+        1명만 정하고 팀은 흐름이 현재 로스터에서 다시 꾸린다(복잡한 일=여러 봇 협업은 그대로)."""
+        if not proj:
+            return None
+        lead = proj.get("leader")
+        if lead and lead in self.bot_info:
+            return lead   # 유효(연결돼 있음) — 그대로
+        # 무효(해고/예비환원/미연결) → 재배정해 프로젝트를 살린다
+        old_role = str(self.bot_info.get(lead, "") or "") if lead else ""
+        avail = [b for b in self.bot_info if not str(self.bot_info.get(b, "")).startswith("예비")]
+        pick = next((b for b in avail if old_role and self.bot_info.get(b) == old_role), None)
+        if pick is None:
+            pick = next((b for b in avail if "기획" in str(self.bot_info.get(b, ""))), None)
+        if pick is None:
+            pick = avail[0] if avail else lead
+        if pick and pick != lead:
+            self._log("project_leader_reassigned", project=proj.get("id"), old=lead, new=pick,
+                      reason="리더 봇 부재(해고/미연결) — 프로젝트 유지 위해 재배정")
+            proj["leader"] = pick
+            try:
+                self._save_projects()
+            except Exception:
+                pass
+        return pick or lead
+
     async def handle_user_input(self, channel_id, leader_id, user_text, root_id=None) -> dict:
         proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'(이어지는 작업)
         # [신규×신규 병렬 완화] 신규 요청도 고유 스코프로 동시 진행한다 — 과거 'main' 직렬은 등록
@@ -1163,7 +1192,7 @@ class Sys:
         # 이 흐름을 이끌 봇(전망치): 명시 To(리더 재지정 포함)가 로스터에 있으면 그 봇, 아니면 등록 리더.
         # 게이트에서 미리 계산해야 '리더가 타 흐름 참여 중'을 흐름을 띄우기 전에 거를 수 있다.
         prospective_lead = (leader_id if (leader_id and leader_id in self.bot_info)
-                            else (proj["leader"] if proj else leader_id))
+                            else (self._valid_leader(proj) if proj else leader_id))
         # [병렬] 큐로 보내는 세 조건(버리지 않음 — 흐름 내 규약은 불변): ① 같은 스코프 진행 중(직렬)
         # ② 운영 노브 상한(설정 시에만) ③ 리더가 타 흐름 점유 중(한 직원은 한 번에 한 흐름 — 같은
         # 리더의 프로젝트들은 자연 직렬이 되고, 이것이 임의 흐름 수 상한을 대체하는 구조적 안전이다).
@@ -1209,7 +1238,7 @@ class Sys:
             proj["leader"] = leader_id
             self._save_projects()
             self._sync_topic(channel_id)   # 토픽(서버 영속)에도 반영 — 리클레임 후 시드로 원복되지 않게
-        lead = proj["leader"] if proj else leader_id
+        lead = self._valid_leader(proj) if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
         flow.session_scope = session_scope
         # [RFC-011 M3] 이 프로젝트에 누적된 사용자 취향(반복된 비평·요구)을 흐름에 부착 — set_goal·검증이
@@ -1564,7 +1593,7 @@ class Sys:
             p = self.projects.get(ch)
             k = p["id"] if p else "main"
             lead_q = (item[1] if (item[1] and item[1] in self.bot_info)
-                      else (p["leader"] if p else item[1]))
+                      else (self._valid_leader(p) if p else item[1]))
             if (k not in live
                     and (self.max_flows <= 0 or len(live) < self.max_flows)
                     and not self.engaged.busy_elsewhere(lead_q, k)):

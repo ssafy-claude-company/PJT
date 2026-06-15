@@ -909,6 +909,24 @@ def test_개입_미완Task_영속과_되살리기_담당자가_이어감(tmp_pat
     assert s.projects[901].get("open_task") is None                         # 완료 → 비움
 
 
+def test_프로젝트_리더_봇부재시_자동재배정_프로젝트유지(tmp_path):
+    """[프로젝트↔봇 결합 해제 2026-06-15] 프로젝트 리더 봇이 로스터에서 빠지면(해고·예비환원·미연결)
+    _valid_leader가 가용 봇으로 자동 재배정 → 봇을 자유롭게 빼도 기존 프로젝트가 안 깨진다. 유효한
+    리더는 그대로(불필요 재배정 없음). 게임 기획자(자연 리더 역할) 우선. 멀티봇 협업 구조엔 무영향."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None,
+            bot_info={11: "게임 기획자", 12: "백엔드", 13: "프론트엔드"},
+            workspace="/ws", session_dir=str(tmp_path),
+            projects_path=str(tmp_path / "projects.json"))
+    s.projects[901] = {"id": "P-001", "name": "게임", "channel": 901, "workspace": "/ws", "leader": 99}
+    new_lead = s._valid_leader(s.projects[901])   # 99=해고된 봇(bot_info에 없음) → 재배정
+    assert new_lead == 11                          # 기획자 우선 재배정
+    assert s.projects[901]["leader"] == 11         # 영속(프로젝트 유지)
+    assert any(e["event"] == "project_leader_reassigned" for e in s.flow_log)
+    s.projects[901]["leader"] = 12                 # 유효(연결된) 리더로 교체
+    assert s._valid_leader(s.projects[901]) == 12  # 연결돼 있으면 그대로(불필요 재배정 안 함)
+
+
 def test_open_task_복원은_프로젝트팀을_좁히지_않는다(tmp_path):
     """[라이브 버그 회귀 가드 — 사용자 관측] 미완 Task 복원이 project_team을 그 Task에 낀 일부 멤버로
     '대입'하면, 같은 프로젝트에서 일하던 팀원(그 Task엔 안 낀)이 이후 request에서 '이 프로젝트 팀이

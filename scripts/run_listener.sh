@@ -33,15 +33,17 @@ export ORGANT_MAX_CONTINUE="${ORGANT_MAX_CONTINUE:-12}"
 export CHANNEL_ID="${CHANNEL_ID:-1510828120490643517}"
 # DEPLOY_NAME 주입은 제거됨(2026-06-12) — 배포 슬롯은 프로젝트 신원(P-번호)으로만 정해지며,
 # 미등록 흐름은 슬롯이 없다(공유 슬롯 폴백이 P-002 라이브를 덮어쓸 수 있던 위험 종결).
-# 로스터(직군만 — 담당자는 [Request]의 To로 런타임 결정): 2~7 시드 직군, 8~100·TEST_BOT_1 예비.
+# 로스터(직군만 — 담당자는 [Request]의 To로 런타임 결정): **첫 항목이 리더**(BOT_2). 직군의 진실원은
+# 시드가 아니라 recruit→jobs.json/Discord 역할(영속, main.py:276)이다 — 시드의 직군 하드코딩은 첫 부팅
+# 폴백일 뿐인데, 오히려 봇을 직군에 묶어 '예비 환원'을 막는 군더더기였다(2026-06-15 교정: 양산 봇을 예비로
+# 못 되돌리던 원인). 그래서 시드는 **린**하게 둔다 — 리더만 직군, 나머지는 예비. 컨테이너 리클레임 후에도
+# Discord 역할이 직군을 복원하므로(영속 진실원) 팀은 그대로 선다. 직군 구성은 전적으로 런타임 recruit가 결정.
 # TEST_BOT_1이 워커 계정 시리즈의 1번(username 'testtest')이다 — 별도 ORGANT_BOT_1 변수는 없다.
 # 토큰이 든 슬롯만 활성화된다(빈 슬롯 자동 제외). 환경변수로 ORGANT_ROSTER를 주면 그게 우선.
-# TEST_OBT_2/TEST_OBT_3은 실행환경(env)에 영속 설정된 구세대 토큰 — ORGANT_BOT_*가 든 .env는
-# gitignore라 컨테이너 리클레임 때 사라지므로, 이 폴백 슬롯 덕에 리클레임 직후에도 팀이 선다.
 if [ -z "${ORGANT_ROSTER:-}" ]; then
-  R="ORGANT_BOT_2:백엔드;ORGANT_BOT_3:백엔드;ORGANT_BOT_4:프론트엔드;ORGANT_BOT_5:프론트엔드;ORGANT_BOT_6:디자이너;ORGANT_BOT_7:QA"
+  R="ORGANT_BOT_2:게임 기획자;ORGANT_BOT_3:예비;ORGANT_BOT_4:예비;ORGANT_BOT_5:예비;ORGANT_BOT_6:예비;ORGANT_BOT_7:예비"
   for i in $(seq 8 100); do R="$R;ORGANT_BOT_$i:예비"; done
-  export ORGANT_ROSTER="$R;TEST_OBT_2:프론트엔드;TEST_OBT_3:디자이너;TEST_BOT_1:예비"
+  export ORGANT_ROSTER="$R;TEST_OBT_2:예비;TEST_OBT_3:예비;TEST_BOT_1:예비"
 fi
 # 프로젝트 레지스트리의 시드 복원은 파이썬이 한다(sys_core._load_projects): logs/projects.json이
 # 없으면 커밋 시드(organt/projects.seed.json)를 'seeded' 마커와 함께 적재하고, 부팅 reconcile이
