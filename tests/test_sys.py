@@ -176,7 +176,8 @@ def test_예비인력_새직군_런타임채용_말로만배정차단():
     assert "직군으로 채용" in r["content"][0]["text"] and "게임 기획자" in r["content"][0]["text"]
     hired = next(i for i in (13, 14) if f.bot_info[i] == "게임 기획자")
     assert hired in f.current.team and f.bot_info[hired] == "게임 기획자"
-    assert persisted.get(hired) == "게임 기획자"   # 채용한 직업이 '기억'(로스터 라벨)에 반영됨 → 다음 흐름 유지
+    # [일로 직업 획득 — 영속 이연] 채용 시점엔 *잠정*(런타임 라벨만) — 아직 영속(persist) 안 됨. 첫 실작업 때 영속.
+    assert hired in f.tentative_roles and persisted.get(hired) is None
     # 1봇 1직업: 이미 직군('게임 기획자') 있는 봇에 다른 직군 추가 → 거부(겸직 폐지), 직군 그대로
     r2 = asyncio.run(t["recruit"].handler({"member": str(hired), "role": "레벨 디자이너"}))
     assert "거부" in r2["content"][0]["text"] and "1봇 1직업" in r2["content"][0]["text"]
@@ -185,6 +186,38 @@ def test_예비인력_새직군_런타임채용_말로만배정차단():
     asyncio.run(t["recruit"].handler({"role": "UX 디자이너", "reason": "UX"}))
     r3 = asyncio.run(t["recruit"].handler({"role": "사운드", "reason": "x"}))
     assert "못 찾음" in r3["content"][0]["text"]
+
+
+def test_일로직업획득_채용은잠정_첫실작업에_영속승격():
+    """[일로 직업 획득 — 양산 근본 차단] 예비→직군 채용은 *잠정*(런타임 라벨만)이고, 그 봇이 *첫 실작업*(run/
+    Write)을 한 순간에만 직군이 영속(persist jobs.json + Discord 부여 대기열)된다 — '직업=기억'을 문자 그대로.
+    일 안 하면 영속 안 돼 '0-기억 직군'이 구조적으로 안 생긴다(양산 래칫·이중채용 충돌의 근본 차단)."""
+    from src.permissions import make_pre_tool_use_hook, organt_allowed_tools
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "백엔드", 13: "예비"})
+    f.start_root("root")
+    persisted = {}
+    f.persist_role = lambda mid, role: persisted.__setitem__(mid, role)
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_task"].handler({"members": ""}))
+    # 예비 13을 게임 기획자로 채용 → 잠정(런타임 라벨만, 영속 X)
+    asyncio.run(t["recruit"].handler({"role": "게임 기획자", "reason": "x"}))
+    assert 13 in f.tentative_roles and persisted.get(13) is None    # 잠정·미영속
+    assert f.bot_info[13] == "게임 기획자"                          # 런타임 라벨은 설정(이 흐름에서 활동 가능)
+    # 13이 첫 실작업(run) → 권한 훅이 영속으로 승격
+    class _A:
+        def record(self, *a, **k):
+            pass
+    hook = make_pre_tool_use_hook(_A(), organt_allowed_tools(["mcp__guide__run"]),
+                                  actor=13, role="게임 기획자", flow=f)
+    asyncio.run(hook({"tool_name": "mcp__guide__run", "tool_input": {}}, "tid", None))
+    assert persisted.get(13) == "게임 기획자"           # 첫 실작업으로 jobs.json 영속됨
+    assert 13 not in f.tentative_roles                  # 잠정 해제(획득 완료)
+    assert (13, "게임 기획자") in f.role_earned_queue    # Discord 역할 부여 대기열 등록(SYS가 비동기 드레인)
+    # 영속은 1회만 — 두 번째 작업엔 재영속 안 함
+    persisted.clear(); f.role_earned_queue.clear()
+    asyncio.run(hook({"tool_name": "mcp__guide__run", "tool_input": {}}, "tid", None))
+    assert persisted.get(13) is None and not f.role_earned_queue
 
 
 def test_채용직업_기억_다음흐름_유지():

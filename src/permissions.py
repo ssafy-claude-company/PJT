@@ -202,6 +202,20 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                         and getattr(flow, "writes_by_role", None) is not None:
                     _role = str((getattr(flow, "bot_info", None) or {}).get(actor, "") or "?").split("·")[0].strip() or "?"
                     flow.writes_by_role[_role] = flow.writes_by_role.get(_role, 0) + 1
+                # [일로 직업 획득 — 영속 승격] 잠정 채용된 봇이 *첫 실작업*(Write/Edit/run)을 하면 그 순간 직군을
+                # 영속한다 — jobs.json은 동기로(여기서), Discord 역할은 SYS가 비동기로(role_earned_queue 드레인).
+                # '직업=기억': 일한 봇만 직업이 박힌다. 끝까지 일 안 한 채용은 영속 안 돼 다음 흐름에 예비로 사라짐.
+                if actor is not None and getattr(flow, "tentative_roles", None):
+                    _trole = flow.tentative_roles.pop(actor, None)
+                    if _trole:
+                        _label = (getattr(flow, "bot_info", None) or {}).get(actor) or _trole
+                        if getattr(flow, "persist_role", None):
+                            try:
+                                flow.persist_role(actor, _label)
+                            except Exception:
+                                pass
+                        if getattr(flow, "role_earned_queue", None) is not None:
+                            flow.role_earned_queue.append((actor, _label))
             except Exception:
                 pass
 

@@ -1088,6 +1088,19 @@ class Sys:
         # 에이전트가 죽으면(SDK 메시지리더 크래시·서브프로세스 SIGTERM 등) 같은 세션으로 되살려 재시도.
         # State는 organt_id별 파일에 영속되므로 새 인스턴스가 세션을 이어간다(전체 워크플로우 보호).
         flow.last_activity = time.monotonic()   # 진행 신호(턴 시작) — 무진행 워치독 갱신
+        # [일로 직업 획득 — Discord 역할 비동기 부여] 첫 실작업으로 '획득'된 직군을 Discord 역할로 영속한다
+        # (jobs.json은 권한 훅이 이미 동기로 박음; Discord는 리클레임 복원용 — 비동기라 여기 턴 경계에서 드레인).
+        _q = getattr(flow, "role_earned_queue", None)
+        if _q:
+            _fn = getattr(self.guide, "assign_job_role", None)
+            while _q:
+                _mid, _lbl = _q.pop(0)
+                if _fn and getattr(flow, "guild_id", None):
+                    try:
+                        await _fn(flow.guild_id, _mid, _lbl)
+                        self._log("role_earned", member=int(_mid), role=_lbl)
+                    except Exception:
+                        pass
         last = ""
         for attempt in range(3):
             server = build_guide_server(flow, organt_id, role)

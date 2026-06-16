@@ -362,6 +362,11 @@ class Flow:
         self.writes_by_role = {}       # [메커니즘② 저작 다양성] 직군별 파일 저작(Write/Edit, run 제외) 누계. 완료 시
                                        #   '한 직군이 산출물을 독점'(P-017: 백엔드 혼자 20중 19, 단일 app.js)을 출구
                                        #   게이트가 잡는다 — '분리 모듈은 분리 전문가가 있을 때만 존재'(라이브 규명).
+        self.tentative_roles = {}      # [일로 직업 획득 — 영속 이연] 예비→직군 채용은 *잠정*(런타임 bot_info만). 영속
+                                       #   (jobs.json+Discord)은 그 봇이 *첫 실작업*을 한 순간에만 — '직업=기억'을 문자
+                                       #   그대로. 일 안 하면 영속 안 돼 다음 흐름에 예비로 사라짐 → '0-기억 recruit
+                                       #   직군'이 구조적으로 불가(양산 래칫의 근본 차단). mid→직군명.
+        self.role_earned_queue = []    # 첫 실작업으로 '획득'된 직군의 Discord 역할 부여 대기열(비동기) — SYS가 턴에서 드레인.
         self.consec_fail = 0           # 연속 '응답 실패(무응답/타임아웃)' 횟수 — 시스템 일시불안정 판별(충원 루프 차단)
         self.inflight_tasks = set()    # 진행 중 위임의 '완주 태스크'들 — CLI가 도구 호출을 포기해도 위임은
                                        #   계속 완주하며(중첩 가능), SYS가 이어가기 전에 이들의 완주를 기다린다
@@ -977,15 +982,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if role_name:
             cur = flow._info(mid)
             if _is_spare(flow, mid) or not cur:
-                flow.bot_info[mid] = role_name                    # 예비/무직 → 그 직군으로 (1봇 1직업)
-                hired = f" — '{role_name}' 직군으로 채용"
-                # '기억'(직업 고정): 한 번 직군을 받은 예비는 다음 흐름에도 그 직업을 유지한다(매 흐름 '예비'로
-                # 원복되지 않음) — 직업군을 누적·재사용하기 위함. best-effort(없으면 이번 흐름에만 적용).
-                if getattr(flow, "persist_role", None):
-                    try:
-                        flow.persist_role(mid, role_name)
-                    except Exception:
-                        pass
+                flow.bot_info[mid] = role_name                    # 예비/무직 → 그 직군으로 (런타임만, 이 흐름)
+                hired = f" — '{role_name}' 직군으로 채용(잠정 — 첫 실작업 시 영속)"
+                # [일로 직업 획득 — 영속 이연] 예비를 직군으로 뽑아도 *지금은 영속하지 않는다*(jobs.json·Discord
+                # 보류). 그 봇이 *첫 실작업(Write/Edit/run)*을 하는 순간에만 영속한다(권한 훅이 승격) — '직업=기억'을
+                # 문자 그대로. 끝까지 일 안 하면 영속 안 돼 다음 흐름에 예비로 사라진다(0-기억 직군 양산의 근본 차단).
+                # 충돌(같은 봇 이중채용)도 무해 — 둘 다 일 안 하면 둘 다 예비로 남는다.
+                flow.tentative_roles[mid] = role_name
             elif not any(_norm_job(j) == _norm_job(role_name) for j in _jobs_of(cur)):
                 # 이미 다른 직군 보유 — 원칙은 **1봇 1직업**(새 직군은 예비를 뽑는 게 정도). 겸직은 사용자
                 # 정책의 예외 둘 중 하나일 때만: ① 풀에 예비가 한 명도 없음(어쩔 수 없음) ② 새 직군이
@@ -1012,9 +1015,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         pass
             # 이미 그 직군을 보유하고 있으면 라벨 변경 없이 그대로 합류.
             flow.current.status.group = _group_of(flow, flow.current.team)
-            # 이름은 그대로 두고 '직군 라벨 전체'를 Discord 역할(권한)로 동기화 — best-effort.
+            # 이름은 그대로 두고 '직군 라벨 전체'를 Discord 역할(권한)로 동기화 — best-effort. 단 *잠정 채용*
+            # (예비→직군, 첫 실작업 전)은 보류한다 — 일로 획득하는 순간 SYS가 부여(영속 이연, 양산 차단).
             fn = getattr(g, "assign_job_role", None)
-            if fn and getattr(flow, "guild_id", None):
+            if fn and getattr(flow, "guild_id", None) and mid not in flow.tentative_roles:
                 try:
                     await fn(flow.guild_id, mid, flow.bot_info.get(mid) or role_name)
                 except Exception:
