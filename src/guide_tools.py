@@ -359,6 +359,9 @@ class Flow:
         self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로
                                        #   일했나'를 wake 전후 스냅샷 차이로 판정(허위완료/독점 차단)
         self.act_by = {}               # 행위자별 작업 누계(actor→count) — 요청자 자신의 활동을 빼고 재기 위함
+        self.writes_by_role = {}       # [메커니즘② 저작 다양성] 직군별 파일 저작(Write/Edit, run 제외) 누계. 완료 시
+                                       #   '한 직군이 산출물을 독점'(P-017: 백엔드 혼자 20중 19, 단일 app.js)을 출구
+                                       #   게이트가 잡는다 — '분리 모듈은 분리 전문가가 있을 때만 존재'(라이브 규명).
         self.consec_fail = 0           # 연속 '응답 실패(무응답/타임아웃)' 횟수 — 시스템 일시불안정 판별(충원 루프 차단)
         self.inflight_tasks = set()    # 진행 중 위임의 '완주 태스크'들 — CLI가 도구 호출을 포기해도 위임은
                                        #   계속 완주하며(중첩 가능), SYS가 이어가기 전에 이들의 완주를 기다린다
@@ -1500,6 +1503,40 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         f"'이 직군들을 뺀 채 마감'이 Task 기록에 남습니다). 특히 회의에서 '중요하다'고 한 "
                         f"부분이 실제 산출물에 들어갔는지 확인하세요 — 발언만으로는 작품이 바뀌지 않습니다.{commit_note}")
                 flow.current.contrib_checked = True   # 기여(idle 해소)·명시 확보 → 이 Task에선 다시 묻지 않음
+            # [저작 다양성 게이트 — 메커니즘② '도메인별 전문가 저작' 강제(2026-06-16, 데이터·코드·이론 3종 수렴
+            # 심층조사 기반)] contrib는 '부른 직군이 idle인가'를 보지만, P-017은 *애초에 도메인 전문가를 안 불러*
+            # 백엔드 1명이 20개 중 19개를 단일 app.js에 몰아씀(AI 학습=하드코딩 공식 700행으로 brain.js 학습, 가짜)
+            # → idle 멤버가 없어 contrib도 안 물었다. 경험칙: "분리된 모듈은 분리된 전문가가 있을 때만 존재"(깊은
+            # P-002=7직군이 각자 도메인 모듈, 얕은 P-017=1직군 모놀리스). 그래서 *저작이 한 직군에 집중*되면
+            # (도메인 전문가 부재 신호) 1회 보류해 외부 예시 대조를 강제한다. 도메인 중립(특정 직군 하드코딩 0 —
+            # '집중도'만), 출구 게이트(입구 required_roles는 56·57에서 기각), 증거/명시 통과(percept·acceptance와
+            # 동 원리 — 단일도메인이면 마커로 가볍게 빠짐). 숫자는 '품질 판정'이 아니라 '의식적 대조의 트리거'.
+            if has_product and not getattr(flow, "authorship_checked", False):
+                _wr = {k: v for k, v in (getattr(flow, "writes_by_role", None) or {}).items()
+                       if k and k != "?" and not str(k).startswith("예비")}
+                _total = sum(_wr.values())
+                _md = bool(re.search(r"\[\s*단일\s*도메인\s*\]", args.get("result") or ""))
+                if _total >= 6 and _wr and not _md:
+                    _top_role, _top_n = max(_wr.items(), key=lambda kv: kv[1])
+                    _share = _top_n / _total
+                    if _share >= 0.8 and len(_wr) <= 2:   # 1~2직군이 ≥80% 저작 = 모놀리스 패턴(분산되면 미발동)
+                        if flow.log:
+                            flow.log("authorship_concentration", task=flow.current.task_id,
+                                     top=_top_role, share=round(_share, 2), roles=len(_wr))
+                        _dist = ", ".join(f"{k} {v}" for k, v in sorted(_wr.items(), key=lambda kv: -kv[1]))
+                        return _ok(
+                            f"마감 보류(저작 다양성 — 한 직군이 산출물을 독점, 도메인 전문가 부재 의심): 이 작업공간의 "
+                            f"파일 저작이 **'{_top_role}'에 {int(_share*100)}% 집중**됐습니다(직군별 저작: {_dist}). 같은 "
+                            f"종류의 **상용판**은 보통 *도메인마다 그 전문가가 자기 모듈을 저작*합니다(라이브 규명: 깊은 "
+                            f"게임은 모션·VFX·사운드가 각자 파일을 저작했고, 얕은 건 한 명이 단일 app.js에 다 몰아써 "
+                            f"'감 없음'·'AI인 척'이 됐습니다). 같은 종류의 **훌륭한 예를 WebSearch로 실제 찾아** '어떤 전문 "
+                            f"직군들이 각자 무엇을 저작하나'를 본 뒤, 둘 중 하나로 재호출하세요:\n"
+                            f"① 이 작품이 **정말 단일 도메인**이면(그 한 직군이 적정하면) result 첫 줄에 "
+                            f"**'[단일도메인] <왜 한 직군이 맞는가>'**를 명시(의식적 판단 — 그냥 재호출론 통과 안 됨).\n"
+                            f"② 아니면 **빠진 도메인의 전문가를 recruit**해 그 도메인을 *그 직군이 직접 저작*하게 한 뒤 "
+                            f"마감하세요 — 한 명이 대신 쓴 코드는 그 도메인의 깊이가 안 납니다. 무엇이 별도 도메인인지는 "
+                            f"작품을 아는 당신이 판단합니다(시스템은 직군을 지정하지 않음 — 하드코딩 없음).")
+                flow.authorship_checked = True
             done_ref = flow.current
             # 허위보고 차단(도메인 무관): 완료의 '진짜'는 에이전트 산문이 아니라 시스템이 캡처한 실행 영수증.
             # 코드는 합격/불합격을 판단하지 않고(하드코딩·QA역할 가정 X), 보고 옆에 실제 출력을 떼어낼 수 없게 묶는다.

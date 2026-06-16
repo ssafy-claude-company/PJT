@@ -196,6 +196,12 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                 # run 등)을 빼고 재기 위함(단일활성이 흔들린 순간에도 인도/이어가기 신호가 오염되지 않게).
                 if actor is not None and getattr(flow, "act_by", None) is not None:
                     flow.act_by[actor] = flow.act_by.get(actor, 0) + 1
+                # [메커니즘② 저작 다양성] 파일 저작(Write/Edit, run 제외)을 '직군별'로 누계 — 완료 게이트가
+                # '한 직군이 다 써버린 모놀리스'(도메인 전문가 부재 신호)를 잡는다. run은 검증/배포라 제외.
+                if tool in ("Write", "Edit") and actor is not None \
+                        and getattr(flow, "writes_by_role", None) is not None:
+                    _role = str((getattr(flow, "bot_info", None) or {}).get(actor, "") or "?").split("·")[0].strip() or "?"
+                    flow.writes_by_role[_role] = flow.writes_by_role.get(_role, 0) + 1
             except Exception:
                 pass
 
