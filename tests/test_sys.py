@@ -2086,6 +2086,26 @@ def test_교차검증_같은직군은_에코_다른도메인_독립검증_요구
     assert f.current is None                                                   # 독립 검증 후 마감
 
 
+def test_complete_task_최대성_기준이_교차검증에_주입_PHASE3():
+    """[최대화 — PHASE 3 lynchpin] flow.standard(최대 표준)가 설정되면 마감 교차검증 메시지에 '최대성 기준
+    대조'가 주입된다 — 검증자(다른 도메인)가 *돌아가나*가 아니라 *실제 최대만큼인가*를 워크스페이스 실측으로
+    대조. P-018식 얕은 마감(표준=AI·웹인데 산출=서버만)을 마감 단계에서 잡는 지점."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[12] = "백엔드"; f.bot_info[13] = "프론트엔드"     # owner=12, off-domain 검증자=13
+    f.project_team += [13]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.update({12, 13})
+    asyncio.run(t["set_goal"].handler({"goal": "공공데이터 AI 웹사이트",
+                                       "standard": "최대 표준: 학습모델·인터랙티브 프론트·시각화"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5; f.act_by[13] = 1
+    f.current.cross_checks = 0                                  # 검증 0 → 게이트 보류
+    txt = asyncio.run(t["complete_task"].handler({"result": "끝"}))["content"][0]["text"]
+    assert "완료 거부" in txt and "최대성 기준" in txt and "학습모델" in txt   # 표준이 검증에 주입(below-max 대조)
+
+
 def test_교차검증_의무_제3멤버가_있으면_단독마감_불가():
     """[교차 검증 의무 — Rule/Task.md 6, 범용 이치의 하드 제한(사용자 확정)] owner 아닌 멤버의
     검증 참여 없이는 완수 선언 불가(제3멤버가 있는 한 우회 없음 — 재호출도 거부). 라이브 P-009:
