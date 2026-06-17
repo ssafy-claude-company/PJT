@@ -1222,42 +1222,55 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # _fork_collect의 '부분 조인'(일부 점유 멤버 때문에 수집 전체가 막히지 않음)과 같은 정신. 면제는
             # '포기'가 아니라 '실제 부재 인정'이며, 면제 멤버의 도메인 공백은 리더에게 정보로 돌려준다(필요하면
             # 같은 직군 recruit — 판단은 리더, 공급 원칙).
+            # [합의 = 직군 커버리지 (동질 모델 원리) + 유화적 면제 — 무한 루프 차단]
+            # 같은 Claude·같은 직군 봇 둘은 0 다양성(에코)이라 합의엔 *직군당 1명*이면 그 도메인 관점이 곧 전부다.
+            # 라이브: meet 57%가 같은 직군 중복(백엔드×3) → 에코·합의 편향(한 시각 N배 가중)·과대소집. 그래서
+            # '전원 참여'가 아니라 '도메인 커버리지'를 요구한다 — 같은 직군 잉여는 합의 면제(그들은 *병렬 실행*용).
+            # 타 흐름 점유로 도달 불가한 직군도 면제(교착 차단). 둘 다 글자 그대로의 '전원'이 만든 에코·교착을
+            # 푼다. 직군 못 읽는 라벨(예비 등)은 각자 고유 도메인으로 보아 보수적으로 참여를 요구(은근 면제 방지).
             members = [x for x in flow.current.team if x != me_id]
-            missing = [m for m in members if m not in flow.current.participated]
             excused_note = ""
-            if missing:
+            if members:
                 eng, scope = flow.comm.engagement, flow.comm.scope
                 def _busy_now(m):
                     return bool(eng is not None and scope is not None and eng.busy_elsewhere(m, scope))
-                blocking = [m for m in missing if not _busy_now(m)]   # 지금 가용 — 반드시 협의(최대한 다)
-                excused  = [m for m in missing if _busy_now(m)]        # 타 흐름 점유 — 도달 불가, 면제
-                if blocking:
-                    tail = (f"\n(지금 타 흐름에 점유돼 도달 불가한 멤버는 이번 협의에서 면제됩니다: "
-                            f"{flow._names(excused)} — 풀려나면 받고, 그 도메인이 급하면 같은 직군을 recruit)"
-                            if excused else "")
+                def _doms(m):
+                    return ({_norm_job(j) for j in _jobs_of(flow._info(m) or "")} - {""}) or {f"·{m}"}
+                dom_members = {}                       # 직군 → 그 직군 팀 멤버들
+                for m in members:
+                    for d in _doms(m):
+                        dom_members.setdefault(d, []).append(m)
+                uncov_reach = {}                       # 미커버 직군 → 가용 멤버(합의 필요·가능)
+                uncov_busy = []                        # 미커버 직군 — 멤버 전원 타 흐름 점유(도달 불가)
+                redundant = []                         # 같은 직군 잉여(이미 커버) — 에코, 면제
+                for d, ms in dom_members.items():
+                    if any(x in flow.current.participated for x in ms):
+                        redundant += [x for x in ms if x not in flow.current.participated]
+                        continue
+                    reach = [x for x in ms if not _busy_now(x)]
+                    if reach:
+                        uncov_reach[d] = reach
+                    else:
+                        uncov_busy.append(d)
+                if uncov_reach:
+                    one_each = [r[0] for r in uncov_reach.values()]   # 직군당 1명 예시
+                    tail = (f"\n(타 흐름 점유로 도달 불가한 도메인은 면제: {', '.join(sorted(uncov_busy))})"
+                            if uncov_busy else "")
                     return _ok(f"확정 거부: 이 Task의 Purpose·Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
-                               f"아직 의견을 안 받았고 **지금 가용한** 멤버: {flow._names(blocking)} — 그들과 "
-                               f"**meet(회의)로 '풀 문제·각 도메인의 목표·성공기준'을 함께 정한 뒤** set_goal로 "
-                               f"기록하세요(meet 발언이 협의로 인정됨 — 1:1 request(Info)도 인정되나 회의가 앵커링↓·"
-                               f"합의 기록↑). 파일·엔드포인트 같은 구현 스펙 말고 '측정가능한 결과'로.{tail}")
-                if excused:
-                    # 남은 미참여가 전부 '타 흐름 점유'(도달 불가) → 유화적으로 진행(교착 차단). 면제 멤버의
-                    # 도메인이 '참여한 동료'로 커버되는지는 리더 판단용 정보로 돌려준다(강제 아님 — 공급 원칙).
-                    pj = set()
-                    for p in flow.current.participated:
-                        pj |= {_norm_job(j) for j in _jobs_of(flow._info(p) or "")} - {""}
-                    uncovered = [m for m in excused
-                                 if not (({_norm_job(j) for j in _jobs_of(flow._info(m) or "")} - {""}) & pj)]
+                               f"아직 합의에 참여 안 한 **도메인**: {', '.join(sorted(uncov_reach))} — 각 도메인 "
+                               f"**1명만** meet(회의)로 '풀 문제·목표·성공기준'을 정하면 됩니다(같은 직군을 더 부르는 건 "
+                               f"*에코*라 불필요 — 잉여는 병렬 실행용). 예: {flow._names(one_each)}. 파일·엔드포인트 "
+                               f"같은 구현 스펙 말고 '측정가능한 결과'로.{tail}")
+                if redundant or uncov_busy:
                     if flow.log:
-                        flow.log("set_goal_conciliated", task=flow.current.task_id,
-                                 excused=[int(m) for m in excused],
-                                 uncovered=[int(m) for m in uncovered])
-                    excused_note = (
-                        f"\n[유화적 진행 — 타 흐름 점유 멤버 협의 면제] {flow._names(excused)}는 지금 다른 흐름에 "
-                        f"점유돼 도달 불가라, 무한 대기 대신 진행했습니다(가용 멤버는 전원 협의 완료)."
-                        + (f" ⚠️ 이 중 **{flow._names(uncovered)}** 도메인은 참여한 동료가 없어 입력이 비었습니다 — "
-                           f"그 도메인이 중요하면 같은 직군을 recruit하거나, 그들이 풀려나면 받아 보완하세요."
-                           if uncovered else " (면제 멤버 도메인은 참여한 동료가 커버 — 공백 없음)"))
+                        flow.log("set_goal_consensus_coverage", task=flow.current.task_id,
+                                 redundant=[int(x) for x in redundant], uncovered_busy=sorted(uncov_busy))
+                    bits = []
+                    if redundant:
+                        bits.append(f"같은 직군 잉여 {flow._names(redundant)}는 합의 면제(에코 방지) — 병렬 실행에 쓰세요")
+                    if uncov_busy:
+                        bits.append(f"도메인 {', '.join(sorted(uncov_busy))}은 담당이 타 흐름 점유로 도달 불가 → 면제(풀리면 보완)")
+                    excused_note = "\n[합의 커버리지] " + "; ".join(bits) + "."
             # [P7 — 범주적 완성 점검: recognition→action 강제, RFC-010] 확정 전 1회, 장르 예시 대비 '통째로
             # 없는 범주'를 goal에 '구축 대상'으로 반영(없으면 recruit)하거나 불필요 사유를 명시하게 강제한다 —
             # 라이브: P6 넛지로 사운드를 grep '점검'만 하고 구현 0(인지≠행동). 점검을 '구축'으로 한 칸 올림.

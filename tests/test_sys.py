@@ -539,9 +539,37 @@ def test_set_goal_유화적_타흐름점유멤버는_협의면제_교착차단()
     eng.engage(13, "P-OTHER")                        # 13(프론트)은 내내 다른 흐름 점유 — 도달 불가
     f.current.participated.add(12)                    # 가용한 12는 협의 완료, 13만 미참여(점유)
     r = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
-    assert f.current.status.goal == "동작"             # 교착 대신 유화적 진행 — Goal 확정
-    assert "유화적" in r["content"][0]["text"]          # 면제 사실을 리더에게 정보로 안내
-    assert any(ev == "set_goal_conciliated" and kw.get("excused") == [13] for ev, kw in logged)
+    assert f.current.status.goal == "동작"             # 도달 불가 도메인 면제 → 진행(교착 차단)
+    assert "면제" in r["content"][0]["text"]            # 면제 안내
+    assert any(ev == "set_goal_consensus_coverage" and "프론트엔드" in kw.get("uncovered_busy", []) for ev, kw in logged)
+
+
+def test_set_goal_같은직군_잉여는_합의면제_에코방지():
+    """[동질 모델 원리] 같은 Claude·같은 직군 봇 둘은 0 다양성(에코)이라 합의엔 직군당 1명이면 충분. 같은
+    직군 잉여(그 도메인에 이미 참여자 있음)는 합의 면제(에코·과대소집·합의편향 방지) — 잉여는 병렬 실행용.
+    라이브: meet 57%가 같은 직군 중복(백엔드×3). 단, *다른* 도메인 누락은 에코가 아니라 진짜 공백 → 거부."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "백엔드", 14: "프론트엔드"})
+    f.start_root("root")
+    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True; f.decomp_checked = True
+    logged = []; f.log = lambda ev, **kw: logged.append((ev, kw))
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13,14"}))
+    asyncio.run(t["create_task"].handler({"members": "12,13,14"}))
+    f.current.participated.update({12, 14})                       # 백엔드 1명(12)+프론트(14); 백엔드 13은 잉여
+    r = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
+    assert f.current.status.goal == "동작"                         # 직군 커버(백엔드·프론트 각 1명) → 통과, 13 불필요
+    assert any(ev == "set_goal_consensus_coverage" and 13 in kw.get("redundant", []) for ev, kw in logged)
+    # 대조: 프론트(14) 미참여면 프론트 도메인 *미커버* → 거부(에코 아님, 진짜 도메인 누락)
+    g2 = FakeGuide()
+    f2 = Flow(g2, channel_id=501, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "백엔드", 14: "프론트엔드"})
+    f2.start_root("r2"); f2.gap_checked = True; f2.percept_checked = True; f2.acceptance_checked = True; f2.decomp_checked = True
+    t2 = {x.name: x for x in make_guide_tools(f2, 11, "leader")}
+    asyncio.run(t2["create_project"].handler({"name": "p2", "team": "12,13,14"}))
+    asyncio.run(t2["create_task"].handler({"members": "12,13,14"}))
+    f2.current.participated.update({12, 13})                      # 백엔드 2명만 — 프론트 도메인 누락
+    r2 = asyncio.run(t2["set_goal"].handler({"goal": "동작"}))
+    assert "거부" in r2["content"][0]["text"] and "프론트엔드" in r2["content"][0]["text"]   # 프론트 미커버 → 거부
 
 
 def test_set_goal_가용한_미참여멤버는_여전히_협의요구():
