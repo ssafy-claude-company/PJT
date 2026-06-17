@@ -3679,13 +3679,17 @@ def test_협의명단은_스냅샷에_영속되고_복원된다(tmp_path):
     t = _tools(f, 11, "leader")
     asyncio.run(t["create_task"].handler({"members": "12"}))
     f.current.participated.add(12)
+    f.current.standard = "최대 표준: IQAir급 게이지·24h 예측 차트·건강 권고"   # [최대화] 바
+    f.current.interfaces = "백→프 JSON {city,aqi,grade}"                     # [협업] 계약
     s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "B"}, session_dir=str(tmp_path))
     snap = s._task_snapshot(f, f.current)
     assert snap["participated"] == [12]                      # 영속
+    assert snap["standard"] and snap["interfaces"]           # [최대화/협업] 스냅샷에 영속(동면 너머 바·계약 유지 — 라이브 버그 수정)
     f2 = _flow(FakeGuide())
     proj = {"id": "P-X", "open_task": snap}
     asyncio.run(s._restore_open_task(f2, proj))
     assert 12 in f2.current.participated                     # 복원 → 재개 후 set_goal 재협의 불요
+    assert "IQAir" in f2.current.standard and "JSON" in f2.current.interfaces   # 복원 → 동면 재개에도 최대 바·계약 유지
 
 
 def test_활동기반_이어가기예산_진행세그는_소모없음():

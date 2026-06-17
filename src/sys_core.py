@@ -357,6 +357,8 @@ class Sys:
             "result_so_far": (ref.status.result or "")[:500],
             "collab_notes": getattr(ref, "collab_notes", ""),   # 회의·표결 합의 — 재개 위임에도 동봉
             "acceptance": getattr(ref, "acceptance", ""),        # 수용 계약 — 동면·재개 너머 영속(없으면 마감 게이트가 매번 재정의 요구)
+            "standard": getattr(ref, "standard", ""),            # [최대화] 최대 품질 표준(도메인 누적) — 동면 너머 영속(없으면 바가 증발, 라이브 확인)
+            "interfaces": getattr(ref, "interfaces", ""),        # [협업] 도메인 간 인터페이스 계약 — 재개 마감 L2 검증이 같은 계약으로
             # [협의 명단 영속] 이게 없으면 재개마다 set_goal 게이트가 전원 재협의를 강제 —
             # 라이브: 동면 5회 흐름에서 리더가 같은 협의 질문을 5회 반복(시간·토큰 낭비의 주범).
             # 협의는 '사실'이라 영속이 옳다(검증 누계와 다름 — 그건 의도적으로 0에서 재시작).
@@ -465,6 +467,10 @@ class Sys:
             ref.collab_notes = snap["collab_notes"]   # 합의 기록 복원 — 재개 후 위임에도 동봉(스펙 증발 방지)
         if snap.get("acceptance"):
             ref.acceptance = snap["acceptance"]        # 수용 계약 복원 — 재개 마감이 같은 기준으로 검증(증발 방지)
+        if snap.get("standard"):
+            ref.standard = snap["standard"]            # [최대화] 최대 표준 복원 — 동면 재개에도 바가 유지(증발 방지)
+        if snap.get("interfaces"):
+            ref.interfaces = snap["interfaces"]        # [협업] 인터페이스 계약 복원 — 재개 L2 검증 일관
         ref.participated = {int(x) for x in snap.get("participated", [])}   # 협의 명단 복원(재협의 루프 차단)
         flow.tasks.append(ref)
         flow.current = ref
