@@ -306,6 +306,7 @@ class TaskRef:
     work_delegated: int = 0                          # 리더가 이 Task에서 보낸 Work 위임 수(0이면 '자문만 받고 독식' 의심)
     collab_notes: str = ""                           # 회의·표결 합의 기록 — Work 위임에 자동 동봉(스펙이 회의에서 증발하던 결함 방지)
     cross_checks: int = 0                            # owner 인도 후 '다른 멤버'의 검증 참여 수(0이면 complete 1회 보류 — 품질 판정 독점 방지)
+    cross_check_offdomain: int = 0                   # 그중 owner와 '다른 도메인' 검증 수(독립 검증 — 같은 직군 검증은 같은 맹점 에코)
     complete_retry: bool = False                     # (구) 1회 보류 시절 잔재 — 교차 검증 의무 하드화(Rule/Task 6)로 미사용, 호환 위해 유지
     leader_writes: int = 0                           # 리더가 이 Task에서 직접 쓴 파일 수(위임 없이 독식하면 차단)
     contrib_checked: bool = False                    # 팀 기여 의무 게이트(RFC-009) 1회 통과 여부 — 부른 직군이 실작업·검증 0(회의 발언만)이면 1회 보류 후 재호출 통과
@@ -834,6 +835,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                              or (not flow.current.owner and getattr(flow.current, "leader_writes", 0) > 0))
             if flow.current and product_ready and to != flow.current.owner:
                 flow.current.cross_checks += 1
+                # [독립 검증 = 다른 도메인 — 동질 모델] 같은 Claude·같은 직군 검증자는 에코(같은 관점→같은
+                # 맹점). owner와 도메인이 다른 검증자만 '독립'으로 따로 센다(owner 미상이면 리더 기준).
+                _own = flow.current.owner or flow.leader
+                _od = {_norm_job(j) for j in _jobs_of(flow._info(_own) or "")} - {""}
+                _vd = {_norm_job(j) for j in _jobs_of(flow._info(to) or "")} - {""}
+                if _od and _vd and not (_od & _vd):
+                    flow.current.cross_check_offdomain += 1
             flow.req_results[dupkey] = result   # 같은 턴 병렬 중복요청이 재사용할 응답 캐시(동료 재호출 방지)
             return _ok(f"[{to} 응답] {_speech_clip(result, 4000)}{receipt}")
 
@@ -1267,7 +1275,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                                  redundant=[int(x) for x in redundant], uncovered_busy=sorted(uncov_busy))
                     bits = []
                     if redundant:
-                        bits.append(f"같은 직군 잉여 {flow._names(redundant)}는 합의 면제(에코 방지) — 병렬 실행에 쓰세요")
+                        bits.append(f"같은 직군 잉여 {flow._names(redundant)}는 합의 면제(에코 방지) — 이들은 "
+                                    f"**병렬 실행(parallel_work)**에 쓰세요(독립 작업을 갈라 처리량↑ — 같은 직군의 "
+                                    f"유일한 정당한 가치는 합의 인원수가 아니라 병렬 처리량)")
                     if uncov_busy:
                         bits.append(f"도메인 {', '.join(sorted(uncov_busy))}은 담당이 타 흐름 점유로 도달 불가 → 면제(풀리면 보완)")
                     excused_note = "\n[합의 커버리지] " + "; ".join(bits) + "."
@@ -1489,7 +1499,22 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # [발견1 교정] 검증 대상: owner 위임 산출물 OR 리더 직접구현(leader_writes>0). 리더 독식도
             # 제3자 검증을 면제하지 않는다(보편 이치). 산출물도 없으면(아무것도 안 만든 Task) 게이트 무의미.
             has_product = bool(flow.current.owner) or getattr(flow.current, "leader_writes", 0) > 0
-            if has_product and flow.current.cross_checks == 0 and third:
+            # [독립 검증 = 다른 도메인 (동질 모델 원리)] 검증은 '다른 관점'이라야 결함을 본다 — 같은 Claude·
+            # 같은 직군 검증자는 같은 맹점(에코)이라 독립이 아니다. owner와 도메인 다른, 지금 도달 가능한
+            # 검증자가 있으면 그 독립 검증을 요구하고, 그런 동료가 없거나 전원 타 흐름 점유면 같은 직군 검증으로
+            # 폴백(단일도메인 팀·교착 방지). cross-check 자체(≥1 타멤버)는 종전대로 하드 의무.
+            _engx, _scopex = flow.comm.engagement, flow.comm.scope
+            _ownx = flow.current.owner or flow.leader
+            _odx = {_norm_job(j) for j in _jobs_of(flow._info(_ownx) or "")} - {""}
+            def _offdom_reach(m):
+                md = {_norm_job(j) for j in _jobs_of(flow._info(m) or "")} - {""}
+                if not (_odx and md and not (md & _odx)):
+                    return False
+                return not (_engx is not None and _scopex is not None and _engx.busy_elsewhere(m, _scopex))
+            third_offdom = [m for m in third if _offdom_reach(m)]
+            cc_ok = (flow.current.cross_check_offdomain > 0
+                     or (flow.current.cross_checks > 0 and not third_offdom))
+            if has_product and not cc_ok and third:
                 idle = [m for m in third if flow.act_by.get(m, 0) == 0]
                 idle_note = (f"\n[정보] 이 Task 팀에서 **실작업·검증 참여 0**인 멤버: {flow._names(idle)} — "
                              f"goal에 이들의 전문 영역이 있다면 그 부분의 검증·보완을 이들에게 맡기는 것이 "
@@ -1528,15 +1553,20 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 acc_v = ("\n[수용 계약 — 이 항목들이 실제로 충족됐는지 검증] 팀이 합의한 '좋음' 기준입니다. 검증자에게 "
                          "**각 항목이 산출물에 실제로 들어가 작동하는지 써보고 확인**하라고 전하세요(존재가 아니라 "
                          "'이 기준대로 됐나'):\n" + _speech_clip(acc_x, 1200)) if acc_x else ""
+                _ver_state = ("**다른 멤버의 검증 참여가 0**입니다" if flow.current.cross_checks == 0
+                              else "검증이 **같은 직군(에코)뿐**이라 독립 검증이 없습니다(같은 관점=같은 맹점)")
+                indep_note = (f"\n[독립 검증 — 다른 도메인 필수] owner와 **다른 도메인** 동료가 검증해야 독립적입니다"
+                              f"(같은 직군 검증은 에코라 같은 결함을 못 봄). 지금 가능한 독립 검증자: "
+                              f"{flow._names(third_offdom)}." if third_offdom else "")
                 return _ok(f"완료 거부(교차 검증 의무 — Rule/Task + RFC-010 P1·P2 / RFC-011 M2): 산출물 인도 후 "
-                           f"**다른 멤버의 검증 참여가 0**입니다. **만든 사람이 아닌** 다른 멤버에게 request(Work)로 "
+                           f"{_ver_state}. **만든 사람이 아닌** 다른 멤버에게 request(Work)로 "
                            f"'**코드만 읽지 말고 산출물을 처음부터 끝까지 실제로 실행·사용·플레이해 본 뒤**(라이브 "
                            f"근거: 실제로 써본 검증자가 읽기만 한 쪽보다 결함을 훨씬 많이 잡음 — TITAN 82% vs 18%) "
                            f"{per_item} 보고하라'고 맡긴 뒤 마감하세요. **'요소 존재·JS 에러 0·서버 기동됨' 같은 것은 "
                            f"'작동'이지 '좋음'의 증거가 아닙니다 — 검증으로 인정하지 마세요**(라이브: 그렇게 통과시킨 게 "
                            f"'상용 수준 아님'으로 반려됨). 검증자의 결함·아쉬움 보고가 Redo(창의적 개선)의 근거입니다. "
                            f"**자기 산출물 자기검증은 무효**(편향 — Pride&Prejudice): 반드시 만든 사람이 아닌, 실제로 "
-                           f"써본 다른 멤버. 검증 응답이 오면 게이트는 자동으로 열립니다.{rubric}{acc_v}{taste_v}{idle_note}")
+                           f"써본 다른 멤버. 검증 응답이 오면 게이트는 자동으로 열립니다.{rubric}{acc_v}{taste_v}{idle_note}{indep_note}")
             # [팀 기여 의무 게이트 — RFC-009] 교차 검증(cross_checks)과 **독립**. 검증이 됐어도(검증은
             # 기능 위주라 폴리시 부재를 못 잡음 — RFC-009 §3), 팀에 부른 직군이 이 흐름에서 회의 발언만 하고
             # 실작업·검증 0(act_by==0: Write/Edit/run 한 번도 없음)이면 그 도메인(타격감·그래픽·사운드·디자인·
@@ -1686,6 +1716,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                             f"동료들의 표는 보이지 않습니다(앵커링 방지). 당신의 전문가 관점에서 "
                             f"하나를 고르고 근거를 2줄 이내로. 반드시 형식: [표] 선택지명\n근거")
                 tally, reasons = {o: 0 for o in opts}, []
+                dom_picks = {o: set() for o in opts}   # 옵션 → 그 옵션을 고른 '도메인'들(같은 직군 중복 제거)
                 for v, res, note in await _fork_collect(flow, me_id, voters, body_of):
                     if res is None:
                         reasons.append(f"{flow._info(v) or v}: {note}")
@@ -1694,7 +1725,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     pick = (m.group(1).strip() if m else "")
                     chosen = next((o for o in opts if o in pick or pick in o), None)
                     if chosen:
-                        tally[chosen] += 1
+                        # [동질 모델 — 표는 도메인(관점) 단위 집계] 같은 Claude·같은 직군 표는 같은 관점이라
+                        # N표가 아니라 1관점이다. 봇 수가 아니라 '다른 관점 수'로 세야 표결이 다양성을 반영
+                        # (같은 직군 3명이 같은 선택 = 3표가 아니라 그 직군 1표) — 봇 수 편향 제거. 도메인이
+                        # 갈리면(동질 모델이라 드묾) 각 옵션에 그 도메인을 1회씩 센다.
+                        _vd = {_norm_job(j) for j in _jobs_of(flow._info(v) or "")} - {""}
+                        _vdk = sorted(_vd)[0] if _vd else f"·{v}"
+                        if _vdk not in dom_picks[chosen]:
+                            dom_picks[chosen].add(_vdk)
+                            tally[chosen] += 1
                     # [판정자 사본도 침묵 절단 금지] 리더는 이 근거로 표결을 '판정'한다 — 채널
                     # 발언(400 안전망+잘림 표기)과 같은 내용이어야 한다. 종전 [:150] 하드컷은
                     # 판정자가 동강난 근거로 결정하게 만들던 같은 부류의 결함(잘림 사건의 잔재).
@@ -1702,14 +1741,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     await _say(v, f"[표] {(pick or '무효')} — {_speech_clip(res, 400)}")  # 본인 명의 발언
                     if v in flow.current.team and v != flow.leader:
                         flow.current.participated.add(v)        # 표결 참여 = 실질 협의 인정
-                board = " / ".join(f"{o}: {n}표" for o, n in tally.items())
+                board = " / ".join(f"{o}: {n}관점" for o, n in tally.items())
                 if flow.current is not None:
                     record = f"[표결] {question}\n{board}\n" + "\n".join(reasons)
                     flow.current.collab_notes = _speech_clip(
                         (getattr(flow.current, 'collab_notes', '') + '\n\n' + record).strip(), 6000)
                     _ckpt(flow)
-                return _ok(f"[표결 집계] {question}\n{board}\n\n[각자의 선택·근거]\n" + "\n".join(reasons)
-                           + "\n\n(집계는 참고 — 최종 확정은 당신(리더)의 판정입니다.)")
+                return _ok(f"[표결 집계 — 도메인(관점) 단위] {question}\n{board}\n\n[각자의 선택·근거]\n"
+                           + "\n".join(reasons)
+                           + "\n\n(집계는 **도메인 단위** — 같은 직군 N명의 같은 선택은 동질 모델이라 1관점으로 "
+                           + "합산(봇 수가 아니라 다른 관점 수). 참고일 뿐, 최종 판정은 당신(리더).)")
 
             inner = asyncio.ensure_future(_run_vote())
             flow.inflight_tasks.add(inner)
