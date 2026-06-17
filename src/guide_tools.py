@@ -1276,6 +1276,32 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            "**goal에 '구축 대상'으로 넣으세요**(담당 직군이 팀에 없으면 recruit). 정말 없어도 되면 "
                            "goal에 그 이유를 적은 뒤 set_goal을 재호출해 확정하세요(인지를 *점검*에서 *구축*으로). "
                            "재호출은 통과합니다(판단은 당신).")
+            # [분해 점검 — 1회(per-flow), 하이브리드 아키텍처 = 중앙 고수준 분해 + 지역 자율]
+            # 라이브 P-002 114305-1: 6기준·5도메인(서버·VFX·사운드·모션·밸런스) 목표를 Task 1개·게이트 1회로
+            # 마감하려 함 → 부분 결함이 한 게이트에 묻히고(검증 갭), 단일 owner가 5도메인을 떠안아 '전체 품질이
+            # 오케스트레이터 1명의 구조화 지능에 인질'(사용자 명제). 외부 연구도 일치: 중앙집중은 단일 에이전트가
+            # 조율·통합·결정을 다 떠안아 규모↑ 시 과부하 / 검증갭이 다중에이전트 실패의 21% / 권장 팀 3~4명.
+            # 처방(검증된 하이브리드): 중앙은 '고수준 분해'만 하고, 도메인별 Task로 쪼개 각 전문가가 owner로 자기
+            # 도메인을 주도+검증(지역 자율) → 게이트 N개(깊이) + 단일점 지능 병목 제거. 매직넘버 아님 — '독립
+            # 검증 가능한 도메인이 둘 이상'이라는 구조 신호로만 발동, 1회 보류 후 의식적 결정(얽혔으면 사유 쓰고 통과).
+            if not getattr(flow, "decomp_checked", False):
+                _tdoms = set()
+                for _m in [x for x in flow.current.team if x != me_id]:
+                    _tdoms |= {_norm_job(j) for j in _jobs_of(flow._info(_m) or "")} - {""}
+                flow.decomp_checked = True
+                if len(_tdoms) >= 2:
+                    if flow.log:
+                        flow.log("set_goal_decomp_check", task=flow.current.task_id, domains=len(_tdoms))
+                    return _ok(f"확정 보류(분해 점검 — 1회, 확정 전): 이 목표는 **{len(_tdoms)}개 도메인**"
+                               f"({', '.join(sorted(_tdoms))})에 걸쳐 있습니다. 다도메인을 **한 Task에 다 담으면 "
+                               "검증이 1회뿐이라 부분 결함이 묻힙니다**(라이브: 다도메인 목표를 단일 게이트로 마감 → "
+                               "부분 결함; 외부 연구: 검증갭이 다중에이전트 실패의 21%). 독립적으로 구현·검증할 수 있는 "
+                               "도메인이면 **이 Task는 한 도메인으로 좁히고(goal 재작성) 나머지는 create_task로 "
+                               "도메인별 Task를 열어** 각 도메인 전문가를 owner로 두세요 — 각자 자기 도메인을 주도(지역 "
+                               "자율)하고 자기 도메인을 검증(게이트 N개 → 깊이↑). 이게 전체 품질이 **오케스트레이터 "
+                               "1명의 구조화 지능에 인질잡히는 걸 막습니다**(중앙=고수준 분해, 지역=도메인 자율 — 검증된 "
+                               "하이브리드). 정말 분리 불가하게 얽혔으면(공유 상태·단일 파일) goal에 그 사유를 적고 "
+                               "set_goal을 재호출하세요(의식적 단일 Task — 재호출은 통과, 판단은 당신).")
             if purpose:
                 flow.current.status.purpose = purpose
             flow.current.status.goal = goal

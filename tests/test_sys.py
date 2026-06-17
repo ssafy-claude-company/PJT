@@ -42,6 +42,7 @@ def _flow(g, leader=11):
     f.percept_checked = True  # 지각 비대칭 점검(complete) 보류도 기본 우회(전용 테스트만 False로 검증)
     f.acceptance_checked = True  # 수용 계약 마감 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     f.authorship_checked = True  # 저작 다양성 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
+    f.decomp_checked = True  # 분해 점검 보류도 기본 우회(전용 테스트만 False로 검증)
     return f
 
 
@@ -464,7 +465,7 @@ def test_owner는_work수신자_goal합의후():
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "A백엔드", 13: "B프론트"})
     f.start_root("root")
-    f.gap_checked = True   # P7 범주점검 보류 우회(이 테스트 범위 밖)
+    f.gap_checked = True; f.decomp_checked = True   # P7 범주·분해 점검 보류 우회(이 테스트 범위 밖)
     waked = []
 
     async def wake(to, b, k):
@@ -498,7 +499,7 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백", 13: "프"})
     f.start_root("root")
-    f.gap_checked = True   # P7 범주점검 보류 우회(이 테스트는 participated 게이트 검증)
+    f.gap_checked = True; f.decomp_checked = True   # P7 범주·분해 점검 보류(이 테스트는 participated 게이트 검증)
     f.percept_checked = True   # 지각 비대칭 점검 보류 우회(범위 밖)
     f.acceptance_checked = True   # 수용 계약 게이트 보류 우회(범위 밖)
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
@@ -527,7 +528,7 @@ def test_set_goal_유화적_타흐름점유멤버는_협의면제_교착차단()
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "프론트엔드"})
     f.start_root("root")
-    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True
+    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True; f.decomp_checked = True
     eng = Engagement()
     f.comm.attach_engagement(eng, scope="P-THIS")
     logged = []
@@ -550,7 +551,7 @@ def test_set_goal_가용한_미참여멤버는_여전히_협의요구():
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "프론트엔드"})
     f.start_root("root")
-    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True
+    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True; f.decomp_checked = True
     eng = Engagement()
     f.comm.attach_engagement(eng, scope="P-THIS")    # 13은 어디에도 점유 안 됨(가용)
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
@@ -559,6 +560,35 @@ def test_set_goal_가용한_미참여멤버는_여전히_협의요구():
     f.current.participated.add(12)                    # 12만 협의, 13은 가용한데 미협의
     r = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
     assert "거부" in r["content"][0]["text"] and not f.current.status.goal   # 13 가용·미협의 → 거부
+
+
+def test_set_goal_분해점검_다도메인_1회보류_단일도메인_스킵():
+    """[하이브리드 — 중앙 고수준 분해 + 지역 자율] 목표가 ≥2 독립 도메인에 걸치면 set_goal이 1회 보류하고
+    '도메인별 Task로 나눠 각 전문가가 owner+검증'을 유도(검증갭·오케스트레이터 단일점 지능 병목 차단 —
+    외부 연구의 hybrid). 단일 도메인은 분해 무의미라 스킵. 매직넘버 아님(도메인 ≥2 구조신호), 1회 보류 후 통과."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "VFX 전문가"})
+    f.start_root("root")
+    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True   # decomp만 검증(나머지 보류 우회)
+    logged = []; f.log = lambda ev, **kw: logged.append((ev, kw))
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버+VFX", "members": "12,13"}))
+    f.current.participated.update({12, 13})
+    r1 = asyncio.run(t["set_goal"].handler({"goal": "스킬 시스템"}))
+    assert "분해 점검" in r1["content"][0]["text"] and not f.current.status.goal   # 2도메인 → 1회 보류
+    assert any(ev == "set_goal_decomp_check" for ev, kw in logged)
+    r2 = asyncio.run(t["set_goal"].handler({"goal": "스킬 시스템"}))               # 재호출
+    assert f.current.status.goal == "스킬 시스템"                                 # 1회뿐 — 통과
+    # 단일 도메인(백엔드×2 = 1도메인)은 보류 없이 통과 — 새 흐름
+    f2 = Flow(g, channel_id=501, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "백엔드"})
+    f2.start_root("r2"); f2.gap_checked = True; f2.percept_checked = True; f2.acceptance_checked = True
+    t2 = {x.name: x for x in make_guide_tools(f2, 11, "leader")}
+    asyncio.run(t2["create_project"].handler({"name": "p2", "team": "12,13"}))
+    asyncio.run(t2["create_task"].handler({"members": "12,13"}))
+    f2.current.participated.update({12, 13})
+    r3 = asyncio.run(t2["set_goal"].handler({"goal": "백엔드만"}))
+    assert f2.current.status.goal == "백엔드만"                                   # 1도메인 → 보류 없이 통과
 
 
 def test_Task팀은_담당자가_동적선정():
