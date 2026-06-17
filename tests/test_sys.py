@@ -220,6 +220,25 @@ def test_일로직업획득_채용은잠정_첫실작업에_영속승격():
     assert persisted.get(13) is None and not f.role_earned_queue
 
 
+def test_네이티브도구_거부에_Organt_대체도구_안내():
+    """봇(Claude)이 본능적으로 집는 네이티브 도구(Bash/Agent/TaskList…)를 거부할 때 '대신 이걸 써라'를
+    안내한다 — 라이브: '권한 밖 도구' 거부 359건(대부분 Bash), Bash 거부의 74%가 run으로 복귀 못 하고
+    표류. 친절한 redirect로 즉시 올바른 도구로 유도(본능을 이기지 말고 받아서 돌린다)."""
+    from src.permissions import make_pre_tool_use_hook, organt_allowed_tools
+
+    class _A:
+        def record(self, *a, **k):
+            pass
+    hook = make_pre_tool_use_hook(_A(), organt_allowed_tools(["mcp__guide__run"]), actor=12, role="백엔드")
+    r = asyncio.run(hook({"tool_name": "Bash", "tool_input": {"command": "ls"}}, "tid", None))
+    out = r["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny" and "run" in out["permissionDecisionReason"]   # Bash → run
+    r2 = asyncio.run(hook({"tool_name": "Agent", "tool_input": {}}, "tid", None))
+    assert "request" in r2["hookSpecificOutput"]["permissionDecisionReason"]                   # Agent → request
+    r3 = asyncio.run(hook({"tool_name": "FooBar", "tool_input": {}}, "tid", None))             # 미지 도구는
+    assert r3["hookSpecificOutput"]["permissionDecision"] == "deny"                            # 종전대로 거부(안 깨짐)
+
+
 def test_채용직업_기억_다음흐름_유지():
     """recruit로 부여한 직군은 _roster_labels에 기록돼, 새 흐름 시작 시 reset 후에도 유지된다 — '직업 고정·기억'
     (예비가 한 번 직업을 받으면 매 흐름 예비로 원복되지 않고 그 직업군을 누적·재사용)."""

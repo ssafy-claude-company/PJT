@@ -40,6 +40,27 @@ def _is_work_kind(kind) -> bool:
     return str(getattr(kind, "value", kind)).strip().lower() == "work"
 
 
+# [네이티브 도구 → Organt 도구 리다이렉트] 봇은 Claude라 훈련된 기본 CLI 도구(Bash·Agent·Task*·
+# TodoWrite 등)를 본능적으로 집는데, Organt는 게이트가 걸린 대체 도구만 노출한다. 그냥 '허용 아님'
+# 이라고만 하면 봇이 어디로 가야 할지 몰라 표류한다 — 라이브: '권한 밖 도구' 거부 359건(대부분 Bash·
+# TaskList·Agent), 그중 Bash 거부 163건의 74%(120건)가 run으로 복귀하지 못함(턴 낭비·베턴 고아의
+# 한 원인). 거부에 '대신 이걸 써라'를 붙여 즉시 올바른 도구로 유도한다(프롬프트 강화보다 실효 — 본능을
+# 이기는 게 아니라 본능을 받아 redirect).
+_TOOL_REDIRECT = {
+    "Bash": "셸 명령은 `run`(mcp__guide__run)으로 실행하세요 — 같은 command를 run으로 다시 부르면 됩니다(Organt는 게이트가 걸린 run만 씁니다).",
+    "Agent": "일을 맡길 땐 서브에이전트가 아니라 `request`로 동료에게 위임하세요(To: 동료, Kind: Work/Info).",
+    "Task": "서브에이전트(Task) 대신 `request`로 동료에게 위임하세요.",
+    "TaskList": "별도 작업관리 도구는 없습니다 — 현재 Task·상태는 채널 상태블록에서 보고, Task는 리더가 create_task/complete_task로 다룹니다.",
+    "TaskGet": "별도 작업조회 도구는 없습니다 — 현황은 채널 상태블록에서 봅니다.",
+    "TaskUpdate": "별도 작업갱신 도구는 없습니다 — 진행은 실제 작업(run/Write/Edit)과 Response로 드러내세요.",
+    "TodoWrite": "별도 할일 도구는 없습니다 — 계획은 Response로, 진행은 실제 작업으로.",
+    "SendUserFile": "사용자에게 파일을 직접 보내지 않습니다 — 결과는 Response로 보고하고, 웹 산출물은 `deploy`로 배포하세요.",
+    "Skill": "Skill 도구는 없습니다 — 필요한 일은 허용 도구(run/Write/Edit/request 등)로 직접 하세요.",
+    "NotebookEdit": "노트북 편집 도구는 없습니다 — 파일은 Write/Edit로.",
+    "MultiEdit": "MultiEdit는 없습니다 — Edit를 여러 번 쓰세요.",
+}
+
+
 def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
     """허용 도구만 통과시키고, 파일 쓰기는 작업공간 안으로 제한하는 PreToolUse 훅.
 
@@ -63,7 +84,8 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
         if tool not in allowed_set:
             audit.record("tool_denied", actor=actor, role=role, tool=tool,
                          reason="권한 밖 도구", tool_use_id=tool_use_id)
-            return _deny(f"'{tool}' 은(는) Organt 허용 도구가 아닙니다.")
+            hint = _TOOL_REDIRECT.get(tool, "")
+            return _deny(f"'{tool}' 은(는) Organt 허용 도구가 아닙니다." + (" " + hint if hint else ""))
 
         # 2) 파일 쓰기는 작업공간(cwd) 안으로 제한
         if tool in ("Write", "Edit"):
