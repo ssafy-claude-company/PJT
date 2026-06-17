@@ -316,6 +316,9 @@ class TaskRef:
                                                      #   제안 + 훌륭한 예 대비에서 도출). 마감이 각 항목 충족 증거/의식적 드롭을
                                                      #   요구 — 회의 전문성이 회의록에서 증발 않고 코드에 도달하도록 구속(라이브
                                                      #   P-015: 회의 제안 6개 중 코드 반영 0, 잠수 아닌 직군의 '구체 약속'은 무게이트).
+    standard: str = ""                               # [최대화 — PHASE 1.2] 실제 exemplar 기준의 *최대* 품질 표준(외부 앵커).
+                                                     #   목적함수가 '요청 문자 최소'가 아니라 '가용 외부자원으로 만들 수 있는
+                                                     #   최대'임을 박는다 — 마감 검증(PHASE 3)이 이 최대 대비 갭으로 판정.
 
 
 class Flow:
@@ -1211,7 +1214,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               "되면 성공인가'(결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·스택으로 만들지'(구현 방법)는 쓰지 말 것 — "
               "그건 owner가 정한다. Work 위임은 확정 뒤에만 가능. acceptance(수용 계약)엔 회의에서 각 전문가가 "
               "제안한 '좋음의 구체·검증가능 조건'(훌륭한 예 대비)을 항목으로 적는다 — 마감이 이 항목들의 실현을 검증한다.",
-              {"purpose": str, "goal": str, "acceptance": str})
+              {"purpose": str, "goal": str, "acceptance": str, "standard": str})
         async def set_goal(args):
             if flow.current is None:
                 return _ok("오류: 진행 중인 Task가 없습니다. create_task로 먼저 여세요.")
@@ -1286,19 +1289,19 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 라이브: P6 넛지로 사운드를 grep '점검'만 하고 구현 0(인지≠행동). 점검을 '구축'으로 한 칸 올림.
             # 1회 보류 후 재호출 통과(막지 않되 의식적 결정 — override 게이트와 같은 정신). 직군 키워드 하드코딩
             # 없음 — 장르·범주 판단은 리더(비체험형이면 'N/A 불필요'로 재호출). set_goal_gap_check 로그로 가시화.
-            if not getattr(flow, "gap_checked", False):       # 흐름당 1회(per-flow) — 작품의 범주 점검은 한 번
+            if not getattr(flow, "gap_checked", False):       # 흐름당 1회(per-flow) — 최대화 기준 점검은 한 번
                 flow.gap_checked = True
                 if flow.log:
                     flow.log("set_goal_gap_check", task=flow.current.task_id)
-                return _ok("확정 보류(범주적 완성 점검 — RFC-010 P7 / RFC-011 M1): 확정 전 한 번만 — **이 작품과 "
-                           "같은 종류의 '훌륭한 예'를 WebSearch로 실제로 하나 찾아보고**(상상 말 것 — LLM은 자기 "
-                           "산출을 기준 삼아 '평범=충분'으로 수렴하므로 실제 레퍼런스가 외부 기준이 됩니다), 그것이 "
-                           "*당연히 갖춘* 요소 중 우리 작품엔 *통째로 빠진* 범주가 있는지 보세요. 무엇이 그런 범주인지는 "
-                           "**작품 종류를 아는 당신이 판단**합니다(시스템이 "
-                           "특정 범주·직군을 지정하지 않음 — 하드코딩 없음). 있으면 그건 '개선'이 아니라 신규 구축이니 "
-                           "**goal에 '구축 대상'으로 넣으세요**(담당 직군이 팀에 없으면 recruit). 정말 없어도 되면 "
-                           "goal에 그 이유를 적은 뒤 set_goal을 재호출해 확정하세요(인지를 *점검*에서 *구축*으로). "
-                           "재호출은 통과합니다(판단은 당신).")
+                return _ok("확정 보류(최대화 기준 점검 — PHASE 1.2): 이 시스템의 전제는 *'요청을 문자 그대로 최소로'가 "
+                           "아니라 '가용 외부자원으로 만들 수 있는 **최대** 품질'*입니다(임계값 만족 아님 — 최대화). 확정 "
+                           "전 한 번 — **이 작품과 같은 종류의 *실제 훌륭한 예*를 WebSearch로 찾아**(상상 말 것 — LLM은 "
+                           "자기 산출을 기준 삼아 '평범=충분'으로 수렴하니 실제 레퍼런스가 외부 기준이 됩니다), 그 *최대 "
+                           "버전*이 갖춘 품질·범주의 **전체 표준**을 파악하세요. **우리 목표의 바(bar)는 그 *최대*이지 요청 "
+                           "문자의 최소가 아닙니다.** 그 최대 표준을 **`standard` 인자에 적어 박으세요**(마감 검증이 이 최대 "
+                           "대비 *갭*으로 판정 — '돌아가나'가 아니라 '실제 최선만큼인가'). 통째로 빠진 범주는 goal에 '구축 "
+                           "대상'으로 넣고(담당 직군 없으면 recruit), 정말 이 작품엔 불필요한 범주면 그 사유를 적고 재호출 "
+                           "하세요(판단은 당신 — 하드코딩 없음). 재호출은 통과합니다.")
             # [분해 점검 — 1회(per-flow), 하이브리드 아키텍처 = 중앙 고수준 분해 + 지역 자율]
             # 라이브 P-002 114305-1: 6기준·5도메인(서버·VFX·사운드·모션·밸런스) 목표를 Task 1개·게이트 1회로
             # 마감하려 함 → 부분 결함이 한 게이트에 묻히고(검증 갭), 단일 owner가 5도메인을 떠안아 '전체 품질이
@@ -1334,6 +1337,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 # 요구한다. 누적(개입 때마다 덮어쓰지 않고 이어붙임)해 회차가 쌓일수록 기준이 두꺼워진다.
                 prev = (flow.current.acceptance or "").strip()
                 flow.current.acceptance = (prev + "\n" + acceptance).strip() if prev and acceptance not in prev else (acceptance or prev)
+            standard_in = (args.get("standard") or "").strip()
+            if standard_in:
+                # [최대화 — PHASE 1.2] 실제 exemplar의 *최대* 표준을 박는다(외부 앵커). 목적함수 = 요청 문자
+                # 최소가 아니라 '가용 외부자원으로 만들 수 있는 최대' — 마감 검증이 이 최대 대비 갭으로 판정.
+                flow.current.standard = standard_in
+                if flow.log:
+                    flow.log("set_goal_standard_set", task=flow.current.task_id, chars=len(standard_in))
             await flow.refresh(flow.current)
             _ckpt(flow)                       # 크래시-세이프: 확정된 Purpose·Goal 영속
             # [공급 원칙 — 정보는 구조가, 판단은 리더가. 매직넘버 제거(사용자 지적 2026-06-13)]

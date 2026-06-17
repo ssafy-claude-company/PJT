@@ -2258,7 +2258,7 @@ def test_범주점검_보류가_WebSearch_실제예시_요구_RFC011():
     asyncio.run(t["create_task"].handler({"members": "12"}))
     f.current.participated.add(12)
     txt = asyncio.run(t["set_goal"].handler({"goal": "g"}))["content"][0]["text"]
-    assert "확정 보류" in txt and "WebSearch로 실제로" in txt
+    assert "확정 보류" in txt and "WebSearch" in txt and "실제 훌륭한 예" in txt   # 외부 실레퍼런스 대조 요구(최대화)
 
 
 def test_set_goal_누적사용자취향_품질기준으로_재생_RFC011():
@@ -2419,11 +2419,28 @@ def test_setgoal_범주적완성_점검_1회보류_RFC010_P7():
     asyncio.run(t["create_task"].handler({"members": "12"}))
     f.current.participated.add(12)
     r1 = asyncio.run(t["set_goal"].handler({"goal": "게임"}))            # 1회차: P7 보류
-    assert "확정 보류(범주적 완성 점검" in r1["content"][0]["text"] and not f.current.status.goal
+    assert "확정 보류(최대화 기준 점검" in r1["content"][0]["text"] and not f.current.status.goal
     assert "훌륭한 예" in r1["content"][0]["text"] and "구축" in r1["content"][0]["text"]   # 범용: 장르 예시 대비 + 구축
     assert "사운드" not in r1["content"][0]["text"]      # 시스템이 특정 범주를 지정·프라이밍하지 않음(하드코딩 없음)
     r2 = asyncio.run(t["set_goal"].handler({"goal": "게임 + 사운드 구축"}))   # 재호출: 통과
     assert f.current.status.goal == "게임 + 사운드 구축" and f.gap_checked is True   # 확정 + 흐름당 1회 마킹
+
+
+def test_set_goal_최대화표준_standard_영속_PHASE1():
+    """[최대화 — PHASE 1.2] set_goal의 standard 인자가 flow.current.standard에 영속 — 목적함수가 '요청 문자
+    최소'가 아니라 '가용 외부자원으로 만들 수 있는 *최대*'임을 박는 외부 앵커(마감 검증이 이 최대 대비 갭으로
+    판정). gap_check 메시지도 '최대화 기준'으로 재구성(임계값 만족 아님)."""
+    g = FakeGuide()
+    f = _flow(g)
+    logged = []; f.log = lambda ev, **kw: logged.append((ev, kw))
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({
+        "goal": "공공데이터 AI 웹사이트",
+        "standard": "실제 훌륭한 예 기준: 학습모델+평가지표 · 인터랙티브 프론트 · 시각화 · 실데이터 파이프라인"}))
+    assert "학습모델" in f.current.standard and "시각화" in f.current.standard   # 최대 표준 외부앵커 영속
+    assert any(ev == "set_goal_standard_set" for ev, kw in logged)
 
 
 def test_지각비대칭_증거명시통과_반사적재호출은_불가():
