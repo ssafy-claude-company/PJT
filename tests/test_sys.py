@@ -2098,12 +2098,15 @@ def test_complete_task_최대성_기준이_교차검증에_주입_PHASE3():
     asyncio.run(t["create_task"].handler({"members": "12,13"}))
     f.current.participated.update({12, 13})
     asyncio.run(t["set_goal"].handler({"goal": "공공데이터 AI 웹사이트",
-                                       "standard": "최대 표준: 학습모델·인터랙티브 프론트·시각화"}))
+                                       "standard": "최대 표준: 학습모델·인터랙티브 프론트·시각화",
+                                       "interfaces": "백→프 JSON 포맷 {city,aqi,grade}"}))
+    assert "학습모델" in f.current.standard and "JSON 포맷" in f.current.interfaces   # 표준·인터페이스 영속
     f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
     f.act_by[12] = 5; f.act_by[13] = 1
     f.current.cross_checks = 0                                  # 검증 0 → 게이트 보류
     txt = asyncio.run(t["complete_task"].handler({"result": "끝"}))["content"][0]["text"]
-    assert "완료 거부" in txt and "최대성 기준" in txt and "학습모델" in txt   # 표준이 검증에 주입(below-max 대조)
+    assert "완료 거부" in txt and "최대성 기준" in txt and "학습모델" in txt   # 표준이 검증에 주입(below-max)
+    assert "통합 검증" in txt and "JSON 포맷" in txt             # 인터페이스 계약 검증(L2)도 주입(사일로 차단)
 
 
 def test_교차검증_의무_제3멤버가_있으면_단독마감_불가():

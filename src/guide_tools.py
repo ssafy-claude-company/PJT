@@ -319,6 +319,9 @@ class TaskRef:
     standard: str = ""                               # [최대화 — PHASE 1.2] 실제 exemplar 기준의 *최대* 품질 표준(외부 앵커).
                                                      #   목적함수가 '요청 문자 최소'가 아니라 '가용 외부자원으로 만들 수 있는
                                                      #   최대'임을 박는다 — 마감 검증(PHASE 3)이 이 최대 대비 갭으로 판정.
+    interfaces: str = ""                             # [협업 — PHASE 1.3] 도메인 간 인터페이스 계약(데이터포맷·이벤트 타이밍).
+                                                     #   분해된 sub-task를 *독립 사일로가 아니라 계약으로 연결* — 마감 검증이
+                                                     #   이 계약이 실제 지켜졌나(통합/L2)를 본다(사일로·"끝에 붙이기" 차단).
 
 
 class Flow:
@@ -1214,7 +1217,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               "되면 성공인가'(결과·시나리오)만 쓰고 '어떤 파일·엔드포인트·스택으로 만들지'(구현 방법)는 쓰지 말 것 — "
               "그건 owner가 정한다. Work 위임은 확정 뒤에만 가능. acceptance(수용 계약)엔 회의에서 각 전문가가 "
               "제안한 '좋음의 구체·검증가능 조건'(훌륭한 예 대비)을 항목으로 적는다 — 마감이 이 항목들의 실현을 검증한다.",
-              {"purpose": str, "goal": str, "acceptance": str, "standard": str})
+              {"purpose": str, "goal": str, "acceptance": str, "standard": str, "interfaces": str})
         async def set_goal(args):
             if flow.current is None:
                 return _ok("오류: 진행 중인 Task가 없습니다. create_task로 먼저 여세요.")
@@ -1347,6 +1350,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 flow.current.standard = standard_in
                 if flow.log:
                     flow.log("set_goal_standard_set", task=flow.current.task_id, chars=len(standard_in))
+            interfaces_in = (args.get("interfaces") or "").strip()
+            if interfaces_in:
+                # [협업 — PHASE 1.3] 도메인 간 인터페이스 계약 박기(사일로 방지). 마감 검증(L2)이 이 계약 준수를 본다.
+                flow.current.interfaces = interfaces_in
             await flow.refresh(flow.current)
             _ckpt(flow)                       # 크래시-세이프: 확정된 Purpose·Goal 영속
             # [공급 원칙 — 정보는 구조가, 판단은 리더가. 매직넘버 제거(사용자 지적 2026-06-13)]
@@ -1574,6 +1581,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                               "근거*로 보고하게 하세요(말·존재가 아니라 '실제 최선만큼'). 못 미치면 그 도메인 owner에게 "
                               "개선 위임 → 재검증(갭이 닫힐 때까지 — 수확체감까지). 정말 불필요한 항목은 result에 사유를 "
                               "영속(의식적 N/A — 객관 거짓주장은 불가):\n" + _speech_clip(std_x, 1500)) if std_x else ""
+                iface_x = (flow.current.interfaces or "").strip()
+                iface_v = ("\n[통합 검증 — 인터페이스 계약 준수 (PHASE 1.3 / L2)] 도메인 간 계약입니다. 검증자에게 — "
+                           "이 계약이 *실제로 지켜지나*(예: 프론트가 백 포맷을 진짜 소비? VFX-사운드 타이밍 싱크?)를 "
+                           "워크스페이스 실측으로 확인하게 하세요('각자 만들고 안 붙는' 사일로 차단):\n"
+                           + _speech_clip(iface_x, 800)) if iface_x else ""
                 _ver_state = ("**다른 멤버의 검증 참여가 0**입니다" if flow.current.cross_checks == 0
                               else "검증이 **같은 직군(에코)뿐**이라 독립 검증이 없습니다(같은 관점=같은 맹점)")
                 indep_note = (f"\n[독립 검증 — 다른 도메인 필수] owner와 **다른 도메인** 동료가 검증해야 독립적입니다"
@@ -1587,7 +1599,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            f"'작동'이지 '좋음'의 증거가 아닙니다 — 검증으로 인정하지 마세요**(라이브: 그렇게 통과시킨 게 "
                            f"'상용 수준 아님'으로 반려됨). 검증자의 결함·아쉬움 보고가 Redo(창의적 개선)의 근거입니다. "
                            f"**자기 산출물 자기검증은 무효**(편향 — Pride&Prejudice): 반드시 만든 사람이 아닌, 실제로 "
-                           f"써본 다른 멤버. 검증 응답이 오면 게이트는 자동으로 열립니다.{rubric}{acc_v}{standard_v}{taste_v}{idle_note}{indep_note}")
+                           f"써본 다른 멤버. 검증 응답이 오면 게이트는 자동으로 열립니다.{rubric}{acc_v}{standard_v}{iface_v}{taste_v}{idle_note}{indep_note}")
             # [팀 기여 의무 게이트 — RFC-009] 교차 검증(cross_checks)과 **독립**. 검증이 됐어도(검증은
             # 기능 위주라 폴리시 부재를 못 잡음 — RFC-009 §3), 팀에 부른 직군이 이 흐름에서 회의 발언만 하고
             # 실작업·검증 0(act_by==0: Write/Edit/run 한 번도 없음)이면 그 도메인(타격감·그래픽·사운드·디자인·
