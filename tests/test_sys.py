@@ -499,6 +499,49 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     assert "거부" in r3["content"][0]["text"]                      # Task별로 다시 합의해야 함
 
 
+def test_set_goal_유화적_타흐름점유멤버는_협의면제_교착차단():
+    """[유화적 전원협의 — 무한 루프 차단] 미참여 멤버가 '지금 타 흐름에 점유(busy_elsewhere)'돼 도달 불가하면
+    set_goal이 그 멤버 협의를 면제하고 진행한다 — 라이브 P-002 114305-1: 프론트 4명 중 1명이 내내 타 프로젝트
+    (P-013)를 리드 중이라 1봇=1흐름 배타로 P-002엔 못 와 협의 33회 거부·200분 교착. 가용 멤버는 전원 협의하되,
+    도달 불가 멤버 때문에 영영 못 막히게(유화적)."""
+    from src.communication import Engagement
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "프론트엔드"})
+    f.start_root("root")
+    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True
+    eng = Engagement()
+    f.comm.attach_engagement(eng, scope="P-THIS")
+    logged = []
+    f.log = lambda ev, **kw: logged.append((ev, kw))
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
+    eng.engage(13, "P-OTHER")                        # 13(프론트)은 내내 다른 흐름 점유 — 도달 불가
+    f.current.participated.add(12)                    # 가용한 12는 협의 완료, 13만 미참여(점유)
+    r = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
+    assert f.current.status.goal == "동작"             # 교착 대신 유화적 진행 — Goal 확정
+    assert "유화적" in r["content"][0]["text"]          # 면제 사실을 리더에게 정보로 안내
+    assert any(ev == "set_goal_conciliated" and kw.get("excused") == [13] for ev, kw in logged)
+
+
+def test_set_goal_가용한_미참여멤버는_여전히_협의요구():
+    """유화적 면제는 '타 흐름 점유'에만 적용 — 지금 가용(reachable)한 미참여 멤버는 여전히 협의해야 통과한다
+    (최대한 다 받기는 유지). 점유도 아닌데 면제하면 '한 명만 묻고 확정'하는 리더 독단이 부활한다."""
+    from src.communication import Engagement
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "프론트엔드"})
+    f.start_root("root")
+    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True
+    eng = Engagement()
+    f.comm.attach_engagement(eng, scope="P-THIS")    # 13은 어디에도 점유 안 됨(가용)
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
+    f.current.participated.add(12)                    # 12만 협의, 13은 가용한데 미협의
+    r = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
+    assert "거부" in r["content"][0]["text"] and not f.current.status.goal   # 13 가용·미협의 → 거부
+
+
 def test_Task팀은_담당자가_동적선정():
     """팀은 자동 전원 소집이 아니라 담당자가 일에 맞게 고른다(직군 고정 해결) — create_task(members)로 좁히거나,
     비우면 프로젝트팀(예비 제외) 기본. 빠져 있던 인력을 강제로 끌어오지 않는다(첫 Task도 마찬가지)."""

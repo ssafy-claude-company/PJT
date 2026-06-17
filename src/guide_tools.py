@@ -1214,14 +1214,50 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # Purpose·Goal은 '담당 팀이 함께' 정한다(docs: Task.Team이 Goal을 정한다). 이 Task 멤버 전원이
             # '실질 협의(participated)'에 참여했는지 검사 — 리더가 물었든 peer끼리 물었든 인정(허브 완화),
             # 단 빈 핑('응답 가능?')은 불인정(실질 강제). → 매 Task를 팀이 모여 정하는 분산 구조를 구조적으로 보장.
+            # [유화적 전원협의 — 무한 루프 차단] '전원'을 글자 그대로 강제하면, 한 멤버가 그 시간 내내 타 흐름에
+            # 점유(1봇=1흐름 배타 — 병렬 안전 기둥)되어 도달 불가할 때 set_goal이 영영 거부돼 교착한다(라이브
+            # P-002 114305-1: 프론트 4명 중 1명이 내내 P-013을 '리드'(set_goal까지) 중 → 협의 33회 거부 →
+            # 200분 미수렴·스킬 코드 0줄). 교정: '지금 가용(reachable)'한 미참여 멤버에게만 협의를 요구(최대한
+            # 다 받기 — 가용한 사람은 전원)하고, '타 흐름 점유로 도달 불가'한 멤버는 면제하고 진행한다 —
+            # _fork_collect의 '부분 조인'(일부 점유 멤버 때문에 수집 전체가 막히지 않음)과 같은 정신. 면제는
+            # '포기'가 아니라 '실제 부재 인정'이며, 면제 멤버의 도메인 공백은 리더에게 정보로 돌려준다(필요하면
+            # 같은 직군 recruit — 판단은 리더, 공급 원칙).
             members = [x for x in flow.current.team if x != me_id]
             missing = [m for m in members if m not in flow.current.participated]
+            excused_note = ""
             if missing:
-                return _ok(f"확정 거부: 이 Task의 Purpose·Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
-                           f"아직 의견을 안 받은 멤버: {flow._names(missing)} — 그들과 **meet(회의)로 '풀 문제·각 "
-                           f"도메인의 목표·성공기준'을 함께 정한 뒤** set_goal로 기록하세요(meet 발언이 협의로 인정됨 — "
-                           f"1:1 request(Info)도 인정되나 회의가 앵커링↓·합의 기록↑). 파일·엔드포인트 같은 구현 스펙 "
-                           f"말고 '측정가능한 결과'로.")
+                eng, scope = flow.comm.engagement, flow.comm.scope
+                def _busy_now(m):
+                    return bool(eng is not None and scope is not None and eng.busy_elsewhere(m, scope))
+                blocking = [m for m in missing if not _busy_now(m)]   # 지금 가용 — 반드시 협의(최대한 다)
+                excused  = [m for m in missing if _busy_now(m)]        # 타 흐름 점유 — 도달 불가, 면제
+                if blocking:
+                    tail = (f"\n(지금 타 흐름에 점유돼 도달 불가한 멤버는 이번 협의에서 면제됩니다: "
+                            f"{flow._names(excused)} — 풀려나면 받고, 그 도메인이 급하면 같은 직군을 recruit)"
+                            if excused else "")
+                    return _ok(f"확정 거부: 이 Task의 Purpose·Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
+                               f"아직 의견을 안 받았고 **지금 가용한** 멤버: {flow._names(blocking)} — 그들과 "
+                               f"**meet(회의)로 '풀 문제·각 도메인의 목표·성공기준'을 함께 정한 뒤** set_goal로 "
+                               f"기록하세요(meet 발언이 협의로 인정됨 — 1:1 request(Info)도 인정되나 회의가 앵커링↓·"
+                               f"합의 기록↑). 파일·엔드포인트 같은 구현 스펙 말고 '측정가능한 결과'로.{tail}")
+                if excused:
+                    # 남은 미참여가 전부 '타 흐름 점유'(도달 불가) → 유화적으로 진행(교착 차단). 면제 멤버의
+                    # 도메인이 '참여한 동료'로 커버되는지는 리더 판단용 정보로 돌려준다(강제 아님 — 공급 원칙).
+                    pj = set()
+                    for p in flow.current.participated:
+                        pj |= {_norm_job(j) for j in _jobs_of(flow._info(p) or "")} - {""}
+                    uncovered = [m for m in excused
+                                 if not (({_norm_job(j) for j in _jobs_of(flow._info(m) or "")} - {""}) & pj)]
+                    if flow.log:
+                        flow.log("set_goal_conciliated", task=flow.current.task_id,
+                                 excused=[int(m) for m in excused],
+                                 uncovered=[int(m) for m in uncovered])
+                    excused_note = (
+                        f"\n[유화적 진행 — 타 흐름 점유 멤버 협의 면제] {flow._names(excused)}는 지금 다른 흐름에 "
+                        f"점유돼 도달 불가라, 무한 대기 대신 진행했습니다(가용 멤버는 전원 협의 완료)."
+                        + (f" ⚠️ 이 중 **{flow._names(uncovered)}** 도메인은 참여한 동료가 없어 입력이 비었습니다 — "
+                           f"그 도메인이 중요하면 같은 직군을 recruit하거나, 그들이 풀려나면 받아 보완하세요."
+                           if uncovered else " (면제 멤버 도메인은 참여한 동료가 커버 — 공백 없음)"))
             # [P7 — 범주적 완성 점검: recognition→action 강제, RFC-010] 확정 전 1회, 장르 예시 대비 '통째로
             # 없는 범주'를 goal에 '구축 대상'으로 반영(없으면 recruit)하거나 불필요 사유를 명시하게 강제한다 —
             # 라이브: P6 넛지로 사운드를 grep '점검'만 하고 구현 0(인지≠행동). 점검을 '구축'으로 한 칸 올림.
@@ -1309,7 +1345,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                          "있어 사용자가 유일한 앵커). 이번에 '언급된 것'만 처리하지 말고, 아래에서 **반복되는 "
                          "범주**(어떤 측면이 계속 '부족·구리다'고 지적되는지)를 찾아 goal의 품질 축으로 박으세요 "
                          "— 그 범주가 통째로 부실하면 신규 구축·recruit로 끌어올리세요:\n" + bullets)
-            return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}{tip}{qbar}{creative}{gapcheck}{taste}")
+            return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}{tip}{qbar}{creative}{gapcheck}{taste}{excused_note}")
         tools.append(set_goal)
 
         @tool("complete_task",
