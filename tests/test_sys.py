@@ -2459,10 +2459,10 @@ def test_set_goal_최대화표준_standard_영속_PHASE1():
     t = _tools(f, 11, "leader")
     asyncio.run(t["create_task"].handler({"members": "12"}))
     f.current.participated.add(12)
-    asyncio.run(t["set_goal"].handler({
-        "goal": "공공데이터 AI 웹사이트",
-        "standard": "실제 훌륭한 예 기준: 학습모델+평가지표 · 인터랙티브 프론트 · 시각화 · 실데이터 파이프라인"}))
-    assert "학습모델" in f.current.standard and "시각화" in f.current.standard   # 최대 표준 외부앵커 영속
+    # 핵심: standard는 *리더 단독 덮어쓰기*가 아니라 *도메인별 기여의 합집합*(누적) — 품질 바가 한 명에 인질 안 됨
+    asyncio.run(t["set_goal"].handler({"goal": "공공데이터 AI 웹사이트", "standard": "AI 도메인 최대: 학습모델+평가지표"}))
+    asyncio.run(t["set_goal"].handler({"goal": "공공데이터 AI 웹사이트", "standard": "프론트 도메인 최대: 인터랙티브 시각화"}))
+    assert "학습모델" in f.current.standard and "시각화" in f.current.standard   # 두 도메인 기여가 *누적*(합집합)
     assert any(ev == "set_goal_standard_set" for ev, kw in logged)
 
 

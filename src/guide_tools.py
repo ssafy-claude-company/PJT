@@ -1301,8 +1301,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            "전 한 번 — **이 작품과 같은 종류의 *실제 훌륭한 예*를 WebSearch로 찾아**(상상 말 것 — LLM은 "
                            "자기 산출을 기준 삼아 '평범=충분'으로 수렴하니 실제 레퍼런스가 외부 기준이 됩니다), 그 *최대 "
                            "버전*이 갖춘 품질·범주의 **전체 표준**을 파악하세요. **우리 목표의 바(bar)는 그 *최대*이지 요청 "
-                           "문자의 최소가 아닙니다.** 그 최대 표준을 **`standard` 인자에 적어 박으세요**(마감 검증이 이 최대 "
-                           "대비 *갭*으로 판정 — '돌아가나'가 아니라 '실제 최선만큼인가'). 통째로 빠진 범주는 goal에 '구축 "
+                           "문자의 최소가 아닙니다.** 그 최대 표준을 **`standard` 인자에 적어 박으세요** — 단 *리더 "
+                           "혼자 정하지 말고*, **각 도메인이 *자기 분야*의 실제 훌륭한 예를 대조해 *자기 도메인의 최대 "
+                           "기준*을 meet로 기여**하게 하세요(standard는 그 *합집합*으로 누적됩니다 — 품질 바를 한 "
+                           "오케스트레이터가 혼자 정하면 그게 곧 '품질이 1명 지능에 인질'). 마감 검증이 이 최대 "
+                           "대비 *갭*으로 판정 — '돌아가나'가 아니라 '실제 최선만큼인가'. 통째로 빠진 범주는 goal에 '구축 "
                            "대상'으로 넣고(담당 직군 없으면 recruit), 정말 이 작품엔 불필요한 범주면 그 사유를 적고 재호출 "
                            "하세요(판단은 당신 — 하드코딩 없음). 재호출은 통과합니다.")
             # [분해 점검 — 1회(per-flow), 하이브리드 아키텍처 = 중앙 고수준 분해 + 지역 자율]
@@ -1345,11 +1348,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 flow.current.acceptance = (prev + "\n" + acceptance).strip() if prev and acceptance not in prev else (acceptance or prev)
             standard_in = (args.get("standard") or "").strip()
             if standard_in:
-                # [최대화 — PHASE 1.2] 실제 exemplar의 *최대* 표준을 박는다(외부 앵커). 목적함수 = 요청 문자
-                # 최소가 아니라 '가용 외부자원으로 만들 수 있는 최대' — 마감 검증이 이 최대 대비 갭으로 판정.
-                flow.current.standard = standard_in
+                # [최대화 + 분산 — 핵심] 실제 exemplar의 *최대* 표준을 박되, *리더 단독*이 아니라 각 도메인이 자기
+                # 분야 최대 기준을 기여한 *합집합*으로 누적한다(acceptance와 같은 누적 — 회차마다 이어붙임). 한
+                # 오케스트레이터의 지능이 전체 품질 바를 혼자 정하면 그게 곧 '품질이 1명에 인질'(사용자 명제).
+                prev = (flow.current.standard or "").strip()
+                flow.current.standard = (prev + "\n" + standard_in).strip() if prev and standard_in not in prev else (standard_in or prev)
                 if flow.log:
-                    flow.log("set_goal_standard_set", task=flow.current.task_id, chars=len(standard_in))
+                    flow.log("set_goal_standard_set", task=flow.current.task_id, chars=len(flow.current.standard))
             interfaces_in = (args.get("interfaces") or "").strip()
             if interfaces_in:
                 # [협업 — PHASE 1.3] 도메인 간 인터페이스 계약 박기(사일로 방지). 마감 검증(L2)이 이 계약 준수를 본다.
