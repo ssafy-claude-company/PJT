@@ -3866,3 +3866,18 @@ def test_좀비부활차단_사용자활동시_recovery_attempted_재무장():
         _save_projects=lambda: None)
     Sys.record_user_feedback(stub, 500, "이어서 해")
     assert "recovery_attempted" not in stub.projects[500]             # 사용자 활동 → 해제(재무장)
+
+
+def test_배포보고_타임아웃후_라이브면_성공_아니면_실패아님_빌드중_표기():
+    """[배포 보고 정확성 — 라이브 P-020] 폴링 창이 끝난 뒤: 빌드가 방금 끝나 라이브면 '성공'으로,
+    아직이면 '실패'가 아니라 '진행 중·곧 라이브·수동배포 금지'로 정확히 보고한다(false negative 차단 —
+    P-020이 멀쩡히 라이브인데 '배포 미완·수동배포 필요'로 오보하던 문제)."""
+    from src import deploy
+    # 창 종료 직후 라이브 확인됨 → 성공 보고(미완 아님)
+    r1 = deploy._final_deploy_result("https://x.onrender.com", "/tmp/ws", "repo", "building",
+                                     check_live=lambda u, tries=1: 200, verify=lambda u, w: [], measure=lambda u: "")
+    assert "배포 성공" in r1
+    # 아직 빌드 중(라이브 아님) → '실패' 아니라 '진행 중·수동배포 금지'(리더가 '미완'으로 오보 못 하게)
+    r2 = deploy._final_deploy_result("https://x.onrender.com", "/tmp/ws", "repo", "building",
+                                     check_live=lambda u, tries=1: None, verify=lambda u, w: [], measure=lambda u: "")
+    assert "실패 아님" in r2 and "수동 배포하지 마세요" in r2 and "배포 성공" not in r2

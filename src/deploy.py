@@ -195,6 +195,29 @@ def _free_slots(render_key, keep, want_free=2, cap=25) -> list:
     return deleted
 
 
+def _final_deploy_result(url, workspace, repo_url, status,
+                         check_live=None, verify=None, measure=None):
+    """[배포 보고 정확성 — 라이브 P-020] 폴링 창(480s)이 끝났는데 Render 무료 티어 빌드는 그보다
+    길어지기도 한다 — 빌드가 폴 창 뒤 비동기로 완료돼 라이브가 됐는데도 리더가 '미완·수동배포 필요'로
+    오보(false negative)하던 문제(라이브: P-020이 멀쩡히 라이브인데 요약은 '배포 미완'). 창이 끝나면
+    *한 번 더 길게* 진짜 라이브인지 확인하고(빌드가 방금 끝났을 수 있음), 그래도 아직이면 '실패'가
+    아니라 '빌드 진행 중 → 곧 자동 라이브'임을 못박아 리더가 '실패/수동배포'로 오보하지 않게 한다."""
+    check_live = check_live or _check_live
+    verify = verify or _verify_live_assets
+    measure = measure or _measure_usability
+    served = check_live(url, tries=10)            # 콜드/지연 빌드 마지막 확인(더 길게 — 방금 끝났을 수 있음)
+    if served:
+        stale = verify(url, workspace)
+        if not stale:
+            return (f"배포 성공 ✅ 라이브(HTTP {served} + 산출물 일치): {url}  (repo: {repo_url})" + measure(url))
+        return (f"배포 실패(스테일 서빙): 라이브 파일이 산출물과 다릅니다 — {', '.join(stale[:4])}. 옛 빌드가 "
+                f"서빙 중일 수 있습니다 — 캐시·빌드 로그 확인 후 다시 배포(이 상태로 '완료' 보고 금지).")
+    return (f"배포 진행 중(**실패 아님** — 빌드가 폴링 창보다 길어졌을 뿐): {url} — Render가 빌드를 마치면 "
+            f"**자동으로 라이브**됩니다(보통 1~3분 더). **수동 배포하지 마세요**(이미 트리거됨). 1~3분 뒤 이 "
+            f"URL을 다시 확인하면 200을 받습니다. 이걸 '실패/미완/수동배포 필요'로 보고하지 말고 **'배포 트리거 "
+            f"완료 — 곧 라이브'**로 보고하세요(status={status}).")
+
+
 def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="singapore"):
     """workspace를 name repo로 push하고 Render 웹서비스로 배포 → 결과 문자열(라이브 URL 포함)."""
     ws = Path(workspace)
@@ -306,4 +329,5 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
         if status in _TERMINAL_FAIL:
             return f"배포 실패(Render {status}) — 빌드 로그 확인 필요. 예정 URL: {url}"
         time.sleep(6)
-    return f"배포 트리거됨(빌드 진행 중, status={status}): {url} — 1~2분 후 라이브 예상"
+    # 폴링 창이 끝남 — 빌드가 더 길 수 있다(P-020). '실패/미완'으로 오보하지 않게 최종 라이브 확인 후 정확히 보고.
+    return _final_deploy_result(url, workspace, repo_url, status)
