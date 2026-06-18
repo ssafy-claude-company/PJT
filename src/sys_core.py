@@ -1212,8 +1212,8 @@ class Sys:
         """[프로젝트↔봇 결합 해제, 2026-06-15] 프로젝트 리더가 현재 로스터(연결된 봇)에 없으면 — 봇이
         해고·예비환원·미연결된 경우 — 가용 봇으로 자동 재배정해 반환한다. 프로젝트가 특정 봇ID에 종속돼
         깨지지 않게(봇은 자유롭게 넣고 뺄 수 있고, 기존 프로젝트는 유지). 우선순위: 옛 리더와 같은 직군 >
-        게임 기획자 > 아무 직군 보유자. 재배정은 영속(projects.json). 멀티봇 협업 구조엔 영향 없음 — 리더
-        1명만 정하고 팀은 흐름이 현재 로스터에서 다시 꾸린다(복잡한 일=여러 봇 협업은 그대로)."""
+        아무 가용 봇(특정 직군 선호 하드코딩 없음 — 도메인 중립). 재배정은 영속(projects.json). 멀티봇 협업
+        구조엔 영향 없음 — 리더 1명만 정하고 팀은 흐름이 현재 로스터에서 다시 꾸린다(복잡한 일=협업 그대로)."""
         if not proj:
             return None
         lead = proj.get("leader")
@@ -1224,9 +1224,7 @@ class Sys:
         avail = [b for b in self.bot_info if not str(self.bot_info.get(b, "")).startswith("예비")]
         pick = next((b for b in avail if old_role and self.bot_info.get(b) == old_role), None)
         if pick is None:
-            pick = next((b for b in avail if "기획" in str(self.bot_info.get(b, ""))), None)
-        if pick is None:
-            pick = avail[0] if avail else lead
+            pick = avail[0] if avail else lead   # 같은 직군 없으면 아무 가용 봇(특정 직군 선호 하드코딩 제거)
         if pick and pick != lead:
             self._log("project_leader_reassigned", project=proj.get("id"), old=lead, new=pick,
                       reason="리더 봇 부재(해고/미연결) — 프로젝트 유지 위해 재배정")
