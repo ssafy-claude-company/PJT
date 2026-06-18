@@ -24,6 +24,16 @@ fi
   && echo "[playwright] chromium 검증 인프라 준비됨" >> logs/setup_chromium.log \
   || echo "[playwright] ⚠ chromium 설치/검증 실패 — 비전검증 불가" >> logs/setup_chromium.log ) &
 
-# 3) Organt 리스너 자동 기동은 '비활성화'됨(차용 세션 자격증명으로 상시 가동하지 않음 — 수동 실행).
-#    리스너가 필요하면 .env(비밀값)를 갖춘 상태에서 수동으로 `bash scripts/run_listener.sh`를 실행한다.
-echo "[session-start] 의존성 보장(설치 로그: logs/setup_*.log). 리스너 자동 기동은 비활성화됨."
+# 3) Organt 리스너 자동 기동(임시 ON — 사용자 요청 '하트비트', 2026-06-18): 세션 시작/해동마다
+#    감독자(supervisor.sh)를 띄워 리스너가 죽어 있으면 되살린다 → 컨테이너 동면/세션 재시작으로
+#    멈춰도 다음 세션 활동에 자동 복구(수동 재시작 불필요). 감독자·리스너는 각자 flock으로 단일
+#    인스턴스를 보장하므로 중복 기동은 구조적으로 거부된다(idempotent). .env(비밀)가 있어야 워커가 붙는다.
+#    [임시] 차용 세션 자격증명으로 상시 가동하는 형태라, 외부 환경 이전 시 이 블록을 되돌린다.
+if [ -f .env ] && ! pgrep -f "scripts/supervisor.sh" >/dev/null 2>&1; then
+  setsid nohup bash scripts/supervisor.sh >> logs/supervisor.log 2>&1 < /dev/null &
+  echo "[session-start] 의존성 보장 + Organt 감독자 자동 기동(하트비트 임시 ON) — 리스너 자동 복구."
+elif [ ! -f .env ]; then
+  echo "[session-start] 의존성 보장. .env 없음 — 리스너 자동 기동 건너뜀."
+else
+  echo "[session-start] 의존성 보장. Organt 감독자 이미 가동 중(하트비트 ON)."
+fi
