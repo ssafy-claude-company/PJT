@@ -3879,3 +3879,54 @@ def test_등록레지스트리_참조서비스명_추출(tmp_path):
                  '"3":{"summary":""}}}')
     keep = deploy._referenced_services(str(p))
     assert keep == {"organt-p-016", "organt-cell-grow-online"}
+
+
+def test_set_goal_경합도메인_점유전문가는_예비충원으로_대체():
+    """[경합 해소 — 라이브 P-019] 어떤 도메인의 *유일* 전문가가 타 흐름 점유로 도달 불가하면, 침묵
+    면제(현행)가 아니라 가용 '예비'를 그 직군으로 충원해 '가용 전문가'를 둔다 — 점유로 빈 도메인을
+    타 직군이 가짜로 채우는 것 차단(P-019: AI 엔지니어가 P-013 점유 → 백엔드가 임계값 룩업을 'AI'로).
+    충원된 전문가는 합의에 참여해야 하므로 set_goal은 보류하고 그와 회의하도록 유도(예비 없으면 면제 폴백)."""
+    from src.communication import Engagement
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드", 13: "AI 엔지니어", 14: "예비"})
+    f.start_root("root")
+    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True; f.decomp_checked = True
+    eng = Engagement()
+    f.comm.attach_engagement(eng, scope="P-THIS")
+    logged = []
+    f.log = lambda ev, **kw: logged.append((ev, kw))
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "AI 서비스", "members": "12,13"}))
+    eng.engage(13, "P-OTHER")                           # 유일 AI 엔지니어(13)가 타 흐름 점유 — 도달 불가
+    f.current.participated.add(12)                        # 백엔드(12)는 협의 완료
+    r = asyncio.run(t["set_goal"].handler({"goal": "AI Q&A"}))
+    # 침묵 면제 대신 예비(14)를 'AI 엔지니어'로 충원해 가용 전문가를 둠
+    assert f.bot_info[14] == "AI 엔지니어" and 14 in f.current.team and 14 in f.project_team
+    assert 14 in f.tentative_roles                       # 영속은 첫 실작업까지 이연(양산 차단)
+    assert any(ev == "set_goal_provisioned_specialist" and kw.get("bot") == 14 for ev, kw in logged)
+    # 충원된 전문가는 합의 필요 → 보류(거부)·goal 미확정, 그와 회의 후 재호출
+    assert "거부" in r["content"][0]["text"] and "충원" in r["content"][0]["text"] and not f.current.status.goal
+
+
+def test_set_goal_경합도메인_예비없으면_현행대로_면제():
+    """충원할 예비가 없으면 경합 도메인은 현행대로 면제하고 진행한다(교착 차단 — 폴백 보존)."""
+    from src.communication import Engagement
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드", 13: "AI 엔지니어"})   # 예비 없음
+    f.start_root("root")
+    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True; f.decomp_checked = True
+    eng = Engagement()
+    f.comm.attach_engagement(eng, scope="P-THIS")
+    logged = []; f.log = lambda ev, **kw: logged.append((ev, kw))
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "AI 서비스", "members": "12,13"}))
+    eng.engage(13, "P-OTHER")
+    f.current.participated.add(12)
+    r = asyncio.run(t["set_goal"].handler({"goal": "AI Q&A"}))
+    assert f.current.status.goal == "AI Q&A"             # 예비 없음 → 면제·진행(교착 차단)
+    assert not any(ev == "set_goal_provisioned_specialist" for ev, kw in logged)
+    assert any(ev == "set_goal_consensus_coverage" and "ai 엔지니어" in kw.get("uncovered_busy", []) for ev, kw in logged)

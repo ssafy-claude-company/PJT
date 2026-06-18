@@ -445,6 +445,34 @@ async def _add_members(g, thread_id, member_ids):
         await fn(thread_id, member_ids)
 
 
+async def _provision_specialist(flow, role_label: str):
+    """[경합 해소 — 라이브 P-019 규명] 어떤 도메인의 *유일* 전문가(들)가 전부 타 흐름에 점유돼
+    도달 불가할 때, 가용 '예비'를 그 직군으로 충원해 이 흐름에 *가용 전문가*를 둔다 — 침묵 면제로
+    그 도메인이 비거나 *다른 직군이 가짜로 채우는 것*(P-019: AI 엔지니어가 P-013에 점유 → 백엔드가
+    임계값 룩업을 'AI'라 부름)을 차단한다. 예비가 없으면 None(현행 면제로 폴백 — 교착 없음). 직업
+    영속은 첫 실작업까지 이연(0-기억 직군 양산 차단). 리더가 인지→행동(recruit) 전환을 빼먹는 빈틈을
+    SYS가 직접 메우는 _auto_delegate_owner와 같은 정신(소프트 넛지는 라이브에서 전환이 끊겼음)."""
+    role_label = (role_label or "").strip()
+    if not role_label or flow.current is None:
+        return None
+    spare = next((m for m in flow.pool if _is_spare(flow, m) and m not in flow.project_team), None)
+    if spare is None:
+        return None
+    flow.bot_info[spare] = role_label
+    flow.tentative_roles[spare] = role_label          # 첫 실작업 전 영속 보류(양산 차단)
+    if spare not in flow.project_team:
+        flow.project_team.append(spare)
+    if spare not in flow.current.team:
+        flow.current.team.append(spare)
+        flow.current.status.group = _group_of(flow, flow.current.team)
+        try:
+            await flow.refresh()
+            await _add_members(flow.guide, flow.current.thread_id, [spare])
+        except Exception:
+            pass
+    return spare
+
+
 def _speech_clip(s, n=1500) -> str:
     """발언 안전망: 폭주만 막고 **침묵 절단하지 않는다** — 잘리면 잘렸다고 표기한다.
     종전의 하드컷([:300]/[:400])은 '3~5줄' 지시를 지킨 발언(한국어 200~400자+)까지 단어
@@ -1255,8 +1283,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     for d in _doms(m):
                         dom_members.setdefault(d, []).append(m)
                 uncov_reach = {}                       # 미커버 직군 → 가용 멤버(합의 필요·가능)
-                uncov_busy = []                        # 미커버 직군 — 멤버 전원 타 흐름 점유(도달 불가)
+                uncov_busy = []                        # 미커버 직군 — 멤버 전원 타 흐름 점유 + 충원 예비도 없음
                 redundant = []                         # 같은 직군 잉여(이미 커버) — 에코, 면제
+                provisioned = []                       # 경합으로 충원한 새 전문가(점유된 유일 전문가 대체)
                 for d, ms in dom_members.items():
                     if any(x in flow.current.participated for x in ms):
                         redundant += [x for x in ms if x not in flow.current.participated]
@@ -1265,16 +1294,32 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     if reach:
                         uncov_reach[d] = reach
                     else:
-                        uncov_busy.append(d)
+                        # [경합 해소] 이 도메인의 유일 전문가(들)가 전부 타 흐름 점유 → *침묵 면제 대신*
+                        # 가용 예비를 이 직군으로 충원해 '가용 전문가'를 둔다(P-019: 점유로 면제된 AI
+                        # 도메인을 백엔드가 가짜로 채움). 충원되면 그 전문가는 합의에 참여해야 함(도메인이
+                        # 실제로 다뤄짐) → uncov_reach. 충원할 예비가 없으면 현행대로 면제(교착 차단).
+                        fresh = await _provision_specialist(flow, flow._info(ms[0]) or "")
+                        if fresh is not None:
+                            uncov_reach[d] = [fresh]
+                            provisioned.append(fresh)
+                            if flow.log:
+                                flow.log("set_goal_provisioned_specialist", task=flow.current.task_id,
+                                         role=flow._info(fresh), bot=int(fresh), domain=d)
+                        else:
+                            uncov_busy.append(d)
                 if uncov_reach:
                     one_each = [r[0] for r in uncov_reach.values()]   # 직군당 1명 예시
-                    tail = (f"\n(타 흐름 점유로 도달 불가한 도메인은 면제: {', '.join(sorted(uncov_busy))})"
+                    prov_note = (f"\n[경합 충원] 유일 전문가가 타 흐름 점유라, 그 도메인을 가짜로 채우지 않도록 "
+                                 f"가용 예비를 충원했습니다: {flow._names(provisioned)} — **점유된 원 전문가를 "
+                                 f"기다리지 말고 이 새 전문가와 회의해** 그 도메인을 실제로 다루세요(이들이 그 "
+                                 f"도메인의 실작업 owner가 됩니다)." if provisioned else "")
+                    tail = (f"\n(타 흐름 점유로 도달 불가하고 충원할 예비도 없는 도메인은 면제: {', '.join(sorted(uncov_busy))})"
                             if uncov_busy else "")
                     return _ok(f"확정 거부: 이 Task의 Purpose·Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
                                f"아직 합의에 참여 안 한 **도메인**: {', '.join(sorted(uncov_reach))} — 각 도메인 "
                                f"**1명만** meet(회의)로 '풀 문제·목표·성공기준'을 정하면 됩니다(같은 직군을 더 부르는 건 "
                                f"*에코*라 불필요 — 잉여는 병렬 실행용). 예: {flow._names(one_each)}. 파일·엔드포인트 "
-                               f"같은 구현 스펙 말고 '측정가능한 결과'로.{tail}")
+                               f"같은 구현 스펙 말고 '측정가능한 결과'로.{prov_note}{tail}")
                 if redundant or uncov_busy:
                     if flow.log:
                         flow.log("set_goal_consensus_coverage", task=flow.current.task_id,
