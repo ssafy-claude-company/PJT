@@ -445,34 +445,6 @@ async def _add_members(g, thread_id, member_ids):
         await fn(thread_id, member_ids)
 
 
-async def _provision_specialist(flow, role_label: str):
-    """[경합 해소 — 라이브 P-019 규명] 어떤 도메인의 *유일* 전문가(들)가 전부 타 흐름에 점유돼
-    도달 불가할 때, 가용 '예비'를 그 직군으로 충원해 이 흐름에 *가용 전문가*를 둔다 — 침묵 면제로
-    그 도메인이 비거나 *다른 직군이 가짜로 채우는 것*(P-019: AI 엔지니어가 P-013에 점유 → 백엔드가
-    임계값 룩업을 'AI'라 부름)을 차단한다. 예비가 없으면 None(현행 면제로 폴백 — 교착 없음). 직업
-    영속은 첫 실작업까지 이연(0-기억 직군 양산 차단). 리더가 인지→행동(recruit) 전환을 빼먹는 빈틈을
-    SYS가 직접 메우는 _auto_delegate_owner와 같은 정신(소프트 넛지는 라이브에서 전환이 끊겼음)."""
-    role_label = (role_label or "").strip()
-    if not role_label or flow.current is None:
-        return None
-    spare = next((m for m in flow.pool if _is_spare(flow, m) and m not in flow.project_team), None)
-    if spare is None:
-        return None
-    flow.bot_info[spare] = role_label
-    flow.tentative_roles[spare] = role_label          # 첫 실작업 전 영속 보류(양산 차단)
-    if spare not in flow.project_team:
-        flow.project_team.append(spare)
-    if spare not in flow.current.team:
-        flow.current.team.append(spare)
-        flow.current.status.group = _group_of(flow, flow.current.team)
-        try:
-            await flow.refresh()
-            await _add_members(flow.guide, flow.current.thread_id, [spare])
-        except Exception:
-            pass
-    return spare
-
-
 def _speech_clip(s, n=1500) -> str:
     """발언 안전망: 폭주만 막고 **침묵 절단하지 않는다** — 잘리면 잘렸다고 표기한다.
     종전의 하드컷([:300]/[:400])은 '3~5줄' 지시를 지킨 발언(한국어 200~400자+)까지 단어
@@ -1283,9 +1255,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     for d in _doms(m):
                         dom_members.setdefault(d, []).append(m)
                 uncov_reach = {}                       # 미커버 직군 → 가용 멤버(합의 필요·가능)
-                uncov_busy = []                        # 미커버 직군 — 멤버 전원 타 흐름 점유 + 충원 예비도 없음
+                uncov_busy = []                        # 미커버 직군 — 대표가 지금 타 흐름 점유(도달 불가)
                 redundant = []                         # 같은 직군 잉여(이미 커버) — 에코, 면제
-                provisioned = []                       # 경합으로 충원한 새 전문가(점유된 유일 전문가 대체)
                 for d, ms in dom_members.items():
                     if any(x in flow.current.participated for x in ms):
                         redundant += [x for x in ms if x not in flow.current.participated]
@@ -1294,32 +1265,35 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     if reach:
                         uncov_reach[d] = reach
                     else:
-                        # [경합 해소] 이 도메인의 유일 전문가(들)가 전부 타 흐름 점유 → *침묵 면제 대신*
-                        # 가용 예비를 이 직군으로 충원해 '가용 전문가'를 둔다(P-019: 점유로 면제된 AI
-                        # 도메인을 백엔드가 가짜로 채움). 충원되면 그 전문가는 합의에 참여해야 함(도메인이
-                        # 실제로 다뤄짐) → uncov_reach. 충원할 예비가 없으면 현행대로 면제(교착 차단).
-                        fresh = await _provision_specialist(flow, flow._info(ms[0]) or "")
-                        if fresh is not None:
-                            uncov_reach[d] = [fresh]
-                            provisioned.append(fresh)
-                            if flow.log:
-                                flow.log("set_goal_provisioned_specialist", task=flow.current.task_id,
-                                         role=flow._info(fresh), bot=int(fresh), domain=d)
-                        else:
-                            uncov_busy.append(d)
+                        uncov_busy.append(d)   # 이 도메인 대표가 전부 타 흐름 점유 — 아래 '점유 도메인'에서 처리
                 if uncov_reach:
                     one_each = [r[0] for r in uncov_reach.values()]   # 직군당 1명 예시
-                    prov_note = (f"\n[경합 충원] 유일 전문가가 타 흐름 점유라, 그 도메인을 가짜로 채우지 않도록 "
-                                 f"가용 예비를 충원했습니다: {flow._names(provisioned)} — **점유된 원 전문가를 "
-                                 f"기다리지 말고 이 새 전문가와 회의해** 그 도메인을 실제로 다루세요(이들이 그 "
-                                 f"도메인의 실작업 owner가 됩니다)." if provisioned else "")
-                    tail = (f"\n(타 흐름 점유로 도달 불가하고 충원할 예비도 없는 도메인은 면제: {', '.join(sorted(uncov_busy))})"
+                    tail = (f"\n(점유 도메인 {', '.join(sorted(uncov_busy))}은 아래 '점유 도메인' 안내를 따르세요)"
                             if uncov_busy else "")
                     return _ok(f"확정 거부: 이 Task의 Purpose·Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
                                f"아직 합의에 참여 안 한 **도메인**: {', '.join(sorted(uncov_reach))} — 각 도메인 "
                                f"**1명만** meet(회의)로 '풀 문제·목표·성공기준'을 정하면 됩니다(같은 직군을 더 부르는 건 "
                                f"*에코*라 불필요 — 잉여는 병렬 실행용). 예: {flow._names(one_each)}. 파일·엔드포인트 "
-                               f"같은 구현 스펙 말고 '측정가능한 결과'로.{prov_note}{tail}")
+                               f"같은 구현 스펙 말고 '측정가능한 결과'로.{tail}")
+                # [점유 도메인 — 대기 우선; 무시(묵살)·대체 증원 금지] 어떤 도메인의 대표가 타 흐름에서 일하는
+                # 중이면, *침묵 면제(의견 묵살)*도 *대체 인력 증원(기억 없는 복제)*도 답이 아니다 — 그 도메인의
+                # 기억을 가진 본인이 제일 낫다(1봇1직업1기억). 점유는 좀비 수정으로 *일시적·유한*이라 곧 풀린다.
+                # 1회 보류로 둘 중 하나를 의식적으로 택하게 한다: ①(권장) 그가 풀리면 합류시켜 마무리(대기),
+                # ② 결론이 그 도메인 없이도 *명확히* 닫혔으면 재호출해 확정하되 그는 실행에서 자기 도메인을
+                # 직접 만든다(타 직군 가짜 대체 금지). 모호하면 ①. 사용자 설계: '정확하면 반출, 모호하면 대기'.
+                if uncov_busy and not getattr(flow, "busy_consensus_held", False):
+                    flow.busy_consensus_held = True
+                    if flow.log:
+                        flow.log("set_goal_busy_consensus_hold", task=flow.current.task_id,
+                                 domains=sorted(uncov_busy))
+                    return _ok(f"확정 보류(점유 도메인 — 1회): 도메인 **{', '.join(sorted(uncov_busy))}**의 대표가 "
+                               f"지금 타 흐름에서 일하는 중입니다. 임시로 바쁘다고 그 도메인을 *무시하거나*, "
+                               f"*대체 인력을 새로 만들지* 마세요 — 그 도메인의 기억을 가진 본인이 제일 낫습니다. "
+                               f"둘 중 하나를 의식적으로 택하세요: **①(권장) 그 전문가가 풀리면 회의에 합류시켜 "
+                               f"마무리** — 점유는 일시적이라 곧 풉니다(그때까지 가용 멤버와 회의를 이어가며 대기). "
+                               f"**② 회의 결론이 그 도메인 없이도 *명확히* 닫혔으면** 그 점이 goal에 드러나게 적고 "
+                               f"재호출해 확정 — 단 그 전문가는 *실행 단계에서 자기 도메인을 직접* 만듭니다(타 직군 "
+                               f"가짜 대체 금지). **결론이 모호하면 ①(대기)이 맞습니다.**")
                 if redundant or uncov_busy:
                     if flow.log:
                         flow.log("set_goal_consensus_coverage", task=flow.current.task_id,
@@ -1327,10 +1301,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     bits = []
                     if redundant:
                         bits.append(f"같은 직군 잉여 {flow._names(redundant)}는 합의 면제(에코 방지) — 이들은 "
-                                    f"**병렬 실행(parallel_work)**에 쓰세요(독립 작업을 갈라 처리량↑ — 같은 직군의 "
-                                    f"유일한 정당한 가치는 합의 인원수가 아니라 병렬 처리량)")
+                                    f"**병렬 실행(parallel_work)**에 쓰세요(같은 직군의 유일한 정당한 가치는 합의 "
+                                    f"인원수가 아니라 병렬 처리량)")
                     if uncov_busy:
-                        bits.append(f"도메인 {', '.join(sorted(uncov_busy))}은 담당이 타 흐름 점유로 도달 불가 → 면제(풀리면 보완)")
+                        bits.append(f"점유 도메인 {', '.join(sorted(uncov_busy))}은 ②(의식적 진행) — 그 전문가가 "
+                                    f"*실행에서 자기 도메인을 직접* 만들어야 합니다(가짜 대체 금지)")
                     excused_note = "\n[합의 커버리지] " + "; ".join(bits) + "."
             # [P7 — 범주적 완성 점검: recognition→action 강제, RFC-010] 확정 전 1회, 장르 예시 대비 '통째로
             # 없는 범주'를 goal에 '구축 대상'으로 반영(없으면 recruit)하거나 불필요 사유를 명시하게 강제한다 —
@@ -1353,35 +1328,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            "대비 *갭*으로 판정 — '돌아가나'가 아니라 '실제 최선만큼인가'. 통째로 빠진 범주는 goal에 '구축 "
                            "대상'으로 넣고(담당 직군 없으면 recruit), 정말 이 작품엔 불필요한 범주면 그 사유를 적고 재호출 "
                            "하세요(판단은 당신 — 하드코딩 없음). 재호출은 통과합니다.")
-            # [분해 점검 — 1회(per-flow), 하이브리드 아키텍처 = 중앙 고수준 분해 + 지역 자율]
-            # 라이브 P-002 114305-1: 6기준·5도메인(서버·VFX·사운드·모션·밸런스) 목표를 Task 1개·게이트 1회로
-            # 마감하려 함 → 부분 결함이 한 게이트에 묻히고(검증 갭), 단일 owner가 5도메인을 떠안아 '전체 품질이
-            # 오케스트레이터 1명의 구조화 지능에 인질'(사용자 명제). 외부 연구도 일치: 중앙집중은 단일 에이전트가
-            # 조율·통합·결정을 다 떠안아 규모↑ 시 과부하 / 검증갭이 다중에이전트 실패의 21% / 권장 팀 3~4명.
-            # 처방(검증된 하이브리드): 중앙은 '고수준 분해'만 하고, 도메인별 Task로 쪼개 각 전문가가 owner로 자기
-            # 도메인을 주도+검증(지역 자율) → 게이트 N개(깊이) + 단일점 지능 병목 제거. 매직넘버 아님 — '독립
-            # 검증 가능한 도메인이 둘 이상'이라는 구조 신호로만 발동, 1회 보류 후 의식적 결정(얽혔으면 사유 쓰고 통과).
-            if not getattr(flow, "decomp_checked", False):
-                _tdoms = set()
-                for _m in [x for x in flow.current.team if x != me_id]:
-                    _tdoms |= {_norm_job(j) for j in _jobs_of(flow._info(_m) or "")} - {""}
-                flow.decomp_checked = True
-                if len(_tdoms) >= 2:
-                    if flow.log:
-                        flow.log("set_goal_decomp_check", task=flow.current.task_id, domains=len(_tdoms))
-                    return _ok(f"확정 보류(분해 점검 — 1회, 확정 전): 이 목표는 **{len(_tdoms)}개 도메인**"
-                               f"({', '.join(sorted(_tdoms))})에 걸쳐 있습니다. 다도메인을 **한 Task에 다 담으면 "
-                               "검증이 1회뿐이라 부분 결함이 묻힙니다**(라이브: 다도메인 목표를 단일 게이트로 마감 → "
-                               "부분 결함; 외부 연구: 검증갭이 다중에이전트 실패의 21%). 독립적으로 구현·검증할 수 있는 "
-                               "도메인이면 **이 Task는 한 도메인으로 좁히고(goal 재작성) 나머지는 create_task로 "
-                               "도메인별 Task를 열어** 각 도메인 전문가를 owner로 두세요 — 각자 자기 도메인을 주도(지역 "
-                               "자율)하고 자기 도메인을 검증(게이트 N개 → 깊이↑). 이게 전체 품질이 **오케스트레이터 "
-                               "1명의 구조화 지능에 인질잡히는 걸 막습니다**(중앙=고수준 분해, 지역=도메인 자율 — 검증된 "
-                               "하이브리드). **분해 시 도메인 간 *인터페이스(데이터 포맷·이벤트 타이밍 등)*를 "
-                               "명시**해 sub-task를 *독립 사일로가 아니라 계약으로 연결*하고(PHASE 1.3), 생산 중엔 "
-                               "그 계약대로 **owner끼리 *직접* 조율**(리더 경유 X — 사일로·병목 방지). 정말 분리 "
-                               "불가하게 얽혔으면(공유 상태·단일 파일) goal에 그 사유를 적고 set_goal을 재호출하세요"
-                               "(의식적 단일 Task — 재호출은 통과, 판단은 당신).")
+            # [단일-Task 깊은 수렴 — 분해 강제 제거(2026-06-18)] 종전엔 다도메인 목표를 '도메인별 Task로
+            # 쪼개라'고 밀었으나(분해 점검 게이트), 라이브 규명: P-002 114305-1의 '한 owner가 5도메인'은
+            # *구조* 문제가 아니라 전문가 8명 idle(참여 문제)이었고, P-016(216 대화·단일 Task)이 보여주듯
+            # 단일 Task가 *이미 다중 검증*(자기검증·QA·교차검증)을 지원한다. 분해는 그 깊은 수렴을 조각냈다
+            # (P-019: AI가 백엔드 서브태스크로 떨어져 가짜로 격하). 그래서 분해 강제를 걷어낸다 — 다도메인은
+            # 한 Task에서 깊게 수렴하고, 검증 깊이는 acceptance·percept·교차검증(아래 마감 게이트)이 책임진다.
             if purpose:
                 flow.current.status.purpose = purpose
             flow.current.status.goal = goal

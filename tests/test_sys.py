@@ -519,16 +519,17 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     assert "거부" in r3["content"][0]["text"]                      # Task별로 다시 합의해야 함
 
 
-def test_set_goal_유화적_타흐름점유멤버는_협의면제_교착차단():
-    """[유화적 전원협의 — 무한 루프 차단] 미참여 멤버가 '지금 타 흐름에 점유(busy_elsewhere)'돼 도달 불가하면
-    set_goal이 그 멤버 협의를 면제하고 진행한다 — 라이브 P-002 114305-1: 프론트 4명 중 1명이 내내 타 프로젝트
-    (P-013)를 리드 중이라 1봇=1흐름 배타로 P-002엔 못 와 협의 33회 거부·200분 교착. 가용 멤버는 전원 협의하되,
-    도달 불가 멤버 때문에 영영 못 막히게(유화적)."""
+def test_set_goal_점유도메인은_면제아니라_1회대기보류_후_의식적진행():
+    """[점유 도메인 — 대기 우선, 묵살·대체 금지] 어떤 도메인의 대표가 타 흐름 점유면, *침묵 면제(의견
+    묵살)*도 *대체 인력 증원(기억 없는 복제)*도 아니라 **1회 보류**해 둘 중 하나를 의식적으로 택하게 한다:
+    ①(권장) 그가 풀리면 합류시켜 마무리(대기 — 좀비 수정으로 점유는 일시적), ② 결론이 그 도메인 없이도
+    명확히 닫혔으면 재호출해 확정하되 그는 실행에서 자기 도메인을 직접 만든다. 재호출 시 통과(hold-once).
+    사용자 설계: '정확하면 반출, 모호하면 대기'. (이전의 '유화적 자동 면제'를 대체.)"""
     from src.communication import Engagement
     g = FakeGuide()
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "프론트엔드"})
     f.start_root("root")
-    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True; f.decomp_checked = True
+    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True
     eng = Engagement()
     f.comm.attach_engagement(eng, scope="P-THIS")
     logged = []
@@ -536,12 +537,15 @@ def test_set_goal_유화적_타흐름점유멤버는_협의면제_교착차단()
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
     asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
-    eng.engage(13, "P-OTHER")                        # 13(프론트)은 내내 다른 흐름 점유 — 도달 불가
+    eng.engage(13, "P-OTHER")                        # 13(프론트)은 다른 흐름 점유 — 지금 도달 불가
     f.current.participated.add(12)                    # 가용한 12는 협의 완료, 13만 미참여(점유)
-    r = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
-    assert f.current.status.goal == "동작"             # 도달 불가 도메인 면제 → 진행(교착 차단)
-    assert "면제" in r["content"][0]["text"]            # 면제 안내
-    assert any(ev == "set_goal_consensus_coverage" and "프론트엔드" in kw.get("uncovered_busy", []) for ev, kw in logged)
+    r1 = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
+    # 면제(즉시 진행) 아님 — 1회 보류로 대기/의식적진행 안내, goal 미확정
+    assert "보류" in r1["content"][0]["text"] and "대기" in r1["content"][0]["text"] and not f.current.status.goal
+    assert any(ev == "set_goal_busy_consensus_hold" and "프론트엔드" in kw.get("domains", []) for ev, kw in logged)
+    # 재호출(의식적 진행) → 통과(hold-once). 점유 전문가는 실행에서 자기 도메인을 직접 만들어야 함.
+    r2 = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
+    assert f.current.status.goal == "동작"
 
 
 def test_set_goal_같은직군_잉여는_합의면제_에코방지():
@@ -588,35 +592,6 @@ def test_set_goal_가용한_미참여멤버는_여전히_협의요구():
     f.current.participated.add(12)                    # 12만 협의, 13은 가용한데 미협의
     r = asyncio.run(t["set_goal"].handler({"goal": "동작"}))
     assert "거부" in r["content"][0]["text"] and not f.current.status.goal   # 13 가용·미협의 → 거부
-
-
-def test_set_goal_분해점검_다도메인_1회보류_단일도메인_스킵():
-    """[하이브리드 — 중앙 고수준 분해 + 지역 자율] 목표가 ≥2 독립 도메인에 걸치면 set_goal이 1회 보류하고
-    '도메인별 Task로 나눠 각 전문가가 owner+검증'을 유도(검증갭·오케스트레이터 단일점 지능 병목 차단 —
-    외부 연구의 hybrid). 단일 도메인은 분해 무의미라 스킵. 매직넘버 아님(도메인 ≥2 구조신호), 1회 보류 후 통과."""
-    g = FakeGuide()
-    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "VFX 전문가"})
-    f.start_root("root")
-    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True   # decomp만 검증(나머지 보류 우회)
-    logged = []; f.log = lambda ev, **kw: logged.append((ev, kw))
-    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
-    asyncio.run(t["create_task"].handler({"purpose": "서버+VFX", "members": "12,13"}))
-    f.current.participated.update({12, 13})
-    r1 = asyncio.run(t["set_goal"].handler({"goal": "스킬 시스템"}))
-    assert "분해 점검" in r1["content"][0]["text"] and not f.current.status.goal   # 2도메인 → 1회 보류
-    assert any(ev == "set_goal_decomp_check" for ev, kw in logged)
-    r2 = asyncio.run(t["set_goal"].handler({"goal": "스킬 시스템"}))               # 재호출
-    assert f.current.status.goal == "스킬 시스템"                                 # 1회뿐 — 통과
-    # 단일 도메인(백엔드×2 = 1도메인)은 보류 없이 통과 — 새 흐름
-    f2 = Flow(g, channel_id=501, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "백엔드"})
-    f2.start_root("r2"); f2.gap_checked = True; f2.percept_checked = True; f2.acceptance_checked = True
-    t2 = {x.name: x for x in make_guide_tools(f2, 11, "leader")}
-    asyncio.run(t2["create_project"].handler({"name": "p2", "team": "12,13"}))
-    asyncio.run(t2["create_task"].handler({"members": "12,13"}))
-    f2.current.participated.update({12, 13})
-    r3 = asyncio.run(t2["set_goal"].handler({"goal": "백엔드만"}))
-    assert f2.current.status.goal == "백엔드만"                                   # 1도메인 → 보류 없이 통과
 
 
 def test_Task팀은_담당자가_동적선정():
@@ -3879,57 +3854,6 @@ def test_등록레지스트리_참조서비스명_추출(tmp_path):
                  '"3":{"summary":""}}}')
     keep = deploy._referenced_services(str(p))
     assert keep == {"organt-p-016", "organt-cell-grow-online"}
-
-
-def test_set_goal_경합도메인_점유전문가는_예비충원으로_대체():
-    """[경합 해소 — 라이브 P-019] 어떤 도메인의 *유일* 전문가가 타 흐름 점유로 도달 불가하면, 침묵
-    면제(현행)가 아니라 가용 '예비'를 그 직군으로 충원해 '가용 전문가'를 둔다 — 점유로 빈 도메인을
-    타 직군이 가짜로 채우는 것 차단(P-019: AI 엔지니어가 P-013 점유 → 백엔드가 임계값 룩업을 'AI'로).
-    충원된 전문가는 합의에 참여해야 하므로 set_goal은 보류하고 그와 회의하도록 유도(예비 없으면 면제 폴백)."""
-    from src.communication import Engagement
-    g = FakeGuide()
-    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
-             bot_info={11: "L", 12: "백엔드", 13: "AI 엔지니어", 14: "예비"})
-    f.start_root("root")
-    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True; f.decomp_checked = True
-    eng = Engagement()
-    f.comm.attach_engagement(eng, scope="P-THIS")
-    logged = []
-    f.log = lambda ev, **kw: logged.append((ev, kw))
-    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
-    asyncio.run(t["create_task"].handler({"purpose": "AI 서비스", "members": "12,13"}))
-    eng.engage(13, "P-OTHER")                           # 유일 AI 엔지니어(13)가 타 흐름 점유 — 도달 불가
-    f.current.participated.add(12)                        # 백엔드(12)는 협의 완료
-    r = asyncio.run(t["set_goal"].handler({"goal": "AI Q&A"}))
-    # 침묵 면제 대신 예비(14)를 'AI 엔지니어'로 충원해 가용 전문가를 둠
-    assert f.bot_info[14] == "AI 엔지니어" and 14 in f.current.team and 14 in f.project_team
-    assert 14 in f.tentative_roles                       # 영속은 첫 실작업까지 이연(양산 차단)
-    assert any(ev == "set_goal_provisioned_specialist" and kw.get("bot") == 14 for ev, kw in logged)
-    # 충원된 전문가는 합의 필요 → 보류(거부)·goal 미확정, 그와 회의 후 재호출
-    assert "거부" in r["content"][0]["text"] and "충원" in r["content"][0]["text"] and not f.current.status.goal
-
-
-def test_set_goal_경합도메인_예비없으면_현행대로_면제():
-    """충원할 예비가 없으면 경합 도메인은 현행대로 면제하고 진행한다(교착 차단 — 폴백 보존)."""
-    from src.communication import Engagement
-    g = FakeGuide()
-    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
-             bot_info={11: "L", 12: "백엔드", 13: "AI 엔지니어"})   # 예비 없음
-    f.start_root("root")
-    f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True; f.decomp_checked = True
-    eng = Engagement()
-    f.comm.attach_engagement(eng, scope="P-THIS")
-    logged = []; f.log = lambda ev, **kw: logged.append((ev, kw))
-    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
-    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
-    asyncio.run(t["create_task"].handler({"purpose": "AI 서비스", "members": "12,13"}))
-    eng.engage(13, "P-OTHER")
-    f.current.participated.add(12)
-    r = asyncio.run(t["set_goal"].handler({"goal": "AI Q&A"}))
-    assert f.current.status.goal == "AI Q&A"             # 예비 없음 → 면제·진행(교착 차단)
-    assert not any(ev == "set_goal_provisioned_specialist" for ev, kw in logged)
-    assert any(ev == "set_goal_consensus_coverage" and "ai 엔지니어" in kw.get("uncovered_busy", []) for ev, kw in logged)
 
 
 def test_좀비부활차단_사용자활동시_recovery_attempted_재무장():
