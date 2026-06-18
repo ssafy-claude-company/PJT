@@ -1122,6 +1122,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             if flow.project_channel is not None:
                 return _ok(f"이미 project_channel={flow.project_channel} (project_id={flow.project_id}) — "
                            f"개입 중이면 create_project 말고 바로 작업하세요.")
+            # [방어] 봇이 이름 앞에 'P-번호'를 끼워넣으면 떼어낸다 — 식별번호는 시스템(register_project)이
+            # 자동 부여하는데, 포트폴리오 목록의 'P-NNN' 표기를 흉내 내 이름에 번호를 박으면 채널 이름이
+            # 'P-021 …'이 되고 작업공간 폴더가 'p-021-p-021-…'로 번호가 중복된다. 번호는 시스템 몫이다.
+            _raw = str(args.get("name") or "").strip()
+            _clean = re.sub(r"^\s*[Pp]-\d+[\s:·\-–—.]*", "", _raw).strip()
+            args["name"] = _clean or _raw
             flow.project_channel = await g.create_project_channel(flow.guild_id, args["name"])
             # [작업공간 격리·신원] 폴더는 여기서 깎지 않는다 — 흐름은 시작부터 고유 임시 폴더(new-…)에서
             # 일했고, 아래 register_project가 그 폴더를 **식별번호 이름(p-00n-슬러그)으로 개명**해

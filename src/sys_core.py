@@ -397,6 +397,9 @@ class Sys:
             if not (cur.startswith("new-") and os.path.isdir(ws)):
                 return str(workspace)
             slug = re.sub(r"[^0-9a-z가-힣-]+", "-", str(name or "").lower()).strip("-")[:32]
+            pidl = pid.lower()
+            if slug == pidl or slug.startswith(pidl + "-"):   # 이름에 식별번호가 새도 'p-021-p-021' 중복 접두 방지
+                slug = slug[len(pidl):].strip("-")
             tgt = os.path.join(parent, f"{pid.lower()}{('-' + slug) if slug else ''}")
             if tgt != ws and not os.path.exists(tgt):
                 os.replace(ws, tgt)
@@ -652,14 +655,18 @@ class Sys:
             gist = (p.get("summary") or p.get("purpose") or "").strip().replace("\n", " ")
             if len(gist) > 70:
                 gist = gist[:70].rstrip() + "…"
-            rows.append((pid, f"- {pid} {name}".rstrip() + (f" — {gist}" if gist else "")))
+            # 이름을 앞에, 식별번호는 괄호로 뒤에 — 'P-NNN 이름' 표기를 봇이 새 프로젝트 이름으로
+            # 흉내 내(번호를 이름에 박아) 채널·폴더에 번호가 중복되던 것 방지(번호는 시스템 몫).
+            label = f"{name} ({pid})" if name else pid
+            rows.append((pid, f"- {label}" + (f" — {gist}" if gist else "")))
         if not rows:
             return ""                              # 아직 만든 게 없으면 주입 안 함(하위호환·노이즈 0)
         rows.sort(key=lambda t: t[0])              # P-001, P-002 … 안정 정렬
         shown = [ln for _, ln in rows[-16:]]       # 길어지면 최근 것 위주(프롬프트 비대 방지)
         return (
             "[회사가 지금까지 만든 것 — 사실 목록(추측·환각 금지)] 아래는 우리 회사가 실제로 진행/배포한 "
-            "프로젝트입니다. 요청이 '안 쓰던 분야로/새롭게/지금까지와 다른' 같은 신규성을 요구하면 "
+            "프로젝트입니다(괄호 안 P-번호는 **시스템이 자동 부여하는 식별자** — 새 프로젝트 이름엔 번호를 "
+            "넣지 마세요). 요청이 '안 쓰던 분야로/새롭게/지금까지와 다른' 같은 신규성을 요구하면 "
             "**이 목록에 없는 도메인**을 고르세요(데이터 출처만 바꿔 같은 분야를 반복하는 건 신규가 "
             "아닙니다). 반대로 기존 작품을 발전·수정하라는 요청이면 그 P-번호 채널에서 이어가세요. "
             "목록에 없는 걸 '이미 했다'고 짐작하지 마세요 — 여기 적힌 것만이 사실입니다:\n"

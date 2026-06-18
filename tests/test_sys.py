@@ -912,6 +912,43 @@ def test_프로젝트_등록과_채널개입_라우팅(tmp_path):
     assert _os.path.basename(nw).startswith("new-") and _os.path.dirname(nw) == base
 
 
+def test_create_project_이름의_식별번호접두_제거(tmp_path):
+    """[회귀 — 라이브 P-021] 봇이 포트폴리오의 'P-NNN' 표기를 흉내 내 이름에 번호를 박으면
+    (name='P-021 아파트…') 채널 이름이 'P-021 …'이 되고 작업공간이 'p-021-p-021-…'로 번호가
+    중복됐다. create_project가 앞의 'P-번호'를 떼고(번호는 시스템이 부여), _idify_workspace도 중복
+    접두를 막아 봇이 고른 진짜 이름만 남는다."""
+    import os as _os
+    base = str(tmp_path)
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "M"}, workspace=base)
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "M"})
+    f.workspace = _os.path.join(base, "new-1")
+    _os.makedirs(f.workspace)
+
+    def _reg(ch, name):
+        pid = s._register_project(ch, name, f.workspace, f.leader)
+        f.workspace = s.projects[int(ch)]["workspace"]
+        return pid
+    f.register_project = _reg
+    f.start_root("root")
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "P-021 아파트 실거래가 AI 예측 웹서비스", "team": "12"}))
+    # 채널은 번호 뗀 '봇이 고른 진짜 이름'으로 생성
+    ch_names = [c[1] for c in g.calls if c[0] == "create_channel"]
+    assert ch_names and ch_names[-1] == "아파트 실거래가 AI 예측 웹서비스"
+    assert not ch_names[-1].lower().startswith("p-021")
+    # 작업공간 폴더에 식별번호가 한 번만(중복 'p-0NN-p-0NN' 없음)
+    pid = s.projects[9001]["id"]
+    ws = s.projects[9001]["workspace"]
+    assert ws.endswith(f"{pid.lower()}-아파트-실거래가-ai-예측-웹서비스")
+    assert ws.count(pid.lower()) == 1
+    # _idify_workspace 자체도 이름에 번호가 새는 경우 중복 접두를 막는다(방어 2선)
+    nd = _os.path.join(base, "new-dup")
+    _os.makedirs(nd)
+    out = s._idify_workspace(nd, "P-007", "P-007 무언가")
+    assert _os.path.basename(out) == "p-007-무언가" and "p-007-p-007" not in out
+
+
 def test_프로젝트_레지스트리_영속과_중복방지(tmp_path):
     """레지스트리를 디스크에 영속 → 프로세스가 끝나도 '원래 프로젝트'에 개입 가능. 같은 이름은 재사용."""
     p = str(tmp_path / "projects.json")
