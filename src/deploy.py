@@ -169,6 +169,24 @@ def _list_render_services(render_key) -> list:
     return out
 
 
+def _billing_suspended(render_key) -> bool:
+    """Render 계정의 무료 서비스가 'billing'으로 정지됐는지 — 무료 월 인스턴스시간(750h, 전 무료 서비스
+    공유)이 소진되면 Render가 전 서비스를 정지하고 신규 무료 서비스 생성도 막는다(라이브 P-021 관측:
+    suspended=12 전원 suspenders=['billing'], 신규 POST /services 실패). 이건 재시도나 슬롯 정리(서비스
+    '수')로 풀리지 않는 '비-일시' 차단(월 리셋·유료 전환·서비스 축소가 필요)이라, 무한 재시도 대신
+    사용자에게 보고해야 한다."""
+    st, data = _http("GET", f"{RENDER_API}/services?limit=100", render_key)
+    if st != 200 or not isinstance(data, list) or not data:
+        return False
+    susp = 0
+    for item in data:
+        s = item.get("service", item)
+        sl = s.get("suspenders") or []
+        if s.get("suspended") == "suspended" and any("billing" in str(x).lower() for x in sl):
+            susp += 1
+    return susp >= max(2, len(data) // 2)   # 절반 이상 billing 정지 = 계정 차원 차단
+
+
 def _free_slots(render_key, keep, want_free=2, cap=25) -> list:
     """[풀 자가관리 — 한도로 인한 작업 멈춤 차단] 무료 티어는 서비스 개수 상한(cap)이 있어, 풀이
     차면 신규 배포가 막혀 작업이 통째로 멈춘다(라이브 P-019: '한도 초과 → 사용자 보고로 마감').
@@ -291,6 +309,16 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
                 if _free_slots(render_key, keep, want_free=3):
                     st, resp = _http("POST", f"{RENDER_API}/services", render_key, payload)
             if st != 201:
+                # [비-일시 차단 식별 — 무한 재시도 차단] 계정의 무료 서비스가 'billing'으로 모두 정지된
+                # 상태(무료 월 시간 소진)면 재시도·슬롯정리로 안 풀린다. '잠시 후 재시도' 대신 '재시도
+                # 무의미·사용자 보고'로 정확히 안내해 13회 헛도는 루프(라이브 P-021)를 끊는다.
+                if _billing_suspended(render_key):
+                    return ("배포 불가(Render 무료 플랜 billing 정지 — 재시도 무의미): 계정의 무료 서비스가 모두 "
+                            "'billing'으로 정지됐습니다. Render 무료 월 인스턴스시간(전 무료 서비스 공유, 750h)이 "
+                            "소진된 상태로, **deploy를 다시 불러도·슬롯을 정리해도 풀리지 않습니다**(월 리셋 또는 "
+                            "유료 전환·무료 서비스 축소가 필요). **deploy를 반복 호출하지 말고 이 사실을 사용자에게 "
+                            "보고**하세요 — 빌드·검증 결과는 유효하니 산출물 결함이 아니라 '배포 보류(플랫폼 billing "
+                            "정지)'로 보고하면 됩니다. 기존 배포 링크들도 같은 이유로 현재 모두 정지(503) 상태입니다.")
                 return (f"배포 실패(Render 서비스 생성): HTTP {st} {json.dumps(resp)[:160]} — 이건 산출물 결함이 "
                         "아니라 배포 플랫폼의 용량/네트워크 문제입니다. **다른 플랫폼(Vercel·Railway·Fly 등)은 "
                         "설정돼 있지 않으니 시도하지 마세요 — 구성된 배포 대상은 Render 하나뿐입니다.** 빌드·검증 "

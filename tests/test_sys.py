@@ -3961,6 +3961,23 @@ def test_배포풀_슬롯충분하면_정리안함(monkeypatch):
     assert gone == [] and deleted == []
 
 
+def test_billing정지_감지로_무한재시도_차단(monkeypatch):
+    """[라이브 P-021] 계정의 무료 서비스가 'billing'으로 모두 정지되면(무료 월 시간 소진) 신규 배포는
+    재시도·슬롯정리로 안 풀린다 — _billing_suspended가 이를 감지해 deploy가 '잠시 후 재시도' 대신
+    '재시도 무의미·사용자 보고'로 안내하게 한다(13회 헛도는 루프 차단)."""
+    from src import deploy
+    susp = [{"service": {"id": f"s{i}", "name": f"svc-{i}", "suspended": "suspended",
+                         "suspenders": ["billing"]}} for i in range(12)]
+    monkeypatch.setattr(deploy, "_http", lambda m, u, t, *a, **k: (200, susp))
+    assert deploy._billing_suspended("rk") is True            # 전원 billing 정지 → True
+    live = [{"service": {"id": f"s{i}", "name": f"svc-{i}", "suspended": "not_suspended",
+                         "suspenders": []}} for i in range(12)]
+    monkeypatch.setattr(deploy, "_http", lambda m, u, t, *a, **k: (200, live))
+    assert deploy._billing_suspended("rk") is False           # 정상 → False
+    monkeypatch.setattr(deploy, "_http", lambda m, u, t, *a, **k: (500, {}))
+    assert deploy._billing_suspended("rk") is False           # 조회 실패 → 보수적 False(차단 오작동 방지)
+
+
 def test_등록레지스트리_참조서비스명_추출(tmp_path):
     """keep-set = projects.json이 아직 참조하는 onrender 서비스명(남아있는 채널의 링크)."""
     from src import deploy
