@@ -999,9 +999,10 @@ class Sys:
         명의의 표준 request 파이프라인(베턴·게이트·기록·Discord 게시 동일)을 그대로 쓴다. 완성되면
         (owner_incomplete 해제) 결과 요약을 돌려줘 리더가 '판정'(검증·마감)만 하게 한다."""
         out = []
-        n = int(os.environ.get("ORGANT_AUTO_CONTINUE", "24")) if limit is None else limit
-        # 캡의 의미(활동 기반 예산과 동일 원칙): 무진행은 아래 break가 즉시 잡으므로, 이 수는
-        # '진행 중인 정당한 긴 사슬'을 자르지 않는 폭주 안전망일 뿐이다(8은 대형 작업을 잘랐음 — P-010).
+        # [활동 기반 — 진행 중인 긴 작업은 안 자름] n은 폭주 절대 안전망일 뿐(종전 24는 *진행 중인 대형
+        # 작업*을 잘랐음 — P-010류, 목표=최대 품질과 모순). 무진행이면 아래 break가 즉시 잡으므로, 이 수는
+        # '진행 중인 정당한 사슬'을 자르지 않는 넉넉한 한도로 둔다.
+        n = int(os.environ.get("ORGANT_AUTO_CONTINUE", "100")) if limit is None else limit
         body = ("[SYS 자동 이어가기 — 처음부터 다시 하지 말 것] 직전 작업이 도중에 끊겼습니다. "
                 "작업공간을 확인해 이미 된 부분은 그대로 두고, 남은 부분만 마저 끝내 완성하세요.")
         while n > 0:
