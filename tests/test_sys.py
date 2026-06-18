@@ -3815,3 +3815,67 @@ def test_리더독식_Task도_교차검증_의무(tmp_path):
     f.act_by[13] = 1                                    # 검증자(13)가 실제로 run 검증함(기여 게이트 통과)
     r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
     assert f.current is None                            # 검증 후 마감 통과
+
+
+# ── 배포 풀 자가관리 (무료 티어 한도로 인한 작업 멈춤 차단) ────────────────────────
+def test_배포풀_자가정리_고아만_오래된순_삭제_참조링크_보존(monkeypatch):
+    """한도 임박 시 '현 채널이 참조하지 않는 고아'만 오래된 순으로 삭제해 슬롯을 확보하고,
+    keep-set(참조 중 링크)은 절대 건드리지 않는다. (라이브 P-019: 풀이 차서 배포가 멈춤)"""
+    from src import deploy
+    svcs = []
+    for i in range(3):                                  # 참조 중(keep) — 보존돼야 함
+        svcs.append({"service": {"id": f"keep{i}", "name": f"organt-p-00{i}",
+                                 "serviceDetails": {"url": f"https://organt-p-00{i}.onrender.com"},
+                                 "createdAt": f"2026-06-0{i + 1}"}})
+    for i in range(22):                                 # 고아 — 오래된 것부터 삭제 대상
+        svcs.append({"service": {"id": f"orph{i:02d}", "name": f"old-test-{i:02d}",
+                                 "serviceDetails": {"url": f"https://old-test-{i:02d}.onrender.com"},
+                                 "createdAt": f"2026-05-{i + 1:02d}"}})
+    deleted_ids = []
+
+    def fake_http(method, url, token, *a, **k):
+        if method == "GET" and "/services?" in url:
+            return 200, svcs
+        if method == "DELETE":
+            deleted_ids.append(url.rsplit("/", 1)[-1])
+            return 204, {}
+        return 200, {}
+
+    monkeypatch.setattr(deploy, "_http", fake_http)
+    keep = {"organt-p-000", "organt-p-001", "organt-p-002"}
+    gone = deploy._free_slots("rk", keep, want_free=2, cap=25)   # 25/25 → free=0 → 고아 2개 확보
+    assert len(gone) == 2 and all(g.startswith("old-test-") for g in gone)
+    assert "old-test-00" in gone and "old-test-01" in gone        # 가장 오래된 두 고아
+    assert not any(d.startswith("keep") for d in deleted_ids)     # keep-set은 절대 삭제 안 함
+
+
+def test_배포풀_슬롯충분하면_정리안함(monkeypatch):
+    """슬롯이 남으면(한도 미임박) 아무것도 삭제하지 않는다 — 보수적 자가관리."""
+    from src import deploy
+    svcs = [{"service": {"id": f"s{i}", "name": f"svc-{i}",
+                         "serviceDetails": {"url": f"https://svc-{i}.onrender.com"},
+                         "createdAt": "2026-06-01"}} for i in range(10)]
+    deleted = []
+
+    def fake_http(method, url, token, *a, **k):
+        if method == "GET":
+            return 200, svcs
+        if method == "DELETE":
+            deleted.append(url)
+            return 204, {}
+        return 200, {}
+
+    monkeypatch.setattr(deploy, "_http", fake_http)
+    gone = deploy._free_slots("rk", set(), want_free=2, cap=25)   # 10/25 → 슬롯 충분
+    assert gone == [] and deleted == []
+
+
+def test_등록레지스트리_참조서비스명_추출(tmp_path):
+    """keep-set = projects.json이 아직 참조하는 onrender 서비스명(남아있는 채널의 링크)."""
+    from src import deploy
+    p = tmp_path / "projects.json"
+    p.write_text('{"projects":{"1":{"summary":"라이브: https://organt-p-016.onrender.com 확인"},'
+                 '"2":{"summary":"https://organt-cell-grow-online.onrender.com 배포완료"},'
+                 '"3":{"summary":""}}}')
+    keep = deploy._referenced_services(str(p))
+    assert keep == {"organt-p-016", "organt-cell-grow-online"}
