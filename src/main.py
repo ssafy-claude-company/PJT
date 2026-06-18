@@ -129,6 +129,15 @@ def projects_to_resume(projects: dict, already_channels: set, main_channel) -> l
         except (TypeError, ValueError):
             continue
         if isinstance(p, dict) and p.get("open_task"):
+            # [좀비 부활 차단 — 라이브 P-019] 부팅마다 *모든* 미완 프로젝트를 되살리면, 사용자가 *돌아오지
+            # 않은* 버려진 프로젝트(P-013: 후속 0건인데 미완 Task 존재)가 매 동면해동마다 되살아나 공유
+            # 전문가(유일 AI 엔지니어)를 점유 → 정작 사용자가 지금 낸 요청(P-019)을 굶긴다('하나만 돌렸는데
+            # 막힘'의 정체). '같은 미완 Task를 이미 한 번 자동 재개했는데 그 뒤로도 미완이면' 더는 자동
+            # 재개하지 않는다 — 상태는 보존(체크포인트)되므로 사용자가 그 채널로 돌아오면 그때 재개된다.
+            # 사용자가 그 프로젝트에 활동하면(피드백) recovery_attempted가 해제돼 다시 자동 재개 대상이
+            # 된다(능동 반복 작업은 안 막고, 버려진 좀비만 멈춤 — 시간 임계값·우선순위 없음, 활동 신호로만).
+            if p.get("recovery_attempted") == (p.get("open_task") or {}).get("task_id"):
+                continue
             out.append(p)
     return out
 
@@ -499,6 +508,10 @@ async def run() -> None:
                 from_id=system_client.user.id,
                 message_id="recover-open-%s" % (p.get("id") or p["channel"]))))
             log.info("부팅 복구: %s 미완 Task(open_task) 존재 → 프로젝트 채널 개입으로 이어가기", p.get("id"))
+            # 이 미완 Task는 '자동 1회 재개됨'으로 표시 — 사용자 활동(피드백) 전엔 다음 부팅에서 재부활
+            # 안 함(버려진 좀비가 공유 전문가를 영구 점유해 활성 요청을 굶기는 것 차단). 활동 시 해제.
+            p["recovery_attempted"] = (p.get("open_task") or {}).get("task_id")
+            sysm._save_projects()
     if pendings:
         async def _recover_all():
             for ch, req in pendings:

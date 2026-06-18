@@ -3930,3 +3930,15 @@ def test_set_goal_경합도메인_예비없으면_현행대로_면제():
     assert f.current.status.goal == "AI Q&A"             # 예비 없음 → 면제·진행(교착 차단)
     assert not any(ev == "set_goal_provisioned_specialist" for ev, kw in logged)
     assert any(ev == "set_goal_consensus_coverage" and "ai 엔지니어" in kw.get("uncovered_busy", []) for ev, kw in logged)
+
+
+def test_좀비부활차단_사용자활동시_recovery_attempted_재무장():
+    """사용자가 그 프로젝트로 돌아오면(피드백) recovery_attempted가 해제돼 다음 부팅에서 다시 자동 재개
+    대상이 된다 — 능동 반복 작업(이어서 해)은 계속 이어가고, 사용자가 버린 채로만 자동 재개가 멈춘다."""
+    from types import SimpleNamespace
+    stub = SimpleNamespace(
+        projects={500: {"id": "P-013", "open_task": {"task_id": "022539-1"},
+                        "recovery_attempted": "022539-1", "feedback": []}},
+        _save_projects=lambda: None)
+    Sys.record_user_feedback(stub, 500, "이어서 해")
+    assert "recovery_attempted" not in stub.projects[500]             # 사용자 활동 → 해제(재무장)

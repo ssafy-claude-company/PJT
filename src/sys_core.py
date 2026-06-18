@@ -1198,6 +1198,9 @@ class Sys:
         p = self.projects.get(int(channel_id))
         if p is None:
             return
+        # [좀비 부활 재무장] 사용자가 이 프로젝트로 돌아왔다 → '자동 1회 재개됨' 표시를 해제해 다음
+        # 부팅에서 다시 자동 재개 대상이 되게 한다(능동 반복 작업은 계속 이어가고, 버려진 채로만 멈춤).
+        p.pop("recovery_attempted", None)
         fb = p.setdefault("feedback", [])
         if fb and fb[-1].get("text") == text:   # 복구 재발사·중복 전송 가드(연속 동일 무시)
             return

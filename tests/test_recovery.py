@@ -73,3 +73,20 @@ def test_복구_이어가기_본문은_조기완료_새Task_금지_명시():
     assert "이어가기" in out and "새 Task" in out      # 새 Task 금지·이어가기 명시
     assert "complete" in out.lower()                   # 조기 complete 금지
     assert resume_continue_body("") and resume_continue_body(None)   # 빈/None에도 안전(크래시 없음)
+
+
+def test_좀비부활차단_자동1회재개후_사용자무활동이면_재부활_안함():
+    """[좀비 부활 차단 — 라이브 P-019] 사용자가 돌아오지 않은(후속 0) 미완 프로젝트가 매 동면해동마다
+    되살아나 공유 전문가(유일 AI 엔지니어)를 점유해 *활성 요청을 굶기던* 것 차단('P-19 하나만 돌렸는데
+    P-13에 막힘'의 정체 = P-013 좀비 부활). 같은 미완 Task를 이미 한 번 자동 재개했으면
+    (recovery_attempted==task_id) 자동 재개에서 제외 — 단 새 Task(task_id 다름)는 정상 재개(좀비 아님)."""
+    from src.main import projects_to_resume
+    projects = {
+        500: {"id": "P-013", "channel": 500, "leader": 12, "open_task": {"task_id": "022539-1"},
+              "recovery_attempted": "022539-1"},                      # 1회 자동재개+무활동 → 좀비, 제외
+        501: {"id": "P-019", "channel": 501, "leader": 13, "open_task": {"task_id": "165413-1"}},  # 미시도 → 재개
+        502: {"id": "P-020", "channel": 502, "leader": 14, "open_task": {"task_id": "NEW-2"},
+              "recovery_attempted": "OLD-1"},                          # 새 Task(다른 id) → 재개(좀비 아님)
+    }
+    out = {p["id"] for p in projects_to_resume(projects, already_channels=set(), main_channel=700)}
+    assert out == {"P-019", "P-020"}                                  # P-013(좀비)만 제외
