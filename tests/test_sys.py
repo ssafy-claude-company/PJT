@@ -1,7 +1,8 @@
 """재구현 검증(P2P 모델): Guide 도구 + 베턴 wake + 단일흐름."""
 import asyncio
 
-from src.guide_tools import Flow, make_guide_tools
+from src.guide_tools import (Flow, make_guide_tools, _wants_real_data,
+                             _synthesizes_data, _has_real_dataset)
 from src.protocol import Kind
 from src.sys_core import Sys
 
@@ -43,6 +44,7 @@ def _flow(g, leader=11):
     f.acceptance_checked = True  # 수용 계약 마감 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     f.authorship_checked = True  # 저작 다양성 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     f.decomp_checked = True  # 분해 점검 보류도 기본 우회(전용 테스트만 False로 검증)
+    f.data_prov_checked = True  # 데이터 출처 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     return f
 
 
@@ -947,6 +949,61 @@ def test_create_project_이름의_식별번호접두_제거(tmp_path):
     _os.makedirs(nd)
     out = s._idify_workspace(nd, "P-007", "P-007 무언가")
     assert _os.path.basename(out) == "p-007-무언가" and "p-007-p-007" not in out
+
+
+def test_데이터출처_헬퍼_발동조건과_합성탐지(tmp_path):
+    """[라이브 P-021] 데이터 출처 게이트의 판단 로직: 요청이 '실제/공공 데이터 학습'을 요구할 때만 발동하고,
+    학습 코드의 합성/하드코딩 흔적과 '받아온 실데이터 파일' 부재를 본다."""
+    import os as _os
+    assert _wants_real_data("지금까지 안 쓴 공공데이터로 AI 학습시켜줘") is True
+    assert _wants_real_data("국토부 실거래가 예측 모델 만들어줘") is True
+    assert _wants_real_data("스네이크 게임 만들어줘") is False          # 데이터 학습 요청 아님 → 발동 안 함
+    assert _wants_real_data("") is False
+    ws = str(tmp_path / "ws"); _os.makedirs(_os.path.join(ws, "model"))
+    with open(_os.path.join(ws, "model", "train.py"), "w", encoding="utf-8") as fp:
+        fp.write("# 합성 데이터로 학습\nimport numpy as np\ndef generate_price():\n    return 1\n")
+    hit = _synthesizes_data(ws)
+    assert hit is not None and hit[0] == "train.py"               # 합성 흔적 탐지
+    assert _has_real_dataset(ws) is False                        # 실데이터 파일 없음
+    with open(_os.path.join(ws, "seoul_apt.csv"), "w", encoding="utf-8") as fp:
+        fp.write("gu,area,price\n" + "강남,84,150000\n" * 200)   # 받아온 실데이터(>2KB)
+    assert _has_real_dataset(ws) is True                         # 이제 실데이터 증거 있음
+
+
+def test_데이터출처_게이트_합성데이터_마감차단_그리고_명시통과(tmp_path):
+    """[라이브 P-021] '공공데이터로 AI 학습' 요청인데 데이터를 지어내(합성) 학습시키고 마감하려는 것을
+    percept 게이트와 평행하게 1회 보류한다 — result에 '[데이터 출처: …]'로 의식적 명시하면 통과."""
+    import os as _os
+    ws = str(tmp_path / "ws2"); _os.makedirs(_os.path.join(ws, "model"))
+    with open(_os.path.join(ws, "model", "train.py"), "w", encoding="utf-8") as fp:
+        fp.write("# 합성 데이터 생성\nimport numpy as np\ndef generate_data():\n    return []\n")
+    g = FakeGuide()
+    f = _flow(g)
+    f.data_prov_checked = False           # 이 게이트만 켠다(나머지는 _flow가 우회)
+    f.workspace = ws
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12"}))
+    asyncio.run(t["create_task"].handler({"purpose": "공공데이터 AI 예측", "members": "12"}))
+    f.current.status.goal = "국토부 공공데이터를 AI 모델로 학습시켜 가격을 예측한다"
+    f.current.verified = True
+    r = asyncio.run(t["complete_task"].handler({"result": "완성했습니다"}))
+    txt = r["content"][0]["text"]
+    assert "데이터 출처" in txt and "보류" in txt          # 합성 + 실데이터 없음 → 차단
+    # 의식적 명시 → 데이터 게이트는 통과(이후 다른 게이트로 넘어가 데이터 메시지는 안 뜸)
+    f.data_prov_checked = False
+    r2 = asyncio.run(t["complete_task"].handler(
+        {"result": "[데이터 출처: data.go.kr 무키 CSV 다운로드] 받아 학습 완료"}))
+    assert "데이터 출처 — '실제·공공" not in r2["content"][0]["text"]   # 데이터 게이트 통과
+
+
+def test_포트폴리오_주제선정은_팀결정_담당자단독아님():
+    """[사용자 지적] 담당자(팀장) 혼자 주제/도메인을 정하는 건 퍼실리테이터 설계 위반. 포트폴리오 주입이
+    '담당자가 고른다'를 강화하던 것을 교정 — 도메인은 회의에서 수렴하는 팀 결정임을 명시한다."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "백엔드", 12: "AI 엔지니어"})
+    s.projects = {100: {"id": "P-005", "name": "대기질 지도", "purpose": "미세먼지 시각화", "summary": ""}}
+    p_lead = s._prompt("공공데이터로 만들어줘", Kind.WORK, "leader", 11, leader_id=11)
+    assert "혼자" in p_lead and ("팀 결정" in p_lead or "팀의 것" in p_lead or "주제 선정" in p_lead)
+    assert "통보" in p_lead                                  # '나는 X로 한다' 통보 금지 안내
 
 
 def test_프로젝트_레지스트리_영속과_중복방지(tmp_path):

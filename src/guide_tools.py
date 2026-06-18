@@ -122,6 +122,70 @@ def _has_real_asset(workspace) -> bool:
     return False
 
 
+# [데이터 출처 검증 — percept 게이트의 '데이터' 평행판(2026-06-18, 라이브 P-021)] '공공/실데이터로
+# AI를 학습'하라는 요청에서, 데이터를 받지 않고 *지어낸*(합성·하드코딩) 분포로 학습시키고 완성으로
+# 내는 것을 막는다. percept가 '합성 placeholder 에셋'을 막듯, 이건 '합성 placeholder 데이터'를 막는다
+# (P-021: 국토부 실거래가를 안 받고 가격을 공식+노이즈로 합성 → 'MAE 성공'이 순환논리 = 요구 위반).
+# 도메인 중립(요청이 real/public 데이터를 요구할 때만 발동), 의식적 명시 탈출구 상시.
+_DATA_FILE_EXTS = {".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".feather", ".arrow", ".jsonl"}
+_SYNTH_MARKERS = ("합성 데이터", "합성데이터", "synthetic data", "synthetic_data", "더미 데이터",
+                  "dummy data", "가짜 데이터", "fake data", "임의 생성", "랜덤 생성", "데이터 합성",
+                  "generate_price", "generate_data", "make_synthetic", "fabricat", "mock data")
+
+
+def _wants_real_data(text) -> bool:
+    """요청/목표가 '실제·공공 데이터로 학습'을 요구하는가 — 데이터 출처 게이트의 발동 조건(도메인 중립)."""
+    t = str(text or "").lower()
+    real = any(k in t for k in ("공공데이터", "공공 데이터", "공개 데이터", "공개데이터", "오픈 데이터",
+                                "오픈데이터", "open data", "실데이터", "실 데이터", "실거래", "real data",
+                                "real-world", "공공 api", "data.go.kr", "공공 데이타", "공공데이타"))
+    learn = any(k in t for k in ("학습", "train", " ai", "모델", "model", "예측", "predict", "데이터셋", "dataset"))
+    return real and learn
+
+
+def _has_real_dataset(workspace) -> bool:
+    """작업공간에 '받아온 실제 데이터 파일'(csv/parquet 등, 빈 스텁 아님)이 있는가 — 합성이 아닌 증거."""
+    import os
+    if not workspace:
+        return False
+    try:
+        for root, dirs, files in os.walk(str(workspace)):
+            dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "__pycache__", ".cache", "dist", "build")]
+            for f in files:
+                if os.path.splitext(f)[1].lower() in _DATA_FILE_EXTS:
+                    try:
+                        if os.path.getsize(os.path.join(root, f)) > 2048:   # 빈/스텁 파일은 증거 아님
+                            return True
+                    except OSError:
+                        return True
+    except Exception:
+        return False
+    return False
+
+
+def _synthesizes_data(workspace):
+    """작업공간 코드(.py/.js/.ts)가 학습 데이터셋을 '지어내는'(합성·더미) 흔적 — (파일명, 표식) 또는 None."""
+    import os
+    if not workspace:
+        return None
+    try:
+        for root, dirs, files in os.walk(str(workspace)):
+            dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "__pycache__", ".cache", "dist", "build")]
+            for f in files:
+                if os.path.splitext(f)[1].lower() not in (".py", ".js", ".ts", ".mjs"):
+                    continue
+                try:
+                    txt = open(os.path.join(root, f), encoding="utf-8", errors="ignore").read().lower()
+                except OSError:
+                    continue
+                for m in _SYNTH_MARKERS:
+                    if m in txt:
+                        return (f, m)
+    except Exception:
+        return None
+    return None
+
+
 # 채용 대기 인력(직군 미배정). recruit(role=…)로 런타임에 '게임 기획자·UX 디자이너' 등 필요한 직군으로
 # 채용해 합류시킨다. 로스터에서 라벨이 '예비'인 봇들이며, 첫 '전원 기획'엔 안 들어가고 필요할 때 합류한다.
 _SPARE_LABEL = "예비"
@@ -1514,6 +1578,36 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         "증거를 적어 재호출하세요. 정말 품질 기준이랄 게 없는 단순 산출물이면 result에 **'[수용기준 "
                         "N/A] <이유>'**를 적어 재호출하세요(의식적 판단 — 그냥 재호출론 통과 안 됨).")
                 flow.acceptance_checked = True
+            # [데이터 출처 게이트 — 합성/하드코딩 데이터를 '공공·실데이터 학습'으로 위장 차단(2026-06-18,
+            # 라이브 P-021)] percept(합성 에셋)·acceptance(합의 약속)와 평행. 요청이 real/public 데이터
+            # 학습을 요구하는데 모델이 *지어낸* 데이터로 학습됐고(코드에 합성 표식) 작업공간에 실제 데이터
+            # 파일·출처 증거가 없으면 보류 — 실데이터를 받아 재학습하거나, 정말 불가하면 result 첫머리에
+            # 의식적으로 명시. 도메인·직군 하드코딩 없음(요청 의도로만 발동), 흐름당 1회(percept와 동 패턴).
+            if not getattr(flow, "data_prov_checked", False):
+                _st = flow.current.status if getattr(flow.current, "status", None) else None
+                _intent = " ".join([str(getattr(flow, "origin_request", "") or ""),
+                                     str((_st.purpose if _st else "") or ""),
+                                     str((_st.goal if _st else "") or "")])
+                if _wants_real_data(_intent):
+                    _res = args.get("result") or ""
+                    _declared = bool(re.search(r"\[\s*데이터\s*출처\s*[:：\]]", _res)) or \
+                        bool(re.search(r"\[\s*합성\s*(?:불가피|허용|의도|데이터\s*명시)", _res))
+                    _synth = _synthesizes_data(getattr(flow, "workspace", None))
+                    if _synth and not _has_real_dataset(getattr(flow, "workspace", None)) and not _declared:
+                        if flow.log:
+                            flow.log("data_provenance_gate", task=flow.current.task_id,
+                                     file=_synth[0], marker=_synth[1])
+                        return _ok(
+                            "마감 보류(데이터 출처 — '실제·공공 데이터로 학습'인데 데이터를 지어냈습니다): 사용자 "
+                            f"요청이 실제/공공 데이터 학습을 요구하는데, `{_synth[0]}`이(가) 데이터를 **합성/하드코딩**"
+                            f"으로 만들고(표식 '{_synth[1]}') 작업공간에 받아온 실제 데이터 파일(csv/parquet 등)이 "
+                            "없습니다 — 모델이 배운 건 자기가 지어낸 분포라 'MAE 성공'도 순환논리입니다(요구 위반). "
+                            "통과하려면 둘 중 하나: ① 그 데이터 owner가 **실제 데이터를 받아**(공공데이터의 무키 "
+                            "벌크 다운로드·공개 데이터셋 미러를 WebSearch로 찾아 curl/WebFetch) 작업공간에 두고 "
+                            "그것으로 재학습하세요 — *합성으로 때우지 말 것*. ② 실제 데이터가 정말 닿지 않으면(키 "
+                            "필수·폐쇄망) result 첫 줄에 **'[데이터 출처: <실제 출처 또는 왜 불가한지>]'**를 적어 "
+                            "의식적으로 명시하고 재호출하세요(가짜를 진짜인 척 닫지 말 것 — 그냥 재호출론 통과 안 됨).")
+                flow.data_prov_checked = True
             # [검증 분업 — 1회 보류] 품질 판정이 리더 1인에게 독점되는 것을 구조적으로 흔든다(라이브
             # P-009: QA·교차 검증 0인 채 단독 마감 → 브라우저 렉·적 돌진 등 사용성 결함이 그대로 통과,
             # 사용자가 첫 발견). owner 인도 후 '다른 멤버'의 검증 참여가 0이면 첫 호출만 보류하고 검증
