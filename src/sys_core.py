@@ -636,6 +636,35 @@ class Sys:
                 f"잡습니다:\n[직무기준] {missing[0]}\n(기준 줄들)\n좋은 예: …\n나쁜 예(흔한 미달): …\n[/직무기준]")
         return ("\n\n".join(notes) + "\n\n") if notes else ""
 
+    def _portfolio_note(self) -> str:
+        """회사가 지금까지 만든 것(기존 프로젝트 목록)을 담당자에게 사실로 보여준다.
+
+        봇은 프로젝트 역사를 볼 수 없어 같은 도메인을 반복 선택하곤 했다(라이브: '안 쓰던 분야의
+        공공데이터'를 요청받고도 이미 여러 번 쓴 대기질을 또 고름 — 담당자가 어떤 분야를 썼는지 몰라
+        환각으로 판단). per-job 플라이휠(role_profiles·role_experience)이 '직군의 일'을 누적하듯,
+        이건 '회사가 무엇을 만들어왔나'를 의사결정자(담당자)에게 누적해 신규성 판단·중복 회피·기존
+        작품 이어가기의 사실 근거를 준다. 담당자 프롬프트에만 주입한다(도메인 선택은 담당자의 몫이고,
+        팀원 프롬프트엔 노이즈)."""
+        rows = []
+        for p in self.projects.values():
+            pid = str(p.get("id") or "?")
+            name = (p.get("name") or "").strip()
+            gist = (p.get("summary") or p.get("purpose") or "").strip().replace("\n", " ")
+            if len(gist) > 70:
+                gist = gist[:70].rstrip() + "…"
+            rows.append((pid, f"- {pid} {name}".rstrip() + (f" — {gist}" if gist else "")))
+        if not rows:
+            return ""                              # 아직 만든 게 없으면 주입 안 함(하위호환·노이즈 0)
+        rows.sort(key=lambda t: t[0])              # P-001, P-002 … 안정 정렬
+        shown = [ln for _, ln in rows[-16:]]       # 길어지면 최근 것 위주(프롬프트 비대 방지)
+        return (
+            "[회사가 지금까지 만든 것 — 사실 목록(추측·환각 금지)] 아래는 우리 회사가 실제로 진행/배포한 "
+            "프로젝트입니다. 요청이 '안 쓰던 분야로/새롭게/지금까지와 다른' 같은 신규성을 요구하면 "
+            "**이 목록에 없는 도메인**을 고르세요(데이터 출처만 바꿔 같은 분야를 반복하는 건 신규가 "
+            "아닙니다). 반대로 기존 작품을 발전·수정하라는 요청이면 그 P-번호 채널에서 이어가세요. "
+            "목록에 없는 걸 '이미 했다'고 짐작하지 마세요 — 여기 적힌 것만이 사실입니다:\n"
+            + "\n".join(shown) + "\n\n")
+
     def _prompt(self, body, kind, role, me, leader_id=None, flow=None):
         # '담당자'는 고정 직책이 아니라 이번 흐름의 To 수신자(=leader)다. 동료 목록엔 직군만 적고, 담당자에게만
         # '(담당자)' 표식을 단다(다른 흐름에선 같은 봇이 한 직원으로 참여).
@@ -674,11 +703,13 @@ class Sys:
                 f"직군을 당신이 직접 고르세요** — create_project(team='필요한 직군/동료들')로 팀을 정하고, 모자란 직군은 "
                 f"recruit(role='직군명')로 더하세요(예비 인력이 그 직군으로 채용됨). 자동으로 전원이 소집되지 않습니다"
                 f"(놀던 인력까지 무조건 부르지 말 것). set_goal은 '당신이 고른 그 팀 전원'의 협의로 통과합니다.\n")
+            portfolio_note = self._portfolio_note()   # 회사가 만들어온 것 — 신규성 판단·중복 회피의 사실 근거(담당자에게만)
             return (
                 f"당신은 이번 요청의 To로 지정돼 흐름을 여는 '담당자'입니다 — 고정 직책이 아니라 To를 받아 "
                 f"이번 흐름의 담당이 된 것이며(다른 흐름에선 한 직원으로 참여), 특별한 권력자가 아닙니다. "
                 f"당신의 역할: {my_role}\n"
                 f"{origin_note}"
+                f"{portfolio_note}"
                 f"받은 형태: {body}\n동료: {peers}\n\n"
                 f"{self._craft_note(me)}"
                 f"{spare_lead_note}{team_note}\n"

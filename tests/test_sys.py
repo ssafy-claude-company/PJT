@@ -459,6 +459,28 @@ def test_예비_담당자는_자기직군_먼저채용_지시받음():
     assert "자기 직군부터 정하라" not in p_norm and "팀은 당신이 동적으로 짠다" in p_norm
 
 
+def test_담당자는_회사_포트폴리오를_사실로_본다():
+    """[제도적 기억] 봇은 프로젝트 역사를 못 봐 같은 도메인을 반복 선택했다(라이브: '안 쓰던 분야'를
+    요청받고도 이미 여러 번 쓴 대기질을 또 고름 — 환각). 담당자 프롬프트에 '회사가 만들어온 것'의 사실
+    목록을 주입해 신규성 판단·중복 회피의 근거를 준다. 팀원 프롬프트엔 넣지 않고(노이즈), 만든 게
+    없으면 주입하지 않는다(하위호환)."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "백엔드", 12: "프론트엔드"})
+    # 만든 게 없으면 포트폴리오 주입 없음
+    assert "회사가 지금까지 만든 것" not in s._prompt("x", Kind.WORK, "leader", 11, leader_id=11)
+    # 프로젝트가 쌓이면 담당자는 그 사실 목록을 본다(id·이름·요지)
+    s.projects = {
+        100: {"id": "P-005", "name": "대기질 지도", "purpose": "에어코리아 미세먼지 현황 시각화", "summary": ""},
+        101: {"id": "P-016", "name": "지방선거 분석", "purpose": "선거 공공데이터 대시보드", "summary": ""},
+    }
+    p_lead = s._prompt("안 쓰던 분야 공공데이터로 만들어줘", Kind.WORK, "leader", 11, leader_id=11)
+    assert "회사가 지금까지 만든 것" in p_lead
+    assert "P-005" in p_lead and "대기질 지도" in p_lead and "P-016" in p_lead
+    assert "신규성" in p_lead                      # 신규 요청이면 목록에 없는 도메인을 고르라는 안내
+    # 팀원 프롬프트엔 포트폴리오를 주입하지 않는다(도메인 선택은 담당자의 몫)
+    p_mem = s._prompt("x", Kind.INFO, "member", 12, leader_id=11)
+    assert "회사가 지금까지 만든 것" not in p_mem
+
+
 def test_owner는_work수신자_goal합의후():
     """새 모델(중앙집권 방지): create_task는 Purpose만 — Goal·owner 선배정 없음. Goal은 set_goal로 확정해야
     Work 위임 가능(선분배 금지), 그 Work를 받은 동료가 곧 그 Task의 owner가 된다(수신=소유)."""
