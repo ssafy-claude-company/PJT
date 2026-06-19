@@ -2,7 +2,8 @@
 import asyncio
 
 from src.guide_tools import (Flow, make_guide_tools, _wants_real_data,
-                             _synthesizes_data, _has_real_dataset, _is_verifier)
+                             _synthesizes_data, _has_real_dataset, _is_verifier,
+                             _capability_gaps)
 from src.protocol import Kind
 from src.sys_core import Sys
 
@@ -45,6 +46,7 @@ def _flow(g, leader=11):
     f.authorship_checked = True  # 저작 다양성 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     f.decomp_checked = True  # 분해 점검 보류도 기본 우회(전용 테스트만 False로 검증)
     f.data_prov_checked = True  # 데이터 출처 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
+    f.staffing_exempt = True  # 스태핑 커버리지 게이트도 기본 우회(전용 테스트만 False로 검증)
     return f
 
 
@@ -2200,6 +2202,31 @@ def test_QA역할은_최종인수_우선라우팅():
     assert "완료 거부" in txt
     assert "검증 역할 우대" in txt and "최종 인수" in txt                        # QA 우대 라우팅 명시
     assert "QA" in txt                                                          # 검증역할 멤버(15=QA) 지목
+
+
+def test_스태핑_커버리지_AI능력없으면_set_goal보류_리더흡수차단():
+    """[사용자 설계: 전문가 분배 무조건, 리더는 자기 직군만] 목표가 명시적으로 부른 전문 능력(AI/ML)을
+    팀(리더 포함)이 아무도 못 가졌으면 set_goal 보류 → recruit 강제(언더스태핑 탈출구 차단 — 라이브 P-022:
+    백엔드 리더가 AI엔지니어 미투입 후 AI작업 흡수). 능력 보유 멤버가 있거나 '[스태핑 면제]'면 통과."""
+    # 헬퍼: 능력 needs(목표 텍스트) ↔ 보유(팀 라벨) — 기능 식별
+    assert _capability_gaps("AI를 학습시키고 예측 웹", ["백엔드", "프론트엔드"]) == ["AI/ML(모델 학습·예측)"]
+    assert _capability_gaps("AI를 학습시키고", ["백엔드", "AI 엔지니어"]) == []   # AI 직군 있으면 갭 없음
+    assert _capability_gaps("스네이크 게임 만들어줘", ["백엔드"]) == []           # AI 요청 아님 → 갭 없음
+    g = FakeGuide()
+    f = _flow(g)
+    f.staffing_exempt = False                                  # 이 게이트만 켠다(나머지는 _flow가 우회)
+    f.bot_info[12] = "백엔드"; f.bot_info[13] = "프론트엔드"    # 리더(11)+백엔드+프론트 — AI 없음
+    f.origin_request = "공공데이터로 AI를 학습시키고 예측하는 웹"
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.update({12, 13})                    # 합의 커버리지 통과
+    f.gap_checked = True                                       # 최대화 점검 통과(이 게이트만 검증)
+    r = asyncio.run(t["set_goal"].handler({"goal": "AI 모델로 예측"}))
+    txt = r["content"][0]["text"]
+    assert "스태핑 커버리지" in txt and "recruit" in txt and not f.current.status.goal   # 보류 + goal 미설정
+    # 의식적 면제 → 통과(확정)
+    asyncio.run(t["set_goal"].handler({"goal": "AI 모델로 예측 [스태핑 면제: 리더가 AI 겸직]"}))
+    assert f.current.status.goal                               # 면제로 goal 확정
 
 
 def test_complete_task_최대성_기준이_교차검증에_주입_PHASE3():

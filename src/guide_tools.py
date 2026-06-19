@@ -200,6 +200,29 @@ def _is_verifier(label) -> bool:
     return any(h in t for h in _VERIFIER_HINTS)
 
 
+# [스태핑 커버리지 — 리더 흡수 차단(2026-06-19, 사용자: '전문가 분배 무조건, 리더는 자기 직군만')]
+# 기존 게이트(#4 owner도메인 대리구현 금지 / #6 리더독식)는 '전문가가 *있으면*' 리더 흡수를 막지만,
+# 리더가 그 도메인 전문가를 *안 뽑으면*(언더스태핑) 보호할 owner가 없어 리더가 흡수한다(라이브 P-022:
+# 'AI를 학습' 요청에 AI엔지니어 미투입 → 백엔드 리더가 AI·data 53건 흡수). 그래서 set_goal에서 '목표가
+# *명시적으로* 부른 전문 능력을 팀이 보유했나'를 본다 — 없으면 recruit 강제(그러면 owner가 박혀 기존
+# #4가 자동으로 리더를 자기 직군에 가둠). 기능 식별(능력 needs↔팀 라벨)이라 직군 타이틀 하드코딩이 아니다.
+# 고신호 능력만(오발 최소). 새 능력은 (이름, needs(text)→bool, providers(label keywords)) 한 줄로 확장.
+def _capability_gaps(goal_text, labels):
+    """목표가 요구하는 전문 능력 중 팀(라벨들)이 *아무도 보유 못 한* 것 — 능력명 리스트. 리더가 자기 직군
+    밖 도메인을 흡수(언더스태핑)하는 걸 set_goal에서 잡기 위함."""
+    t = str(goal_text or "").lower()
+    have = " ".join(str(l or "").lower() for l in (labels or []))
+    gaps = []
+    # AI/ML 모델링 — 요청이 *모델 학습·예측*을 명시적으로 요구하는데 AI/ML 직군이 팀에 없을 때
+    needs_ml = (any(k in t for k in ("학습시키", "머신러닝", "딥러닝", "신경망", "ml 모델", "예측 모델", "ai 모델"))
+                or ("ai" in t and any(k in t for k in ("학습", "예측", "모델"))))
+    has_ml = any(k in have for k in ("ai", "머신", "딥러닝", "인공지능", "ml", "데이터 과학",
+                                     "데이터 사이언", "data scien", "machine learn"))
+    if needs_ml and not has_ml:
+        gaps.append("AI/ML(모델 학습·예측)")
+    return gaps
+
+
 # 채용 대기 인력(직군 미배정). recruit(role=…)로 런타임에 '게임 기획자·UX 디자이너' 등 필요한 직군으로
 # 채용해 합류시킨다. 로스터에서 라벨이 '예비'인 봇들이며, 첫 '전원 기획'엔 안 들어가고 필요할 때 합류한다.
 _SPARE_LABEL = "예비"
@@ -1412,6 +1435,29 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            "대비 *갭*으로 판정 — '돌아가나'가 아니라 '실제 최선만큼인가'. 통째로 빠진 범주는 goal에 '구축 "
                            "대상'으로 넣고(담당 직군 없으면 recruit), 정말 이 작품엔 불필요한 범주면 그 사유를 적고 재호출 "
                            "하세요(판단은 당신 — 하드코딩 없음). 재호출은 통과합니다.")
+            # [스태핑 커버리지 강제 — 리더 흡수 차단(2026-06-19, 사용자: '전문가 분배 무조건, 리더는 자기 직군만')]
+            # consensus-coverage 게이트처럼 persistent-until-resolved: 목표가 명시적으로 부른 전문 능력을 팀(리더
+            # 포함)이 *아무도* 보유 못 했으면 확정 보류 → recruit로 그 전문가를 투입해야 통과(채우면 갭이 사라져
+            # 자동 통과). 그러면 그 도메인에 owner가 박혀 기존 #4 게이트가 리더를 자기 직군에 가둔다(언더스태핑
+            # 탈출구를 닫는다). 능력 식별은 기능 기반(직군 하드코딩 아님). 정말 리더 역량으로 커버한다고 판단하면
+            # goal/acceptance에 '[스태핑 면제: <이유>]'로 의식적 면제(무한 루프 차단 — 탈출구 상시).
+            _staff_exempt = (getattr(flow, "staffing_exempt", False)
+                             or "[스태핑 면제" in goal or "[스태핑 면제" in (args.get("acceptance") or ""))
+            if not _staff_exempt:
+                _labels = [flow._info(m) for m in flow.current.team] + [flow._info(flow.leader)]
+                _gaps = _capability_gaps(
+                    " ".join([goal, purpose, str(getattr(flow, "origin_request", "") or "")]), _labels)
+                if _gaps:
+                    if flow.log:
+                        flow.log("set_goal_staffing_gap", task=flow.current.task_id, gaps=_gaps)
+                    return _ok(
+                        f"확정 보류(스태핑 커버리지 — 전문가 분배 강제): 이 목표는 **{', '.join(_gaps)}** 능력을 "
+                        f"요구하는데 팀(당신 포함)에 그 전문가가 없습니다. **리더(당신)는 자기 직군 일만** 합니다 — "
+                        f"그 도메인을 흡수해 직접 하지 마세요. **recruit(role='해당 전문 직군')으로 그 전문가를 "
+                        f"투입**(예비 인력이 그 직군으로 채용됨)한 뒤 그에게 위임하세요. 투입하면 그 도메인에 owner가 "
+                        f"생겨 분배가 강제되고, set_goal은 자동 통과합니다(갭 사라짐). 정말 *당신 직군 역량으로* 그 "
+                        f"능력까지 커버한다고 판단하면 goal에 **'[스태핑 면제: <이유>]'**를 적어 재호출하세요(의식적 "
+                        f"판단 — 그냥 재호출로는 통과 안 됨).")
             # [단일-Task 깊은 수렴 — 분해 강제 제거(2026-06-18)] 종전엔 다도메인 목표를 '도메인별 Task로
             # 쪼개라'고 밀었으나(분해 점검 게이트), 라이브 규명: P-002 114305-1의 '한 owner가 5도메인'은
             # *구조* 문제가 아니라 전문가 8명 idle(참여 문제)이었고, P-016(216 대화·단일 Task)이 보여주듯
