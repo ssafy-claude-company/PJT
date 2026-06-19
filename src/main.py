@@ -473,7 +473,16 @@ async def run() -> None:
         if ch == cfg.channel_id:
             grad = graduated_project(sysm.projects, pending.message_id)
             if grad is not None:
-                if grad.get("open_task"):
+                ot = grad.get("open_task") or {}
+                # [좀비 재부활 차단 — 졸업 경로에도 동일 적용(라이브 P-021 '자꾸 부팅 복구')] 과거엔 이 경로가
+                # recovery_attempted를 보지도, 박지도 않아서, 미완 Task가 완료 불가(예: 외부 배포 차단)일 때
+                # *매 부팅마다 무한 재발사*됐다 — 그 흐름이 베턴/주의를 점유해 사용자의 새 메시지가 묻힌다.
+                # projects_to_resume와 동일하게: ① 이미 자동 1회 재개됐고 사용자 활동이 없으면 재발사 안 함,
+                # ② 처음이면 재발사하고 '자동 1회 재개됨'으로 표시(record_user_feedback이 사용자 활동 시 해제).
+                if ot and grad.get("recovery_attempted") == ot.get("task_id"):
+                    log.info("부팅 복구: 원요청이 %s로 졸업했으나 이미 자동 1회 재개됨 → 재발사 안 함(사용자 활동 시 재무장)",
+                             grad.get("id"))
+                elif ot:
                     log.info("부팅 복구: 원요청이 %s로 졸업 + 미완 Task 존재 → 프로젝트 채널 개입으로 이어가기",
                              grad.get("id"))
                     # 개입 본문은 사용자 원문을 보존하되(시스템이 말 지어내기 금지) 앞에 '이어가기'를 명시한다
@@ -483,6 +492,8 @@ async def run() -> None:
                         to_id=grad.get("leader"), kind=pending.kind or Kind.WORK,
                         body=resume_continue_body(pending.body),
                         from_id=pending.from_id, message_id=pending.message_id)))
+                    grad["recovery_attempted"] = ot.get("task_id")
+                    sysm._save_projects()
                 else:
                     log.info("부팅 복구: 원요청이 %s로 졸업(미완 Task 없음) → 재발사 안 함", grad.get("id"))
                 continue
