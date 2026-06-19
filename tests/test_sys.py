@@ -2204,6 +2204,27 @@ def test_QA역할은_최종인수_우선라우팅():
     assert "QA" in txt                                                          # 검증역할 멤버(15=QA) 지목
 
 
+def test_교차검증_수평수렴_meet교차비평_유도():
+    """[사용자 설계 2026-06-19: "사람 많은데 대화 적음"] 교차검증 게이트가 '검증자→리더 단방향 1회 보고'로
+    얕게 충족되던 빌드를, 인도 후 meet로 동료를 다시 모아 *수평* 교차비평하고 비평자가 owner에게 직접
+    보완을 넘기도록 유도한다(얕은 파이프라인 → 수평 수렴). 게이트 바닥(통과조건)은 불변 — 안내만 추가."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[12] = "백엔드"; f.bot_info[14] = "프론트엔드"
+    f.project_team += [14]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,14"}))
+    f.current.participated.update({12, 14})
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5; f.act_by[14] = 1
+    f.current.cross_checks = 0                                  # 검증 0 → 교차검증 게이트 발동(바닥)
+    txt = asyncio.run(t["complete_task"].handler({"result": "끝"}))["content"][0]["text"]
+    assert "완료 거부" in txt                                    # 바닥 불변(여전히 보류)
+    assert "수평 수렴" in txt and "meet" in txt                  # meet로 동료 재소집·수평 교차비평 유도
+    assert "직접 request" in txt                                 # peer→owner 직접 보완(리더 허브 우회)
+
+
 def test_스태핑_커버리지_AI능력없으면_set_goal보류_리더흡수차단():
     """[사용자 설계: 전문가 분배 무조건, 리더는 자기 직군만] 목표가 명시적으로 부른 전문 능력(AI/ML)을
     팀(리더 포함)이 아무도 못 가졌으면 set_goal 보류 → recruit 강제(언더스태핑 탈출구 차단 — 라이브 P-022:
