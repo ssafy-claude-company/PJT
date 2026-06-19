@@ -186,6 +186,20 @@ def _synthesizes_data(workspace):
     return None
 
 
+# [검증 역할(QA) 식별 — 기능 기반, 타이틀 하드코딩 아님(2026-06-19, 사용자 설계: 'QA=최종 검증 역할')]
+# 시스템은 직군을 우대하지 않지만(도메인 중립), '검증/품질'은 *도메인*이 아니라 *기능*이다 — 산출물 전체를
+# 사용자 관점에서 처음부터 끝까지 써보는 '최종 인수'는 만든 사람의 저자편향 밖에 있어야 하고, 그 기능에
+# 특화된 역할(QA)이 자연히 담당한다. 그 역할을 능력 키워드로 식별해 *홀리스틱 최종 검증을 우선 라우팅*한다
+# (부분·기술 검증은 도메인 동료도 가능 — QA는 전체·최종에 우대). 직군 '선택'을 박는 게 아니라 '검증 기능'을 알아본다.
+_VERIFIER_HINTS = ("qa", "검증", "품질", "테스트", "테스터", "quality", "tester", "verif", "정합성")
+
+
+def _is_verifier(label) -> bool:
+    """역할 라벨이 '검증/품질(QA) 기능'인가 — 전체·사용자관점 최종 인수의 자연 담당."""
+    t = str(label or "").lower()
+    return any(h in t for h in _VERIFIER_HINTS)
+
+
 # 채용 대기 인력(직군 미배정). recruit(role=…)로 런타임에 '게임 기획자·UX 디자이너' 등 필요한 직군으로
 # 채용해 합류시킨다. 로스터에서 라벨이 '예비'인 봇들이며, 첫 '전원 기획'엔 안 들어가고 필요할 때 합류한다.
 _SPARE_LABEL = "예비"
@@ -1693,6 +1707,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 indep_note = (f"\n[독립 검증 — 다른 도메인 필수] owner와 **다른 도메인** 동료가 검증해야 독립적입니다"
                               f"(같은 직군 검증은 에코라 같은 결함을 못 봄). 지금 가능한 독립 검증자: "
                               f"{flow._names(third_offdom)}." if third_offdom else "")
+                # [검증 역할(QA) 우대 — 최종·전체 인수(2026-06-19 사용자 설계)] 팀에 '검증/품질' 기능 역할이 있으면
+                # 전체·사용자관점 검증은 그 역할이 특화돼 있으니 우선 라우팅한다(만든 사람의 저자편향 밖 = 최종 측정).
+                # 부분·기술 검증은 도메인 동료도 OK — QA는 '완성품 전체를 사용자처럼' 보는 데 우대. 타이틀이 아니라 기능.
+                _verifiers = [m for m in third if _is_verifier(flow._info(m))]
+                qa_note = (f"\n[검증 역할 우대 — 전체·최종 인수는 QA에게] 이 팀에 **검증 전문 역할**이 있습니다: "
+                           f"{flow._names(_verifiers)} — 부분 검증은 도메인 동료도 되지만, **완성품 전체를 사용자처럼 "
+                           f"처음부터 끝까지 써보는 '최종 인수'는 이 역할에게 우선 맡기세요**(만든 사람·도메인 전문가는 "
+                           f"자기 부분만 보고 저자편향이 있어 전체 사용자경험을 객관적으로 못 봅니다 — 그래서 QA가 전담). "
+                           f"이들이 그 Task 멤버가 아니면 create_task members에 넣거나 request(Work)로 검증을 위임하세요."
+                           if _verifiers else "")
                 return _ok(f"완료 거부(교차 검증 의무 — Rule/Task + RFC-010 P1·P2 / RFC-011 M2): 산출물 인도 후 "
                            f"{_ver_state}. **만든 사람이 아닌** 다른 멤버에게 request(Work)로 "
                            f"'**코드만 읽지 말고 산출물을 처음부터 끝까지 실제로 실행·사용·플레이해 본 뒤**(라이브 "
@@ -1701,7 +1725,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            f"'작동'이지 '좋음'의 증거가 아닙니다 — 검증으로 인정하지 마세요**(라이브: 그렇게 통과시킨 게 "
                            f"'상용 수준 아님'으로 반려됨). 검증자의 결함·아쉬움 보고가 Redo(창의적 개선)의 근거입니다. "
                            f"**자기 산출물 자기검증은 무효**(편향 — Pride&Prejudice): 반드시 만든 사람이 아닌, 실제로 "
-                           f"써본 다른 멤버. 검증 응답이 오면 게이트는 자동으로 열립니다.{rubric}{acc_v}{standard_v}{iface_v}{taste_v}{idle_note}{indep_note}")
+                           f"써본 다른 멤버. 검증 응답이 오면 게이트는 자동으로 열립니다.{rubric}{acc_v}{standard_v}{iface_v}{taste_v}{idle_note}{indep_note}{qa_note}")
             # [팀 기여 의무 게이트 — RFC-009] 교차 검증(cross_checks)과 **독립**. 검증이 됐어도(검증은
             # 기능 위주라 폴리시 부재를 못 잡음 — RFC-009 §3), 팀에 부른 직군이 이 흐름에서 회의 발언만 하고
             # 실작업·검증 0(act_by==0: Write/Edit/run 한 번도 없음)이면 그 도메인(타격감·그래픽·사운드·디자인·

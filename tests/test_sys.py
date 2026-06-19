@@ -2,7 +2,7 @@
 import asyncio
 
 from src.guide_tools import (Flow, make_guide_tools, _wants_real_data,
-                             _synthesizes_data, _has_real_dataset)
+                             _synthesizes_data, _has_real_dataset, _is_verifier)
 from src.protocol import Kind
 from src.sys_core import Sys
 
@@ -2175,6 +2175,31 @@ def test_교차검증_같은직군은_에코_다른도메인_독립검증_요구
     f.current.cross_check_offdomain = 1                                        # 다른 도메인(14)이 독립 검증
     r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
     assert f.current is None                                                   # 독립 검증 후 마감
+
+
+def test_QA역할은_최종인수_우선라우팅():
+    """[사용자 설계: QA=최종 검증 역할] 검증 게이트가 발동할 때 팀에 '검증/품질(QA)' 기능 역할이 있으면,
+    메시지가 그 역할에게 '전체·사용자관점 최종 인수'를 우선 맡기라 명시한다 — 기능으로 식별(타이틀
+    하드코딩 아님). 부분·기술 검증은 도메인 동료도 가능하나, 완성품 전체 최종 인수는 QA 우대."""
+    # 헬퍼: '검증 기능'을 능력 키워드로 식별(도메인 무관)
+    assert _is_verifier("QA") and _is_verifier("품질 검증자") and _is_verifier("Quality Engineer")
+    assert not _is_verifier("백엔드") and not _is_verifier("프론트엔드") and not _is_verifier("")
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[12] = "백엔드"; f.bot_info[14] = "프론트엔드"; f.bot_info[15] = "QA"   # 12=owner, 15=검증역할
+    f.project_team += [14, 15]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,14,15"}))
+    f.current.participated.update({12, 14, 15})
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5; f.act_by[14] = 1; f.act_by[15] = 1
+    f.current.cross_checks = 0                                                 # 검증 0 → 교차검증 게이트 발동
+    r = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    txt = r["content"][0]["text"]
+    assert "완료 거부" in txt
+    assert "검증 역할 우대" in txt and "최종 인수" in txt                        # QA 우대 라우팅 명시
+    assert "QA" in txt                                                          # 검증역할 멤버(15=QA) 지목
 
 
 def test_complete_task_최대성_기준이_교차검증에_주입_PHASE3():
