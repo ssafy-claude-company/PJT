@@ -3,7 +3,7 @@ import asyncio
 
 from src.guide_tools import (Flow, make_guide_tools, _wants_real_data,
                              _synthesizes_data, _has_real_dataset, _is_verifier,
-                             _capability_gaps)
+                             _capability_gaps, _perceptual_essential)
 from src.protocol import Kind
 from src.sys_core import Sys
 
@@ -2676,6 +2676,36 @@ def test_지각비대칭_실에셋있으면_명시없이_통과(tmp_path):
     f.current.verified = True
     r = asyncio.run(t["complete_task"].handler({"result": "효과음 CC0 mp3 받아 통합"}))
     assert "지각 비대칭" not in r["content"][0]["text"] and f.current is None   # 실에셋 증거로 통과·마감
+    assert f.percept_checked is True
+
+
+def test_지각비대칭_오디오필수면_빈없음선언_거부_사유나에셋요구():
+    """[percept 탐지→강제(2026-06-19, 항목 75 후속)] 팀에 사운드/음악 전문가가 있거나 합의기준·원문이
+    소리·음악을 명시하면 '오디오 지각차원'이 *있는* 것 — 빈 `[지각차원 없음]`(반사적)은 모순이라 거부하고
+    실제 음원 통합 또는 *사유 있는* 명시를 요구한다(라이브 P-010 합성 사운드 통과 경로 차단). 비-essential
+    작품의 가벼운 탈출은 그대로. 도메인('games') 하드코딩 아님 — 팀 자신의 직군·기준으로 탐지."""
+    # 헬퍼: 팀 라벨 또는 텍스트에 오디오 신호가 있으면 essential(도메인 무관)
+    assert _perceptual_essential(["사운드 디자이너", "백엔드"], ["게임"]) is True
+    assert _perceptual_essential(["백엔드"], ["BGM 좋은 게임"]) is True        # 기준 텍스트로도 탐지
+    assert _perceptual_essential(["백엔드", "프론트엔드"], ["퍼즐 게임"]) is False  # 오디오 신호 없음 → 비-essential
+    g = FakeGuide()
+    f = _flow(g)
+    f.percept_checked = False
+    f.bot_info[12] = "사운드 디자이너"           # 팀이 오디오 차원을 직접 둠 → essential
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "게임 동작"}))
+    f.current.verified = True
+    # 빈 [지각차원 없음](반사적) → 오디오 차원이 있는데 '없음'은 모순 → 거부
+    r1 = asyncio.run(t["complete_task"].handler({"result": "[지각차원 없음]"}))
+    assert "지각 비대칭" in r1["content"][0]["text"] and f.current is not None   # 보류(마감 안 됨)
+    assert "모순" in r1["content"][0]["text"]              # essential인데 빈 '없음' = 모순 지적
+    assert f.percept_checked is False
+    # 사유 있는 명시([지각차원 불가: <사유>]) → 통과(의식적 판단은 존중 — 무한 반려 아님)
+    r2 = asyncio.run(t["complete_task"].handler(
+        {"result": "[지각차원 불가: 폐쇄망이라 외부 음원 다운로드 불가]"}))
+    assert "지각 비대칭" not in r2["content"][0]["text"] and f.current is None   # 사유명시 통과·마감
     assert f.percept_checked is True
 
 

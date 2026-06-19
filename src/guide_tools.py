@@ -122,6 +122,25 @@ def _has_real_asset(workspace) -> bool:
     return False
 
 
+# [지각-필수(오디오) 차원 탐지 — percept '탐지→강제' 강화(2026-06-19, 항목 75 후속)] percept 게이트는
+# 'LLM 검증자가 지각 못 하는 차원'(특히 *들어야* 아는 소리·음악 — 시각은 스크린샷으로 검증 가능)에 실제
+# 에셋을 요구한다. 그런데 탈출구 `[지각차원 없음]`이 *무조건* 통과라, 사운드 직군을 둔 게임조차 '없음'으로
+# 거짓 선언해 코드 합성 placeholder를 통과시킬 수 있었다(detect-not-enforce — 라이브 P-010 재발 경로).
+# 그래서 '이 작품에 *오디오* 지각차원이 정말 있는가'를 *팀 자신의 신호*로 탐지한다 — ① 이 Task 팀에
+# 사운드/음악 전문가가 배치됐거나(리더가 그 차원이 중요하다고 직접 채용) ② 팀이 합의한 기준(goal·
+# acceptance·standard)이나 사용자 원문이 소리·음악 품질을 명시. 탐지되면 빈 '없음' 선언을 막고(실제 음원
+# 통합 또는 *사유 있는* 명시 요구), 아니면 종전대로 가벼운 탈출. 데이터출처 게이트(_wants_real_data)와 같은
+# '요구가 그 차원을 부를 때만 강제' 패턴 — 도메인('games') 하드코딩이 아니라 팀 자신의 직군·기준으로 판정.
+_PERCEPT_AUDIO_HINTS = ("사운드", "음악", "음향", "효과음", "배경음", "오디오",
+                        "sound", "audio", "music", "bgm", "sfx")
+def _perceptual_essential(labels, texts) -> bool:
+    """이 작품에 'LLM이 지각 못 하는 오디오 차원'이 정말 있는가 — 팀이 그 직군을 두었거나(라벨) 합의
+    기준·원문이 소리·음악을 명시(텍스트)하면 True. 도메인 중립(팀 자신의 신호로 판정)."""
+    hay = " ".join([str(x).lower() for x in (labels or [])] +
+                   [str(t).lower() for t in (texts or [])])
+    return any(k in hay for k in _PERCEPT_AUDIO_HINTS)
+
+
 # [데이터 출처 검증 — percept 게이트의 '데이터' 평행판(2026-06-18, 라이브 P-021)] '공공/실데이터로
 # AI를 학습'하라는 요청에서, 데이터를 받지 않고 *지어낸*(합성·하드코딩) 분포로 학습시키고 완성으로
 # 내는 것을 막는다. percept가 '합성 placeholder 에셋'을 막듯, 이건 '합성 placeholder 데이터'를 막는다
@@ -1589,10 +1608,32 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 없음을 result 첫 줄 '[지각차원 없음]'으로 의식적 명시해야 통과. 읽기만으론 안 닫힌다. 도메인 중립
             # (에셋=실재물 파일, 특정 장르/직군 아님), 명시 탈출구 상시(판단은 리더). 품질>과제한(사용자 승인).]
             if not getattr(flow, "percept_checked", False):
-                _pd = bool(re.match(r"^\s*\[\s*지각차원\s*없음\s*\]", args.get("result") or ""))
-                if not _has_real_asset(getattr(flow, "workspace", None)) and not _pd:
+                _res = args.get("result") or ""
+                # 마커 [지각차원 없음/불가] — 뒤(같은 줄)에 사유가 있으면 'reasoned'(의식적), 없으면 'bare'(반사적).
+                _pm = re.search(r"\[\s*지각차원\s*(?:없음|불가)\s*[:：]?\s*\]?[ \t]*([^\n]*)", _res)
+                _pd_any = bool(_pm)
+                _pd_reasoned = bool(_pm) and len(_pm.group(1).strip()) >= 2
+                # [탐지→강제] 이 Task가 *오디오* 지각차원을 가졌나(팀 직군 OR 합의기준·원문) — 가졌으면 빈 '없음' 불가
+                _p_labels = [flow._info(m) for m in flow.current.team] + [flow._info(flow.leader)]
+                _p_texts = [flow.current.status.goal, flow.current.acceptance,
+                            flow.current.standard, getattr(flow, "origin_request", "")]
+                _p_essential = _perceptual_essential(_p_labels, _p_texts)
+                _p_asset = _has_real_asset(getattr(flow, "workspace", None))
+                # 통과: 실제 에셋 OR 사유 있는 명시. 비-essential이면 반사적 빈 '없음'도 허용(가벼운 탈출 유지).
+                if not (_p_asset or _pd_reasoned or (_pd_any and not _p_essential)):
                     if flow.log:
-                        flow.log("complete_percept_gate", task=flow.current.task_id)
+                        flow.log("complete_percept_gate", task=flow.current.task_id,
+                                 essential=_p_essential)
+                    if _p_essential and _pd_any and not _pd_reasoned:
+                        return _ok("마감 보류(지각 비대칭 — 오디오 차원이 *있는데* 빈 '없음' 선언): 이 Task엔 "
+                                   "사운드/음악 전문가가 있거나 합의 기준·원문이 소리·음악 품질을 명시합니다 — 즉 이 작품엔 "
+                                   "'들어야 아는' 지각차원이 분명히 있어 `[지각차원 없음]`(빈 선언)은 모순이라 통과 안 됩니다. "
+                                   "통과하려면 둘 중 하나: ① **실제 음원·효과음 파일을 WebSearch로 찾아 다운로드(CC0 등)해 "
+                                   "작업공간에 통합**하세요(코드 오실레이터 합성 ✕ — LLM은 소리를 못 들어 합성 placeholder가 "
+                                   "'완성'으로 통과됨). 직접 못 받으면 그 전문가를 recruit해 받게 하세요. ② 정말 불필요·불가하면 "
+                                   "(예: 사운드 설정 UI뿐, 폐쇄망) result에 **'[지각차원 불가: <사유>]'** 또는 "
+                                   "**'[지각차원 없음: <왜 소리·음악이 본질이 아닌지>]'**를 *사유와 함께* 적어 재호출하세요 "
+                                   "(반사적 빈 태그 ✕ — 의식적 판단).")
                     return _ok("마감 보류(지각 비대칭 — 실제 자원 필요, 읽기·합성으론 통과 안 됨): 이 작품이 만든 것 "
                                "중 **직접 경험해야만(보는 것 말고 듣거나 느껴야) 품질을 아는 차원**이 있습니까? — 있다면 "
                                "LLM 검증자는 지각할 수 없어 코드로 합성한 placeholder가 '완성'으로 통과됩니다. 통과하려면 "
