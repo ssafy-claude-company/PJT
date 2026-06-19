@@ -2755,7 +2755,11 @@ def test_수용계약_미정의시_구체기준_요구_또는_NA명시로만_통
     r1 = asyncio.run(t["complete_task"].handler({"result": "끝"}))
     assert "수용 계약 미정의" in r1["content"][0]["text"] and f.current is not None  # 구체 기준 요구
     assert "훌륭한 예" in r1["content"][0]["text"]          # 외부 실재 대조로 기준 도출 유도
-    # N/A 의식적 명시로만 통과(단순 산출물 — 판단은 리더)
+    # [감사 2026-06-19] 빈 탈출 마커(사유 없음)는 이제 통과 안 됨 — percept와 동 원리(반사적 satisfice 차단)
+    r_bare = asyncio.run(t["complete_task"].handler({"result": "[수용기준 N/A]"}))
+    assert "수용 계약" in r_bare["content"][0]["text"] and f.current is not None   # 빈 N/A → 여전히 보류
+    assert f.acceptance_checked is False
+    # N/A + *사유* 의식적 명시로만 통과(단순 산출물 — 판단은 리더)
     r2 = asyncio.run(t["complete_task"].handler({"result": "[수용기준 N/A] 내부 유틸 스크립트라 체감 품질 차원 없음"}))
     assert "수용 계약" not in r2["content"][0]["text"] and f.current is None
     assert f.acceptance_checked is True

@@ -1654,8 +1654,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 팀이 회의에서 자작), 자율 보존(의식적 드롭/N·A 상시 — 판단은 리더). 흐름당 1회.
             if not getattr(flow, "acceptance_checked", False):
                 _result = args.get("result") or ""
-                _accounted = bool(re.search(
-                    r"\[\s*수용\s*기준\s*(?:검증|충족|확인|반영|N\s*/?\s*A|없음|면제|불필요)\s*\]", _result, re.I))
+                # [반사적 빈 탈출 차단 — percept와 동 원리(2026-06-19 감사)] '검증/충족/확인/반영'은 항목별
+                # 증거가 *뒤따르는* 헤더(다음 줄에 회계 — 같은 줄 강제 불가)지만, '해당없음' 탈출(N/A·없음·
+                # 면제·불필요)이 사유 없는 빈 마커만으로 통과하면 satisfice다 — 게이트 본문이 명시한 '반사적
+                # 재호출로는 통과 안 됨'과 모순. 그래서 탈출 마커는 *사유(≥2자)* 를 요구한다(데이터출처·percept와
+                # 같은 증거/명시 패턴). 헤더는 그대로(뒤따르는 항목 회계가 증거), 탈출만 사유 강제. 무한 반려 아님.
+                _acc_hdr = bool(re.search(r"\[\s*수용\s*기준\s*(?:검증|충족|확인|반영)\s*\]", _result, re.I))
+                _acc_escape = bool(re.search(
+                    r"\[\s*수용\s*기준\s*(?:N\s*/?\s*A|없음|면제|불필요)\s*[:：]?\s*\]?[ \t]*\S{2,}", _result, re.I))
+                _accounted = _acc_hdr or _acc_escape
                 acc = (flow.current.acceptance or "").strip()
                 if not _accounted:
                     if flow.log:
