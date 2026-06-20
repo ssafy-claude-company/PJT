@@ -487,6 +487,10 @@ class Flow:
         self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로
                                        #   일했나'를 wake 전후 스냅샷 차이로 판정(허위완료/독점 차단)
         self.act_by = {}               # 행위자별 작업 누계(actor→count) — 요청자 자신의 활동을 빼고 재기 위함
+        self._gate_pass = set()        # [per-Task 게이트(2026-06-20 전수검사)] 통과한 (게이트명, task_id) 집합 —
+                                       #   percept·acceptance·data_prov를 *흐름당 1회*(과의존)가 아니라 *산출물(Task)별*로
+                                       #   강제한다(다중-Task서 첫 Task만 검사하던 구멍 차단). bool 플래그(X_checked)는
+                                       #   *테스트 우회*로만 남긴다(프로덕션은 이 집합 + task_id로 판정 → 우회와 분리).
         self.writes_by_role = {}       # [메커니즘② 저작 다양성] 직군별 파일 저작(Write/Edit, run 제외) 누계. 완료 시
                                        #   '한 직군이 산출물을 독점'(P-017: 백엔드 혼자 20중 19, 단일 app.js)을 출구
                                        #   게이트가 잡는다 — '분리 모듈은 분리 전문가가 있을 때만 존재'(라이브 규명).
@@ -1614,7 +1618,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 자원 파일 존재'로 강화: 작업공간에 코드 아닌 실재 에셋(_has_real_asset)이 있거나, 그런 자원이 필요
             # 없음을 result 첫 줄 '[지각차원 없음]'으로 의식적 명시해야 통과. 읽기만으론 안 닫힌다. 도메인 중립
             # (에셋=실재물 파일, 특정 장르/직군 아님), 명시 탈출구 상시(판단은 리더). 품질>과제한(사용자 승인).]
-            if not getattr(flow, "percept_checked", False):
+            if not getattr(flow, "percept_checked", False) and ("percept", flow.current.task_id) not in flow._gate_pass:
                 _res = args.get("result") or ""
                 # 마커 [지각차원 없음/불가] — 뒤(같은 줄)에 사유가 있으면 'reasoned'(의식적), 없으면 'bare'(반사적).
                 _pm = re.search(r"\[\s*지각차원\s*(?:없음|불가)\s*[:：]?\s*\]?[ \t]*([^\n]*)", _res)
@@ -1650,7 +1654,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                                "하세요. ② 그런 실재 자원이 필요 없으면(순수 코드 작품, 또는 손맛처럼 코드로 구현·교차검증되는 "
                                "차원) result **첫 줄에 '[지각차원 없음] <이유>'**를 적어 재호출하세요(의식적 판단). 무엇이 "
                                "그런 차원인지는 작품을 아는 당신이 판단합니다(시스템은 특정 범주·직군을 지정하지 않음).")
-                flow.percept_checked = True   # 실제 에셋·명시 확보 → 이 흐름에선 다시 묻지 않음
+                flow._gate_pass.add(("percept", flow.current.task_id))   # 이 산출물(Task)의 지각검사 통과 — 다음 Task는 다시 검사(per-Task)
             # [수용 계약 마감 바인딩 — 회의 전문성이 '코드'에 도달했는가(2026-06-15 P-015 규명)] verified·percept·
             # contrib·cross-check는 각각 '실행됨/실재 에셋/잠수 직군 실작업/홀리스틱 좋음'을 보지만, **회의에서
             # 합의한 구체 약속**(히트스톱·콤보·레이어드BGM 등)이 실제 산출물에 들어갔는지는 어느 게이트도 안 본다 —
@@ -1659,7 +1663,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 계약을 마감에 구속한다 — 각 항목 충족 증거(result '[수용기준 검증]' + 항목별 충족·증거) 또는 의식적
             # 드롭. 반사적 재호출로는 통과 안 됨(percept·contrib와 동 원리, 증거/명시 통과형). 도메인 중립(기준은
             # 팀이 회의에서 자작), 자율 보존(의식적 드롭/N·A 상시 — 판단은 리더). 흐름당 1회.
-            if not getattr(flow, "acceptance_checked", False):
+            if not getattr(flow, "acceptance_checked", False) and ("acceptance", flow.current.task_id) not in flow._gate_pass:
                 _result = args.get("result") or ""
                 # [반사적 빈 탈출 차단 — percept와 동 원리(2026-06-19 감사)] '검증/충족/확인/반영'은 항목별
                 # 증거가 *뒤따르는* 헤더(다음 줄에 회계 — 같은 줄 강제 불가)지만, '해당없음' 탈출(N/A·없음·
@@ -1692,13 +1696,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         "set_goal(acceptance=…)로 박아 두거나, 지금 result에 **'[수용기준 검증]'** 헤더로 항목별 충족 "
                         "증거를 적어 재호출하세요. 정말 품질 기준이랄 게 없는 단순 산출물이면 result에 **'[수용기준 "
                         "N/A] <이유>'**를 적어 재호출하세요(의식적 판단 — 그냥 재호출론 통과 안 됨).")
-                flow.acceptance_checked = True
+                flow._gate_pass.add(("acceptance", flow.current.task_id))   # 이 산출물(Task)의 수용계약 검사 통과(per-Task)
             # [데이터 출처 게이트 — 합성/하드코딩 데이터를 '공공·실데이터 학습'으로 위장 차단(2026-06-18,
             # 라이브 P-021)] percept(합성 에셋)·acceptance(합의 약속)와 평행. 요청이 real/public 데이터
             # 학습을 요구하는데 모델이 *지어낸* 데이터로 학습됐고(코드에 합성 표식) 작업공간에 실제 데이터
             # 파일·출처 증거가 없으면 보류 — 실데이터를 받아 재학습하거나, 정말 불가하면 result 첫머리에
             # 의식적으로 명시. 도메인·직군 하드코딩 없음(요청 의도로만 발동), 흐름당 1회(percept와 동 패턴).
-            if not getattr(flow, "data_prov_checked", False):
+            if not getattr(flow, "data_prov_checked", False) and ("data_prov", flow.current.task_id) not in flow._gate_pass:
                 _st = flow.current.status if getattr(flow.current, "status", None) else None
                 _intent = " ".join([str(getattr(flow, "origin_request", "") or ""),
                                      str((_st.purpose if _st else "") or ""),
@@ -1722,7 +1726,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                             "그것으로 재학습하세요 — *합성으로 때우지 말 것*. ② 실제 데이터가 정말 닿지 않으면(키 "
                             "필수·폐쇄망) result 첫 줄에 **'[데이터 출처: <실제 출처 또는 왜 불가한지>]'**를 적어 "
                             "의식적으로 명시하고 재호출하세요(가짜를 진짜인 척 닫지 말 것 — 그냥 재호출론 통과 안 됨).")
-                flow.data_prov_checked = True
+                flow._gate_pass.add(("data_prov", flow.current.task_id))   # 이 산출물(Task)의 데이터출처 검사 통과(per-Task)
             # [검증 분업 — 1회 보류] 품질 판정이 리더 1인에게 독점되는 것을 구조적으로 흔든다(라이브
             # P-009: QA·교차 검증 0인 채 단독 마감 → 브라우저 렉·적 돌진 등 사용성 결함이 그대로 통과,
             # 사용자가 첫 발견). owner 인도 후 '다른 멤버'의 검증 참여가 0이면 첫 호출만 보류하고 검증
