@@ -427,6 +427,7 @@ class TaskRef:
     collab_notes: str = ""                           # 회의·표결 합의 기록 — Work 위임에 자동 동봉(스펙이 회의에서 증발하던 결함 방지)
     cross_checks: int = 0                            # owner 인도 후 '다른 멤버'의 검증 참여 수(0이면 complete 1회 보류 — 품질 판정 독점 방지)
     cross_check_offdomain: int = 0                   # 그중 owner와 '다른 도메인' 검증 수(독립 검증 — 같은 직군 검증은 같은 맹점 에코)
+    cc_held: int = 0                                  # 교차검증 게이트가 이 Task에서 보류된 횟수 — 3회+면 '반복 마감(독점·헛돎)' 경보로 에스컬레이트(리더가 혼자 run 반복+재마감하는 스래싱 차단; cross_check 오르면 자연 통과라 교착 없음)
     complete_retry: bool = False                     # (구) 1회 보류 시절 잔재 — 교차 검증 의무 하드화(Rule/Task 6)로 미사용, 호환 위해 유지
     leader_writes: int = 0                           # 리더가 이 Task에서 직접 쓴 파일 수(위임 없이 독식하면 차단)
     contrib_checked: bool = False                    # 팀 기여 의무 게이트(RFC-009) 1회 통과 여부 — 부른 직군이 실작업·검증 0(회의 발언만)이면 1회 보류 후 재호출 통과
@@ -1745,6 +1746,21 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             cc_ok = (flow.current.cross_check_offdomain > 0
                      or (flow.current.cross_checks > 0 and not third_offdom))
             if has_product and not cc_ok and third:
+                # [반-스래싱 — 리더 독점 차단(2026-06-20 P-024 규명: 리더가 같은 Task를 7회 재마감 + run 98회
+                # 자가검증)] 교차검증 게이트가 보류될 때마다 카운트해, 3회+면 '혼자 떠안고 헛돎' 경보로 에스컬레이트.
+                # 리더의 run은 교차검증으로 안 쳐주므로(peer 필수) 결과 문구만 바꿔 재호출하면 영원히 막힌다 —
+                # "멈추고 검증 1회 위임하라"를 하드 문구로. cross_check가 오르면 cc_ok=True로 자연 통과(교착 0).
+                flow.current.cc_held = getattr(flow.current, "cc_held", 0) + 1
+                _thrash = ""
+                if flow.current.cc_held >= 3:
+                    if flow.log:
+                        flow.log("complete_thrash", task=flow.current.task_id, holds=flow.current.cc_held)
+                    _thrash = (f"\n\n⚠ [반복 마감 {flow.current.cc_held}회 — 독점·헛돎 경보] 같은 Task를 계속 "
+                               f"마감 시도하는데 **다른 멤버의 검증이 여전히 0**입니다. 결과 문구만 바꿔 재호출하면 "
+                               f"*영원히* 막힙니다 — **리더가 run으로 혼자 반복 검증하는 건 교차검증으로 인정 안 됩니다.** "
+                               f"지금 **멈추고 딱 하나**: 위에 지목된 검증자 1명에게 request(Work)로 '실제로 실행·사용해 "
+                               f"검증'을 맡기고 **그 응답이 올 때까지 complete_task를 다시 부르지 마세요**(응답이 오면 "
+                               f"게이트가 자동으로 열립니다). 전체를 혼자 떠안지 말 것 — 그게 '리더 독점'입니다.")
                 idle = [m for m in third if flow.act_by.get(m, 0) == 0]
                 idle_note = (f"\n[정보] 이 Task 팀에서 **실작업·검증 참여 0**인 멤버: {flow._names(idle)} — "
                              f"goal에 이들의 전문 영역이 있다면 그 부분의 검증·보완을 이들에게 맡기는 것이 "
@@ -1831,7 +1847,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                            f"'작동'이지 '좋음'의 증거가 아닙니다 — 검증으로 인정하지 마세요**(라이브: 그렇게 통과시킨 게 "
                            f"'상용 수준 아님'으로 반려됨). 검증자의 결함·아쉬움 보고가 Redo(창의적 개선)의 근거입니다. "
                            f"**자기 산출물 자기검증은 무효**(편향 — Pride&Prejudice): 반드시 만든 사람이 아닌, 실제로 "
-                           f"써본 다른 멤버. 검증 응답이 오면 게이트는 자동으로 열립니다.{rubric}{acc_v}{standard_v}{iface_v}{taste_v}{idle_note}{indep_note}{qa_note}{_horiz_note}")
+                           f"써본 다른 멤버. 검증 응답이 오면 게이트는 자동으로 열립니다.{rubric}{acc_v}{standard_v}{iface_v}{taste_v}{idle_note}{indep_note}{qa_note}{_horiz_note}{_thrash}")
             # [팀 기여 의무 게이트 — RFC-009] 교차 검증(cross_checks)과 **독립**. 검증이 됐어도(검증은
             # 기능 위주라 폴리시 부재를 못 잡음 — RFC-009 §3), 팀에 부른 직군이 이 흐름에서 회의 발언만 하고
             # 실작업·검증 0(act_by==0: Write/Edit/run 한 번도 없음)이면 그 도메인(타격감·그래픽·사운드·디자인·

@@ -2225,6 +2225,39 @@ def test_교차검증_수평수렴_meet교차비평_유도():
     assert "직접 request" in txt                                 # peer→owner 직접 보완(리더 허브 우회)
 
 
+def test_반복마감_교차검증_3회보류면_독점경보_에스컬레이트():
+    """[리더 독점 차단(2026-06-20 P-024 규명: 리더가 같은 Task 7회 재마감 + run 98회 자가검증)] 교차검증
+    게이트가 같은 Task에서 3회+ 보류되면 '반복 마감 — 독점·헛돎 경보'로 에스컬레이트해 '멈추고 검증 1회 위임'을
+    강제한다. cross_check 0인 채 결과 문구만 바꿔 재호출하면 영원히 막히는 스래싱을 끊는다(cross_check 오르면
+    자연 통과 — 교착 없음, 게이트 바닥 불변)."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[12] = "백엔드"; f.bot_info[14] = "프론트엔드"
+    f.project_team += [14]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,14"}))
+    f.current.participated.update({12, 14})
+    asyncio.run(t["set_goal"].handler({"goal": "g"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5; f.act_by[14] = 1
+    f.current.cross_checks = 0                              # 검증 0 → 교차검증 게이트 발동
+    # 1·2회차: 보류(경보 아직 — 문구만 바꿔 재호출하는 스래싱)
+    r1 = asyncio.run(t["complete_task"].handler({"result": "1차 시도"}))
+    r2 = asyncio.run(t["complete_task"].handler({"result": "2차 — 문구만 바꿈"}))
+    assert "반복 마감" not in r1["content"][0]["text"]
+    assert "반복 마감" not in r2["content"][0]["text"]
+    assert f.current.cc_held == 2
+    # 3회차: 독점 경보 에스컬레이트
+    txt = asyncio.run(t["complete_task"].handler({"result": "3차 — 또 문구만"}))["content"][0]["text"]
+    assert "반복 마감" in txt and "독점" in txt              # 경보 발동
+    assert "complete_task를 다시 부르지 마세요" in txt        # 멈추고 위임 지시(헛돎 차단)
+    assert f.current is not None                            # 여전히 보류(통과 아님 — 바닥 불변)
+    # cross_check가 들어오면 자연 통과(교착 없음 — 독점경보는 막는 게 아니라 행동을 바꾸게 함)
+    f.current.cross_checks = 1; f.current.cross_check_offdomain = 1
+    r4 = asyncio.run(t["complete_task"].handler({"result": "검증 받음"}))
+    assert "완료 거부" not in r4["content"][0]["text"]      # 교차검증 충족 → 통과·마감
+
+
 def test_스태핑_커버리지_AI능력없으면_set_goal보류_리더흡수차단():
     """[사용자 설계: 전문가 분배 무조건, 리더는 자기 직군만] 목표가 명시적으로 부른 전문 능력(AI/ML)을
     팀(리더 포함)이 아무도 못 가졌으면 set_goal 보류 → recruit 강제(언더스태핑 탈출구 차단 — 라이브 P-022:
