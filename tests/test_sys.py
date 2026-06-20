@@ -2642,6 +2642,7 @@ def test_setgoal_최대화_standard기록_구조강제_재호출만으론_통과
     r1 = asyncio.run(t["set_goal"].handler({"goal": "게임"}))            # standard 없음 → 보류
     assert "확정 보류(최대화 기준" in r1["content"][0]["text"] and not f.current.status.goal
     assert "훌륭한 예" in r1["content"][0]["text"] and "standard" in r1["content"][0]["text"]
+    assert "주 사용 흐름" in r1["content"][0]["text"]      # 실사용성(기능 나열 아닌 사용 흐름)도 분해에 요구
     assert "사운드" not in r1["content"][0]["text"]      # 특정 범주 프라이밍 없음(하드코딩 0)
     # 재호출(standard 여전히 없음) → 여전히 보류 — *재호출만으론 통과 안 됨*(구조적 강제, 종전과 다름)
     r2 = asyncio.run(t["set_goal"].handler({"goal": "게임 + 사운드"}))
