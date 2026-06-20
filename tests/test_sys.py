@@ -2521,7 +2521,7 @@ def test_교차검증_체험대조_요구하고_누적취향_주입_RFC011():
     assert "'작동'이지 '좋음'" in txt                       # presence-only 반려(M2)
     assert "WebSearch로 실제로 찾아 대조" in txt             # 체험·예시대조(M1+M2)
     assert "스크린샷" in txt and "눈으로 보고" in txt          # 자율 비전 검증 — DOM 존재가 아니라 '실제로 보이는 것'(M2')
-    assert "사용자가 반복해 지적한 것" in txt and "브금 없음" in txt   # 누적 취향 주입(M3)
+    assert "사용자 표준" in txt and "브금 없음" in txt   # 누적 취향 주입(M3 — 크로스-프로젝트 표준)
 
 
 def test_record_user_feedback_프로젝트에_누적_dedup_바운드_RFC011():
@@ -2542,6 +2542,26 @@ def test_record_user_feedback_프로젝트에_누적_dedup_바운드_RFC011():
     for i in range(60):                                    # 용량 바운드(최근 50)
         Sys.record_user_feedback(stub, 500, f"비평{i}")
     assert len(stub.projects[500]["feedback"]) == 50
+
+
+def test_크로스프로젝트_피드백_누적_RFC011():
+    """[크로스-프로젝트 취향(2026-06-20) — '사용자=유일 불만족 엔진' 영속화] 사용자 교정은 작품을 가로질러
+    유효 — _aggregate_feedback이 *이 프로젝트* 피드백 + *과거 프로젝트들*의 피드백을 합쳐 반환(한 작품서 고친
+    걸 다음서 또 틀리는 것 방지). 자기 프로젝트 우선, 과거 작업은 최근순, 중복 제거."""
+    from types import SimpleNamespace
+    projects = {
+        500: {"id": "P-025", "feedback": [{"ts": 9, "text": "이 프로젝트 비평"}]},
+        400: {"id": "P-021", "feedback": [{"ts": 5, "text": "자동위치 없음"}, {"ts": 7, "text": "URL 거짓말"}]},
+        300: {"id": "P-024", "feedback": [{"ts": 3, "text": "깊이 부족"}]},
+    }
+    stub = SimpleNamespace(projects=projects)
+    texts = [f["text"] for f in Sys._aggregate_feedback(stub, projects[500])]
+    assert texts[0] == "이 프로젝트 비평"                    # 자기 프로젝트가 먼저(가장 관련)
+    assert {"자동위치 없음", "URL 거짓말", "깊이 부족"} <= set(texts)   # 과거 작업 취향도 끌어옴(크로스-프로젝트)
+    # 중복 제거: 다른 프로젝트에 같은 텍스트가 있어도 한 번만
+    projects[400]["feedback"].append({"ts": 8, "text": "이 프로젝트 비평"})
+    texts2 = [f["text"] for f in Sys._aggregate_feedback(stub, projects[500])]
+    assert texts2.count("이 프로젝트 비평") == 1
 
 
 def test_팀기여의무_전원_실작업하면_보류없음_RFC009():

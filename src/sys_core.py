@@ -1285,6 +1285,24 @@ class Sys:
         del fb[:-50]   # 저장 위생: 최근 50개만(품질 게이트 아님 — 용량 바운드)
         self._save_projects()
 
+    def _aggregate_feedback(self, proj):
+        """[크로스-프로젝트 취향 — '사용자=유일 불만족 엔진' 영속화(2026-06-20)] 이 프로젝트 피드백(전부) +
+        과거 프로젝트들의 피드백(중복 제거, 최근순 8개)을 합쳐 '이 사용자가 *작품을 가로질러* 반복 요구하는
+        표준'으로 반환한다. 종전엔 이 프로젝트 것만 봐서 한 작품서 고친 걸 다음 작품서 또 틀렸다 — 게이트를
+        불만마다 새로 다는 대신(끝없음), 인간 신호가 표준으로 누적돼 스스로 개선되게."""
+        own = (proj.get("feedback") if isinstance(proj, dict) else None) or []
+        seen = {(f.get("text") or "").strip() for f in own}
+        cross = []
+        for pp in self.projects.values():
+            if pp is proj or not isinstance(pp, dict):
+                continue
+            for fb in (pp.get("feedback") or []):
+                t = (fb.get("text") or "").strip()
+                if t and t not in seen:
+                    seen.add(t); cross.append(fb)
+        cross.sort(key=lambda f: f.get("ts", 0), reverse=True)
+        return own + cross[:8]   # 이 프로젝트(전부) + 과거 작업 최근 취향 8개
+
     def _valid_leader(self, proj):
         """[프로젝트↔봇 결합 해제, 2026-06-15] 프로젝트 리더가 현재 로스터(연결된 봇)에 없으면 — 봇이
         해고·예비환원·미연결된 경우 — 가용 봇으로 자동 재배정해 반환한다. 프로젝트가 특정 봇ID에 종속돼
@@ -1379,7 +1397,11 @@ class Sys:
         flow.origin_request = self._origin_request
         # [RFC-011 M3] 이 프로젝트에 누적된 사용자 취향(반복된 비평·요구)을 흐름에 부착 — set_goal·검증이
         # '상용 수준'의 외부 앵커로 되돌린다(사용자 자신의 말이라 하드코딩 0, 회차가 쌓일수록 기준 상승).
-        flow.user_feedback = (proj.get("feedback") if proj else None) or []
+        # [크로스-프로젝트 취향 누적 — '사용자=유일 불만족 엔진'을 영속화(2026-06-20)] 종전엔 *이 프로젝트*
+        # 피드백만 봐서, 한 작품서 고친 걸(자동위치·URL거짓·깊이 등) 다음 작품서 *또 틀렸다*. 사용자 교정은
+        # 작품을 가로질러 유효하므로, 과거 프로젝트들의 피드백도 끌어와 '이 사용자가 반복 요구하는 기준'으로
+        # 함께 주입한다 — 게이트를 불만마다 새로 다는 대신(끝없음), 인간 신호가 표준으로 쌓여 스스로 개선.
+        flow.user_feedback = self._aggregate_feedback(proj)   # 이 프로젝트 + 과거 작업의 취향(크로스-프로젝트 표준)
         # [선점 — 레이스 봉쇄] 게이트 통과 직후·첫 await 이전에 스코프를 점유한다. 등록이 늦으면
         # (개입 복원 등 await 사이) 같은 채널의 연속 메시지가 둘 다 게이트를 통과해 '같은 프로젝트에
         # 흐름 2개'가 생길 수 있다(작업공간·베턴 이중화). 병렬 도입 전부터 있던 창을 함께 봉쇄.

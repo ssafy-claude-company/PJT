@@ -1577,10 +1577,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             fb_texts = [f.get("text", "") for f in (getattr(flow, "user_feedback", None) or []) if f.get("text")]
             taste = ""
             if fb_texts:
-                bullets = "\n".join(f"  · “{_speech_clip(t, 160)}”" for t in fb_texts[-8:])
-                taste = ("\n[누적 사용자 취향 — 이 작품의 진짜 품질 기준] 사용자가 이 프로젝트에서 해 온 "
-                         "말들입니다. **되풀이되는 불만·요구가 곧 '상용 수준'의 기준**입니다(LLM 취향엔 천장이 "
-                         "있어 사용자가 유일한 앵커). 이번에 '언급된 것'만 처리하지 말고, 아래에서 **반복되는 "
+                bullets = "\n".join(f"  · “{_speech_clip(t, 160)}”" for t in fb_texts[:10])
+                taste = ("\n[누적 사용자 취향 — 이 사용자의 진짜 품질 기준(크로스-프로젝트)] 사용자가 *이 작품 + "
+                         "과거 작업들*에서 해 온 말들입니다. **되풀이되는 불만·요구가 곧 '상용 수준'의 기준**입니다"
+                         "(LLM 취향엔 천장이 있어 사용자가 유일한 앵커 — 한 작품서 고친 걸 다음서 또 틀리지 말 것). "
+                         "이번에 '언급된 것'만 처리하지 말고, 아래에서 **반복되는 "
                          "범주**(어떤 측면이 계속 '부족·구리다'고 지적되는지)를 찾아 goal의 품질 축으로 박으세요 "
                          "— 그 범주가 통째로 부실하면 신규 구축·recruit로 끌어올리세요:\n" + bullets)
             return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}{tip}{qbar}{creative}{gapcheck}{taste}{excused_note}")
@@ -1806,10 +1807,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 fb_v = [f.get("text", "") for f in (getattr(flow, "user_feedback", None) or []) if f.get("text")]
                 taste_v = ""
                 if fb_v:
-                    taste_v = ("\n[사용자가 반복해 지적한 것 — 검증에서 직접 확인] 이 프로젝트에서 사용자가 해 온 "
-                               "비평입니다. 검증자에게 **이 항목들이 이번엔 실제로 해소됐는지 써보고 확인**하라고 "
-                               "전하세요(되풀이된 불만이 곧 상용 기준):\n"
-                               + "\n".join(f"  · “{_speech_clip(t, 140)}”" for t in fb_v[-8:]))
+                    taste_v = ("\n[사용자 표준 — 이 사용자가 *여러 작업에 걸쳐* 반복 요구한 것(크로스-프로젝트)] "
+                               "이 작품뿐 아니라 *과거 프로젝트들*에서도 사용자가 해 온 비평입니다 — *유일하게 믿을 수 "
+                               "있는 품질 앵커*(같은 모델 taste는 천장이라). 검증자에게 **이 표준들이 이번 산출물엔 "
+                               "처음부터 반영됐는지 직접 써보고 확인**하라 전하세요(한 작품서 고친 걸 또 틀리지 말 것 — "
+                               "되풀이된 불만이 곧 이 사용자의 상용 기준):\n"
+                               + "\n".join(f"  · “{_speech_clip(t, 140)}”" for t in fb_v[:10]))
                 # [수용 계약을 검증 기준으로] 교차 검증을 '좋아?'(satisfice되는 홀리스틱)가 아니라 팀이 합의한
                 # 구체 기준 대조로 — 검증자가 각 항목의 실제 충족을 써보고 확인하게(회의 전문성→검증 루프 연결).
                 acc_x = (flow.current.acceptance or "").strip()
