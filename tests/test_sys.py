@@ -2677,11 +2677,14 @@ def test_최대성_마감바인딩_standard있으면_항목회계_강제():
     # standard 박혔는데 회계 없이 마감 → 보류
     r1 = asyncio.run(t["complete_task"].handler({"result": "다 됐음"}))
     assert "최대성 검증" in r1["content"][0]["text"] and f.current is not None   # 보류(마감 안 됨)
-    assert "최대 표준" in r1["content"][0]["text"]
-    # '[최대성 검증]' 헤더 + 항목 회계(충족/드롭) → 통과
+    assert "구성요소" in r1["content"][0]["text"]   # 분해(구성요소별 대조) 요구 — 홀리스틱 아님
+    # 바 헤더(구성요소 분해 없음)는 satisfice라 *불충분* → 여전히 보류(새 teeth)
+    r_bare = asyncio.run(t["complete_task"].handler({"result": "[최대성 검증] 다 좋음"}))
+    assert "최대성 검증" in r_bare["content"][0]["text"] and f.current is not None
+    # '[최대성 검증]' 헤더 + *여러 구성요소* 항목 회계(충족/드롭) → 통과
     r2 = asyncio.run(t["complete_task"].handler(
         {"result": "[최대성 검증] A: 구현·run확인 / B: 구현 / C: [드롭] 이 작품엔 과함"}))
-    assert "최대성 검증" not in r2["content"][0]["text"] and f.current is None   # 회계로 통과·마감
+    assert "최대성 검증" not in r2["content"][0]["text"] and f.current is None   # 구성요소별 회계로 통과·마감
 
 
 def test_최대성_마감바인딩_standard없으면_미발동():
