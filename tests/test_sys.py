@@ -2628,22 +2628,78 @@ def test_교차검증_경험적_비평_요구_RFC010():
     assert "만든 사람이 아닌" in txt               # P2 분리된 검증자(자기검증 무효)
 
 
-def test_setgoal_범주적완성_점검_1회보류_RFC010_P7():
-    """[RFC-010 P7 — recognition→action 강제] set_goal 확정 전 1회(흐름당), 장르 예시 대비 '통째로 없는
-    범주'(사운드 등)를 goal에 구축 대상으로 반영하거나 사유하게 보류한다 — 라이브: P6 넛지로 사운드를 grep
-    점검만 하고 구현 0(인지≠행동). 1회 보류 후 재호출 통과(막지 않되 의식적 결정). participated 통과 후 발동."""
+def test_setgoal_최대화_standard기록_구조강제_재호출만으론_통과안됨():
+    """[최대화 — 구조적 강제(2026-06-20 사용자 "프롬프트 의존 제거")] 종전 '1회 보류 후 재호출 통과'는
+    standard 없이도 통과 → '최소 구현 통과'의 출처(품질 바가 안 박힘). 이제 *standard(최대 표준)가 실제로
+    기록될 때까지* 보류 — 재호출만으론 안 되고, standard 인자나 '[최대화 N/A: 사유]'가 있어야 통과.
+    per-Task(flow.current.standard로 키잉 → 새 Task마다 다시 요구). participated 통과 후 발동."""
     g = FakeGuide()
     f = _flow(g)
-    f.gap_checked = False            # 이 테스트는 P7 보류를 검증(_flow 기본 우회 해제)
+    f.gap_checked = False            # _flow 기본 우회 해제
     t = _tools(f, 11, "leader")
     asyncio.run(t["create_task"].handler({"members": "12"}))
     f.current.participated.add(12)
-    r1 = asyncio.run(t["set_goal"].handler({"goal": "게임"}))            # 1회차: P7 보류
-    assert "확정 보류(최대화 기준 점검" in r1["content"][0]["text"] and not f.current.status.goal
-    assert "훌륭한 예" in r1["content"][0]["text"] and "구축" in r1["content"][0]["text"]   # 범용: 장르 예시 대비 + 구축
-    assert "사운드" not in r1["content"][0]["text"]      # 시스템이 특정 범주를 지정·프라이밍하지 않음(하드코딩 없음)
-    r2 = asyncio.run(t["set_goal"].handler({"goal": "게임 + 사운드 구축"}))   # 재호출: 통과
-    assert f.current.status.goal == "게임 + 사운드 구축" and f.gap_checked is True   # 확정 + 흐름당 1회 마킹
+    r1 = asyncio.run(t["set_goal"].handler({"goal": "게임"}))            # standard 없음 → 보류
+    assert "확정 보류(최대화 기준" in r1["content"][0]["text"] and not f.current.status.goal
+    assert "훌륭한 예" in r1["content"][0]["text"] and "standard" in r1["content"][0]["text"]
+    assert "사운드" not in r1["content"][0]["text"]      # 특정 범주 프라이밍 없음(하드코딩 0)
+    # 재호출(standard 여전히 없음) → 여전히 보류 — *재호출만으론 통과 안 됨*(구조적 강제, 종전과 다름)
+    r2 = asyncio.run(t["set_goal"].handler({"goal": "게임 + 사운드"}))
+    assert "확정 보류(최대화 기준" in r2["content"][0]["text"] and not f.current.status.goal
+    # standard 기록 → 통과(확정 + 영속)
+    r3 = asyncio.run(t["set_goal"].handler(
+        {"goal": "게임", "standard": "상용 게임 수준: 60fps·사운드·이펙트·밸런스(레퍼런스 대조)"}))
+    assert f.current.status.goal == "게임" and "60fps" in (f.current.standard or "")
+    # 새 Task에선 다시 요구(per-Task) — 의식적 '[최대화 N/A: 사유]'(사유 필수)로도 통과
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    rna = asyncio.run(t["set_goal"].handler(
+        {"goal": "내부 유틸 스크립트 [최대화 N/A: 순수 내부 도구라 외부 품질 차원 없음]"}))
+    assert f.current.status.goal                                          # N/A 사유로 통과(per-Task 재요구 확인)
+
+
+def test_최대성_마감바인딩_standard있으면_항목회계_강제():
+    """[최대성 마감 바인딩 — 구조적 강제(2026-06-20)] standard(최대 표준)가 박혀 있으면 마감이 그 최대 대비
+    항목별 충족/의식적 드롭을 result에 회계해야 통과 — '돌아간다'가 아니라 '최대 기준대로 됐나'를 구조로
+    (교차검증 standard_v satisfice 보완). '[최대성 검증]' 헤더나 '[최대성 N/A: 사유]'로만 통과. standard 없으면
+    미발동(과제한 방지). per-Task(flow.current.standard 키잉 — 플래그 없음)."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[12] = "백엔드"; f.bot_info[14] = "프론트엔드"
+    f.project_team += [14]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,14"}))
+    f.current.participated.update({12, 14})
+    asyncio.run(t["set_goal"].handler({"goal": "g", "standard": "상용 수준: A·B·C 갖춤(레퍼런스 대조)"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5; f.act_by[14] = 1
+    f.current.cross_checks = 1; f.current.cross_check_offdomain = 1   # 교차검증 통과 → 최대성 게이트 도달
+    # standard 박혔는데 회계 없이 마감 → 보류
+    r1 = asyncio.run(t["complete_task"].handler({"result": "다 됐음"}))
+    assert "최대성 검증" in r1["content"][0]["text"] and f.current is not None   # 보류(마감 안 됨)
+    assert "최대 표준" in r1["content"][0]["text"]
+    # '[최대성 검증]' 헤더 + 항목 회계(충족/드롭) → 통과
+    r2 = asyncio.run(t["complete_task"].handler(
+        {"result": "[최대성 검증] A: 구현·run확인 / B: 구현 / C: [드롭] 이 작품엔 과함"}))
+    assert "최대성 검증" not in r2["content"][0]["text"] and f.current is None   # 회계로 통과·마감
+
+
+def test_최대성_마감바인딩_standard없으면_미발동():
+    """standard가 안 박힌 Task는 최대성 마감 바인딩이 *미발동*(과제한 방지) — 게이트는 '요구가 그 차원을 부를
+    때만 강제'(데이터출처·percept와 같은 패턴). 단순 산출물을 죽이지 않는다."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[12] = "백엔드"; f.bot_info[14] = "프론트엔드"
+    f.project_team += [14]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,14"}))
+    f.current.participated.update({12, 14})
+    asyncio.run(t["set_goal"].handler({"goal": "g [최대화 N/A: 단순 내부 스크립트]"}))  # goal 마커로 면제 → standard 미기록
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5; f.act_by[14] = 1
+    f.current.cross_checks = 1; f.current.cross_check_offdomain = 1
+    r = asyncio.run(t["complete_task"].handler({"result": "끝"}))
+    assert "최대성 검증" not in r["content"][0]["text"] and f.current is None   # standard 없음 → 게이트 미발동·통과
 
 
 def test_set_goal_최대화표준_standard_영속_PHASE1():
