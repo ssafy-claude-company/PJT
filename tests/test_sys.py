@@ -2828,6 +2828,29 @@ def test_아티팩트게이트_per_Task_다음Task는_다시검사():
     assert "지각 비대칭" in r2["content"][0]["text"]              # Task2도 다시 검사(per-Task 확인 — 핵심)
 
 
+def test_배포URL_시스템관찰을_권위로_봇주장URL_무효표시():
+    """['거짓말' 핵심 교정 — 보고=관찰, 주장 아님(2026-06-20 라이브 P-025)] 봇 narrative URL은 confabulate된다
+    (봇이 *요청한* 이름을 URL로 보고 → 404, 실제는 캐논 organt-p-NNN). 게이트를 차원마다 더 다는 대신, 시스템이
+    검증한 배포 URL(flow.deployed)을 *권위*로 마감 보고에 주입하고 봇이 보고한 다른 onrender URL은 '무효'로 박는다
+    — 이미 있는 [시스템 실행기록] 주입과 같은 원리를 배포 URL로 확장."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.deployed = "배포 성공 ✅ 라이브(HTTP 200): https://organt-p-025.onrender.com"   # 시스템이 _check_live로 검증한 실제 URL
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12"}))
+    f.current.participated.add(12)
+    asyncio.run(t["set_goal"].handler({"goal": "g", "standard": "[최대화 N/A: 단순]"}))
+    f.current.owner = 0            # 리더 직접(owner_delivered 게이트 우회) — has_product False라 교차검증/contrib 스킵
+    f.current.verified = True
+    # 봇이 *틀린* URL(요청했던 이름)을 보고하며 마감
+    r = asyncio.run(t["complete_task"].handler(
+        {"result": "배포 완료! 라이브: https://taas-accident-risk-ai.onrender.com"}))
+    assert f.current is None                                        # 마감됨
+    res = f.tasks[-1].status.result
+    assert "organt-p-025.onrender.com" in res and "권위" in res     # 시스템 검증 URL이 권위로 주입
+    assert "taas-accident-risk-ai" in res and "무효" in res         # 봇 주장 URL은 무효로 박힘
+
+
 def test_수용계약_포착과_마감바인딩_회의전문성_코드도달_강제():
     """[수용 계약 — 회의 전문성이 '코드'에 도달했는가] 회의가 합의한 '좋음'의 구체 기준(set_goal acceptance)이
     마감에 구속된다 — 각 항목 충족 증거('[수용기준 검증]' 회계) 또는 의식적 드롭/N·A 명시가 있어야 통과하고,

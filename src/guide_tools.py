@@ -1979,8 +1979,22 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 flow.log("task_contrib_overridden", task=flow.current.task_id,
                          idle=[int(m) for m in contrib_idle_now])
             done_ref.status.status = "완료"
+            # [보고=관찰, 주장 아님 — '거짓말'의 *핵심* 교정(2026-06-20 라이브 P-025)] 봇 narrative의 URL은
+            # confabulate된다(봇이 *요청한* 이름 taas-…를 URL로 보고 → 404; 실제 배포는 시스템이 캐논 슬롯
+            # organt-p-NNN으로 _check_live 검증해 flow.deployed에 보유). 게이트를 차원마다 N개 더 다는 대신,
+            # 시스템이 *관찰한 사실*(검증된 배포 URL)을 *권위*로 주입하고 봇이 보고한 다른 onrender URL은 '무효'로
+            # 박는다 — 이미 있는 [시스템 실행기록](run 영수증) 주입과 같은 원리를 배포 URL로 확장(보고를 관찰에 묶음).
+            _url_truth = ""
+            _auth = re.search(r"https://[a-z0-9-]+\.onrender\.com", str(getattr(flow, "deployed", "") or ""))
+            if _auth:
+                _au = _auth.group(0)
+                _wrong = {u for u in re.findall(r"https://[a-z0-9-]+\.onrender\.com", report) if u != _au}
+                _url_truth = (f"[시스템 검증 — 라이브 URL(권위)] {_au}"
+                              + (f"  ⚠ 봇 보고 {', '.join(sorted(_wrong))} 는 배포된 적 없는 무효 링크"
+                                 if _wrong else "") + "\n")
             done_ref.status.result = (
-                (f"[검증: 단독 마감 — 교차 검증 0, 리더 판정만]\n" if solo else "")
+                _url_truth
+                + (f"[검증: 단독 마감 — 교차 검증 0, 리더 판정만]\n" if solo else "")
                 + (f"[기여 미흡: {flow._names(contrib_idle_now)} 실작업 0 — 리더 판단으로 마감(폴리시 미반영 가능)]\n"
                    if contrib_idle_now else "")
                 + f"[보고] {report}\n"
