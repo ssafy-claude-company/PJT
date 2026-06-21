@@ -2410,8 +2410,12 @@ def test_팀기여의무_부른직군_실작업0이면_증거명시필요_RFC009
     assert f.current.contrib_checked is False                           # 보류는 통과 아님 → 미마킹
     r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))       # 반사적 재호출 → 여전히 보류
     assert f.current is not None and "완료 보류(팀 기여 의무" in r2["content"][0]["text"]  # no-op 차단
-    r3 = asyncio.run(t["complete_task"].handler({"result": "[기여 불필요] VFX는 이 작품에 불요"}))  # 의식적 명시
-    assert f.current is None                                            # 명시 통과·마감(판단은 리더)
+    # [흡수 차단] VFX는 회의 참여했는데 Work 위임을 한 번도 못 받음 → [기여 불필요]로도 못 넘긴다(흡수 묵살 차단)
+    r3 = asyncio.run(t["complete_task"].handler({"result": "[기여 불필요] VFX는 이 작품에 불요"}))
+    assert f.current is not None and "흡수 차단" in r3["content"][0]["text"]   # 위임 없인 [기여 불필요] 무력
+    f.current.work_delegated_to.add(14)                                 # VFX에게 실제로 Work 위임(기회 부여)
+    r4 = asyncio.run(t["complete_task"].handler({"result": "[기여 불필요] VFX는 위임했으나 추가 불요"}))
+    assert f.current is None                                            # 기회 준 뒤엔 의식적 명시로 마감(판단은 리더)
 
 
 def test_팀기여의무_잠수직군이_실제기여하면_명시없이_통과_RFC009():
@@ -2458,6 +2462,46 @@ def test_팀기여의무_게이트는_잠수직군_회의발언을_되돌린다_
     assert "완료 보류(팀 기여 의무" in txt and "회의 발언 대조" in txt
     assert "히트스톱+화면진동" in txt              # VFX 본인 발언을 그대로 되돌림
     assert "상태머신" not in txt                   # 백엔드 발언은 잠수자(VFX)에 오귀속 안 됨
+
+
+def test_흡수차단_참여했는데_위임0_idle은_기여불필요로_못넘긴다():
+    """[흡수 차단 — 리더 독점의 핵심, 2026-06-21 라이브 P-026 규명] 회의에 참여(participated)했는데 이
+    Task에서 Work 위임을 한 번도 못 받고(work_delegated_to 밖) 실작업 0인 멤버 = 그 전문 도메인이
+    제너럴리스트에게 '흡수'된 것(P-026: 백엔드가 AI 엔지니어 모델까지 다 씀, AI는 0). [기여 불필요] 한 줄로
+    묵살 못 한다 — 실제로 한 번은 위임(①)해야 풀린다. 위임 후엔(기회 부여) 명시 마감 가능."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[13] = "AI 엔지니어"; f.project_team.append(13)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.add(12); f.current.participated.add(13)   # AI 엔지니어 회의 참여
+    asyncio.run(t["set_goal"].handler({"goal": "ML 예측 웹서비스"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 8; f.act_by[13] = 0     # 백엔드(owner)가 다 함, AI 엔지니어 실작업 0(흡수)
+    f.current.cross_checks = f.current.cross_check_offdomain = 1
+    # [기여 불필요]로도 못 넘긴다 — 위임 0 + 참여 + idle + 도달가능 = 흡수
+    r1 = asyncio.run(t["complete_task"].handler({"result": "[기여 불필요] AI는 백엔드가 흡수해 구현"}))
+    assert f.current is not None and "흡수 차단" in r1["content"][0]["text"]
+    f.current.work_delegated_to.add(13)    # 실제로 Work 위임(기회 부여)
+    r2 = asyncio.run(t["complete_task"].handler({"result": "[기여 불필요] AI 위임했으나 추가 불요"}))
+    assert f.current is None               # 기회 준 뒤엔 의식적 명시로 마감
+
+
+def test_흡수차단_도달불가_멤버는_기여불필요로_통과_교착방지():
+    """[교착 방지] 흡수 의심(참여+위임0+idle) 멤버라도 도달 불가(예비/타 흐름 점유)면 [기여 불필요]로
+    통과 — 맡길 사람이 실제로 없을 땐 막지 않는다(혼자뿐인데 멈추면 그게 교착). 안정성 우선."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.bot_info[13] = "예비 봇"; f.project_team.append(13)   # 예비(도달 불가)
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.add(12); f.current.participated.add(13)
+    asyncio.run(t["set_goal"].handler({"goal": "ML 예측 웹서비스"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 8; f.act_by[13] = 0
+    f.current.cross_checks = f.current.cross_check_offdomain = 1
+    r = asyncio.run(t["complete_task"].handler({"result": "[기여 불필요] 예비는 불요"}))
+    assert f.current is None    # 도달 불가 → 흡수 차단 안 함(통과)
 
 
 # ── RFC-011: 상용 품질 구조(현실 기준·체험대조 검증·취향 축적) ────────────────────────────
@@ -3000,7 +3044,8 @@ def test_기여미흡_명시마감은_기록과_로그에_남는다_RFC009():
     r1 = asyncio.run(t["complete_task"].handler({"result": "끝"}))   # 1회차: 보류
     assert "완료 보류(팀 기여 의무" in r1["content"][0]["text"] and f.current is not None
     assert "기록에 남습니다" in r1["content"][0]["text"]              # 재호출 통과 경고
-    r2 = asyncio.run(t["complete_task"].handler({"result": "[기여 불필요] VFX 불필요 판단"}))   # 2회차: 명시 통과
+    f.current.work_delegated_to.add(13)                              # VFX에게 Work 위임(기회 부여) → 그래야 [기여 불필요] 유효
+    r2 = asyncio.run(t["complete_task"].handler({"result": "[기여 불필요] VFX 불필요 판단"}))   # 2회차: 기회 준 뒤 명시 통과
     assert f.current is None                                          # 마감됨(리더 자율)
     assert "기여 미흡" in f.tasks[0].status.result and "VFX 전문가" in f.tasks[0].status.result
     assert any(ev == "task_contrib_overridden" for ev, _ in logs)    # 로그에 영속

@@ -424,6 +424,9 @@ class TaskRef:
                                                      #   → 거짓이면 complete_task 거부(owner 미응답·착수전인데 리더가 대신 허위완료 차단)
     verified: bool = False                           # run으로 한 번이라도 실행됐나(실행 0회 완료 차단)
     work_delegated: int = 0                          # 리더가 이 Task에서 보낸 Work 위임 수(0이면 '자문만 받고 독식' 의심)
+    work_delegated_to: set = field(default_factory=set)  # 이 Task에서 Work를 *실제로 받은* 멤버 집합 — '회의 발언만 하고
+                                                     #   실작업 0'인 멤버가 한 번도 위임받지 못한 채 [기여 불필요]로 묵살되는
+                                                     #   흡수 패턴을 마감 게이트가 막는다(참여했는데 위임 0 = 도메인 흡수 의심).
     collab_notes: str = ""                           # 회의·표결 합의 기록 — Work 위임에 자동 동봉(스펙이 회의에서 증발하던 결함 방지)
     cross_checks: int = 0                            # owner 인도 후 '다른 멤버'의 검증 참여 수(0이면 complete 1회 보류 — 품질 판정 독점 방지)
     cross_check_offdomain: int = 0                   # 그중 owner와 '다른 도메인' 검증 수(독립 검증 — 같은 직군 검증은 같은 맹점 에코)
@@ -784,8 +787,10 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             _ckpt(flow)                       # 크래시-세이프: owner 확정 영속(복구 때 같은 담당이 잇게)
         req = await g.send_request(thread_id, me_id, to, kind, body)
         frame.request_id = str(req)                              # 실제 메시지 id로 기록 갱신
-        if kind == Kind.WORK and me_id == flow.leader and flow.current:
-            flow.current.work_delegated += 1   # 리더의 구현 위임 카운트 — 0이면 '자문만 받고 독식'(권한 훅이 차단)
+        if kind == Kind.WORK and flow.current:
+            flow.current.work_delegated_to.add(to)   # 누가 위임했든(리더든 peer든) 'Work를 실제로 받은' 멤버 기록
+            if me_id == flow.leader:
+                flow.current.work_delegated += 1   # 리더의 구현 위임 카운트 — 0이면 '자문만 받고 독식'(권한 훅이 차단)
         _dbg(f"{tag} ✓전송 req={req}{' (Redo)' if is_redo else ''}")
         if flow.log:   # 관측: 모든 요청을 '보낸 순서'대로 영속 기록(중첩 PostToolUse 타이밍에 안 묻힘)
             flow.log("req_sent", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),
@@ -1915,7 +1920,20 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             if has_product and not flow.current.contrib_checked:
                 contrib_idle = [m for m in third if flow.act_by.get(m, 0) == 0]
                 _cd = bool(re.search(r"\[\s*기여\s*(?:불필요|제외|면제)\s*\]", args.get("result") or ""))
-                if contrib_idle and not _cd:
+                # [흡수 차단 — [기여 불필요] 블랭킷 우회 봉쇄(2026-06-21, 라이브 P-026 규명)] 회의에 참여
+                # (participated)했는데 이 Task에서 Work를 한 번도 못 받고(work_delegated_to 밖) 실작업 0인 멤버 =
+                # 그 전문 도메인이 '흡수'된 것이다(리더가 전문가에게 위임 안 하고 제너럴리스트가 그 도메인까지 다 써버림
+                # = 리더 독점의 핵심). 이런 멤버는 [기여 불필요] 한 줄로 묵살 못 한다 — 실제로 한 번은 위임(①)하거나
+                # 팀에서 빼야(②) 한다. 위임받으면(work_delegated_to 진입) 그 뒤엔 [기여 불필요]로 마감 가능(기회는 줬다).
+                # 도달 가능자만(예비·타 흐름 점유 제외) → 맡길 사람이 없으면 통과(교착 없음).
+                def _reach_for_work(m):
+                    if str((flow._info(m) or "")).startswith("예비"):
+                        return False
+                    return not (_engx is not None and _scopex is not None and _engx.busy_elsewhere(m, _scopex))
+                _part = getattr(flow.current, "participated", None) or set()
+                _deleg = getattr(flow.current, "work_delegated_to", None) or set()
+                _absorbed = [m for m in contrib_idle if m in _part and m not in _deleg and _reach_for_work(m)]
+                if contrib_idle and (not _cd or _absorbed):
                     if flow.log:
                         flow.log("task_contrib_idle", task=flow.current.task_id,
                                  idle=[int(m) for m in contrib_idle])
@@ -1936,6 +1954,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     commit_note = ("\n[회의 발언 대조 — 발언≠구현] 아래는 이 직군들이 회의에서 한 말입니다 — "
                                    "각 발언이 실제 산출물에 반영됐는지 직접 확인하고, 안 됐으면 ①로 맡기세요:\n"
                                    + "\n".join(commits)) if commits else ""
+                    if _absorbed and flow.log:
+                        flow.log("task_absorbed_blocked", task=flow.current.task_id,
+                                 absorbed=[int(m) for m in _absorbed])
+                    absorbed_note = (
+                        f"\n\n⚠ [흡수 차단 — {flow._names(_absorbed)}은(는) '[기여 불필요]'로 넘길 수 없습니다] "
+                        f"이들은 **회의에서 의견을 냈는데 이 Task에서 Work 위임을 한 번도 못 받고** 실작업 0입니다 — "
+                        f"그 전문 도메인이 다른 사람에게 **흡수**된 것입니다(리더 독점의 핵심: 전문가에게 안 맡기고 "
+                        f"제너럴리스트가 그 도메인까지 다 써버림). 반드시 이들에게 request(Work)로 **실제로 맡기세요**(①) — "
+                        f"그래야 흡수가 풀립니다. 정말 불필요했으면 팀에서 빼세요(②). 한 번 위임한 뒤에도 본인이 안 하면 "
+                        f"그땐 [기여 불필요]로 마감 가능합니다(기회는 줬으니)." if _absorbed else "")
                     return _ok(
                         f"완료 보류(팀 기여 의무 — 증거/명시 필요, 반사적 재호출로는 통과 안 됨): 팀의 "
                         f"{flow._names(contrib_idle)}이(가) 이 흐름에서 **회의 발언 외 실작업·검증이 0**입니다"
@@ -1945,7 +1973,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         f"팀에서 빼세요(왜 불렀나=다음 학습) ③ 정말 불필요하면 result **첫 줄/본문에 "
                         f"'[기여 불필요] <이유>'**를 적어 재호출하세요(의식적 판단 — 그냥 재호출로는 통과 안 됨; "
                         f"'이 직군들을 뺀 채 마감'이 Task 기록에 남습니다). 특히 회의에서 '중요하다'고 한 "
-                        f"부분이 실제 산출물에 들어갔는지 확인하세요 — 발언만으로는 작품이 바뀌지 않습니다.{commit_note}")
+                        f"부분이 실제 산출물에 들어갔는지 확인하세요 — 발언만으로는 작품이 바뀌지 않습니다."
+                        f"{commit_note}{absorbed_note}")
                 flow.current.contrib_checked = True   # 기여(idle 해소)·명시 확보 → 이 Task에선 다시 묻지 않음
             # [저작 다양성 게이트 — 메커니즘② '도메인별 전문가 저작' 강제(2026-06-16, 데이터·코드·이론 3종 수렴
             # 심층조사 기반)] contrib는 '부른 직군이 idle인가'를 보지만, P-017은 *애초에 도메인 전문가를 안 불러*
