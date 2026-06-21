@@ -43,7 +43,6 @@ def _flow(g, leader=11):
     f.gap_checked = True   # P7 범주적 완성 점검 보류를 테스트 기본 우회(전용 테스트만 False로 검증)
     f.percept_checked = True  # 지각 비대칭 점검(complete) 보류도 기본 우회(전용 테스트만 False로 검증)
     f.acceptance_checked = True  # 수용 계약 마감 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
-    f.authorship_checked = True  # 저작 다양성 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     f.decomp_checked = True  # 분해 점검 보류도 기본 우회(전용 테스트만 False로 검증)
     f.data_prov_checked = True  # 데이터 출처 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     f.staffing_exempt = True  # 스태핑 커버리지 게이트도 기본 우회(전용 테스트만 False로 검증)
@@ -2973,55 +2972,6 @@ def test_수용계약_미정의시_구체기준_요구_또는_NA명시로만_통
     r2 = asyncio.run(t["complete_task"].handler({"result": "[수용기준 N/A] 내부 유틸 스크립트라 체감 품질 차원 없음"}))
     assert "수용 계약" not in r2["content"][0]["text"] and f.current is None
     assert ("acceptance", f.tasks[-1].task_id) in f._gate_pass
-
-
-def test_저작다양성_한직군독점이면_보류_단일도메인명시나_분산으로_통과():
-    """[메커니즘② 저작 다양성 — 도메인 전문가 저작 강제] 파일 저작이 한 직군에 ≥80% 집중되면(P-017: 백엔드
-    혼자 20중 19 → 단일 app.js 모놀리스, 도메인 전문가 부재) 마감을 1회 보류하고 외부 예시 대조를 강제한다 —
-    '[단일도메인]' 명시(정말 단일 도메인일 때)나 빠진 도메인 전문가 recruit로만 통과. 반사적 재호출론 안 됨.
-    도메인 중립(특정 직군 하드코딩 0), 출구 게이트, 분산 저작이면 미발동(깊은 P-002=7직군은 안 걸림)."""
-    g = FakeGuide()
-    f = _flow(g)
-    f.authorship_checked = False        # 이 테스트는 저작 다양성 게이트를 검증(_flow 기본 우회 해제)
-    t = _tools(f, 11, "leader")
-    asyncio.run(t["create_task"].handler({"members": "12"}))
-    f.current.verified = True
-    f.current.leader_writes = 1          # has_product=True(리더 직접구현 산출물 존재), owner=0이라 owner게이트 우회
-    f.current.cross_checks = f.current.cross_check_offdomain = 1           # 교차검증 게이트 우회(별도 테스트)
-    f.current.contrib_checked = True     # 기여 게이트 우회(별도 테스트)
-    # P-017 패턴: 백엔드 1명이 저작 독점(19/20=95%)
-    f.writes_by_role = {"백엔드": 19, "프론트엔드": 1}
-    r1 = asyncio.run(t["complete_task"].handler({"result": "AI 웹 완성"}))
-    assert "저작 다양성" in r1["content"][0]["text"] and f.current is not None   # 보류(마감 안 됨)
-    assert "백엔드" in r1["content"][0]["text"] and "95%" in r1["content"][0]["text"]   # 집중 직군·집중도 명시
-    assert "recruit" in r1["content"][0]["text"]            # 빠진 도메인 전문가 채용 경로 안내
-    # 반사적 재호출(마커 없음)도 여전히 보류
-    r2 = asyncio.run(t["complete_task"].handler({"result": "그냥 통과 시도"}))
-    assert "저작 다양성" in r2["content"][0]["text"] and f.current is not None
-    assert f.authorship_checked is False                   # 보류는 통과 아님
-    # '[단일도메인]' 의식적 명시로만 통과(정말 단일 도메인일 때)
-    r3 = asyncio.run(t["complete_task"].handler({"result": "[단일도메인] 순수 백엔드 배치 스크립트라 한 직군이 적정"}))
-    assert "저작 다양성" not in r3["content"][0]["text"] and f.current is None   # 명시 통과·마감
-    assert f.authorship_checked is True
-
-
-def test_저작다양성_여러직군_분산저작이면_미발동():
-    """저작이 여러 직군에 분산되면(깊은 P-002=7직군 각자 도메인 모듈) 게이트가 발동하지 않는다 — 정상 협업은
-    마찰 0. '한 명이 다 씀'만 잡고 '여러 전문가가 각자 씀'은 통과(거짓양성 없음)."""
-    g = FakeGuide()
-    f = _flow(g)
-    f.authorship_checked = False
-    t = _tools(f, 11, "leader")
-    asyncio.run(t["create_task"].handler({"members": "12"}))
-    f.current.verified = True
-    f.current.leader_writes = 1
-    f.current.cross_checks = f.current.cross_check_offdomain = 1
-    f.current.contrib_checked = True
-    # P-002 패턴: 여러 직군이 분산 저작(최대 점유 ~32%)
-    f.writes_by_role = {"백엔드": 6, "VFX 전문가": 5, "프론트엔드": 4, "사운드 디자이너": 3}
-    r = asyncio.run(t["complete_task"].handler({"result": "분산 협업 완성"}))
-    assert "저작 다양성" not in r["content"][0]["text"] and f.current is None   # 미발동·정상 마감
-    assert f.authorship_checked is True
 
 
 def test_기여미흡_명시마감은_기록과_로그에_남는다_RFC009():
