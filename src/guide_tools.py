@@ -490,6 +490,9 @@ class Flow:
         self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로
                                        #   일했나'를 wake 전후 스냅샷 차이로 판정(허위완료/독점 차단)
         self.act_by = {}               # 행위자별 작업 누계(actor→count) — 요청자 자신의 활동을 빼고 재기 위함
+        self._stall_victim = None      # [막힘 흡수 차단] 하위 담당이 막혀 베턴이 위임자에게 되돌아온 순간, 막힌 사람 id를
+        self._stall_victim_acts = 0    #   기록. 위임자가 '내가 하지'로 그 사람 일을 흡수하는 걸 게이트가 막고 '같은 사람 재요청'을
+        self._stall_blocks = 0         #   유도(재채용 X). 막힌 사람이 다시 act하면 해제, 끝내 무응답이면 N회 후 폴백(교착 방지).
         self._gate_pass = set()        # [per-Task 게이트(2026-06-20 전수검사)] 통과한 (게이트명, task_id) 집합 —
                                        #   percept·acceptance·data_prov를 *흐름당 1회*(과의존)가 아니라 *산출물(Task)별*로
                                        #   강제한다(다중-Task서 첫 Task만 검사하던 구멍 차단). bool 플래그(X_checked)는
@@ -899,8 +902,19 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 except CommError:
                     # to의 중첩 하위요청이 응답 없이 끝나(크래시/이탈) 베턴이 to에 '굳은' 비정상 상황 →
                     # me_id(요청자)가 다시 alive 될 때까지 위 프레임을 강제 close. 흐름 교착(굳음) 방지.
+                    _stuck = flow.comm.alive
                     if flow.log:
-                        flow.log("baton_recover", me=me_id, stuck_alive=flow.comm.alive, to=to)
+                        flow.log("baton_recover", me=me_id, stuck_alive=_stuck, to=to)
+                    # [막힘 흡수 차단 — 막힌 사람 기록] 베턴이 막힌 하위 담당에서 위임자에게 되돌아온다. 위임자가
+                    # '내가 하지'로 그 사람 일을 흡수하지 못하게 막힌 사람을 기록 — 게이트가 '같은 사람 재요청'을
+                    # 유도(재채용 X). 막힌 사람이 다시 일하면 해제. (origin/리더 자신이 막힌 건 흡수 대상 아님.)
+                    # *새* victim일 때만 기준치·카운터 초기화 — 같은 사람이 반복해 막히면 카운터가 누적돼 N회 후
+                    # 게이트가 폴백(통과)하므로, 진짜 죽은 동료에 무한 재요청·무한 차단으로 빌드가 얼지 않는다.
+                    if (_stuck and _stuck != flow.comm.origin and _stuck != getattr(flow, "leader", None)
+                            and getattr(flow, "_stall_victim", None) != _stuck):
+                        flow._stall_victim = _stuck
+                        flow._stall_victim_acts = (getattr(flow, "act_by", None) or {}).get(_stuck, 0)
+                        flow._stall_blocks = 0
                     guard = 0
                     # origin 프레임(스택 마지막 1장)은 여기서 닫지 않는다 — 핸들러 레벨 복구가
                     # 흐름 자체를 종료시키면 안 됨(origin 마감은 SYS의 _close_flow 책임). detach로

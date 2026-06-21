@@ -312,6 +312,40 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                         f"끝낼 때까지 대기하세요. 정말 불필요하면 한 번 위임해 본인이 판단하게 하세요(위임 후엔 진행 가능). "
                         f"전원 도달 불가하면 인프라 문제이니 사용자에게 보고(혼자 떠안지 말 것).")
 
+        # 10) [막힘 흡수 차단 — '같은 사람 재요청'(2026-06-21, 사용자 규명)] 하위 담당이 막혀 베턴이 위임자에게
+        #     되돌아온 순간(guide의 baton_recover가 flow._stall_victim에 막힌 사람을 기록), 위임자가 '내가 하지'로
+        #     그 사람 일을 흡수하던 구멍(P-027: 백엔드 막힘 → AI엔지니어가 백엔드 Node 서버 대신 작성 → 백엔드
+        #     Python 867줄 고아화). 막힌 사람과 도메인이 다른 행위자의 Write/Edit를 막아 '내가 하지'를 차단하고,
+        #     재채용(양산 위험)이 아니라 '그 사람에게 request(Work)로 이어서 해'(같은 사람 재요청)를 유도한다.
+        #     [해제] 막힌 사람이 다시 act하면(act_by 증가=돌아옴) 즉시 풀림. [교착 방지] 끝내 무응답이면 N회 차단
+        #     후 폴백(victim 비우고 통과 — 진짜 죽은 동료에 빌드가 얼지 않음). 같은 도메인이면 차단 안 함(흡수 아님).
+        if (tool in ("Write", "Edit") and flow is not None and actor is not None
+                and getattr(flow, "_stall_victim", None) is not None
+                and flow._stall_victim != actor
+                and callable(getattr(flow, "_info", None))):
+            v = flow._stall_victim
+            _abby = getattr(flow, "act_by", None) or {}
+            if _abby.get(v, 0) > getattr(flow, "_stall_victim_acts", 0):
+                flow._stall_victim = None          # 막힌 사람이 다시 일함(돌아옴) → 보호 해제
+            else:
+                def _jset(m):
+                    return {" ".join(j.split()).casefold()
+                            for j in str(flow._info(m) or "").split("·") if j.strip()}
+                _mine = _jset(actor); _vj = _jset(v)
+                if _mine and _vj and not (_mine & _vj):   # 막힌 사람이 나와 도메인이 다를 때만(같은 분야면 흡수 아님)
+                    flow._stall_blocks = getattr(flow, "_stall_blocks", 0) + 1
+                    if flow._stall_blocks > 3:
+                        flow._stall_victim = None      # 폴백: N회 막아도 안 돌아오면 통과(교착 방지)
+                    else:
+                        audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                                     reason="막힌 동료 일 흡수(재요청 대신 대신함)", tool_use_id=tool_use_id)
+                        return _deny(
+                            f"막힘 흡수 차단: 동료 [{flow._info(v) or v}]가 맡은 일을 하다 막혔습니다 — 그 일을 당신이 "
+                            f"'내가 하지'로 대신 만들면 그 사람 작업이 통째로 버려집니다(P-027 실패: 백엔드 일을 다른 봇이 "
+                            f"대신 만들어 867줄 폐기). request(Work)로 그 사람에게 '이어서 마저 해'를 다시 보내 기다리세요 "
+                            f"— **같은 사람 재요청**이지 새로 뽑거나(recruit) 당신이 대신하는 게 아닙니다. 그 사람이 다시 "
+                            f"손대면 자동으로 풀려 당신 일도 이어집니다. (끝내 무응답이면 인프라 문제이니 사용자에게 보고.)")
+
         # 작업공간을 실제로 바꾸는 도구(run/Write/Edit)는 act_count로 누계 — request 도구가 wake 전후 차이로
         # 'owner가 위임 도중 실제로 일했나'를 판정해 허위완료/독점을 막는다. deny를 모두 통과한 뒤에만 집계.
         if tool in ("Write", "Edit", "mcp__guide__run") and flow is not None:
