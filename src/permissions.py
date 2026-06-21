@@ -209,6 +209,43 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                         "request(Work)로 맡기세요 — 그 owner가 직접 재현·수정·run 검증합니다. 당신은 조율·통합·최종 "
                         "검증만(혼자 다 하지 말 것). 동료 무응답이면 인프라 문제이니 사용자에게 보고.")
 
+        # 8) [리더 흡수 차단 — 상대적] #6·#7은 'delegated==0'(한 번도 위임 안 함)만 잡아, '한두 번 위임해놓고
+        #    나머지를 리더가 통째로 흡수'하는 패턴(P-026 실측: 일부 위임 후 리더가 혼자 255회 run)은 우회됐다.
+        #    구조적 신호: 코디네이터의 직접 doing(act_by 리더)이 '팀 전체의 doing 합'을 넘으면 그건 분배가 아니라
+        #    흡수다(리더가 팀보다 더 많이 일함 = 중앙집권). grace(lead_act>=8)로 초기 셋업·통합은 허용하되, 그
+        #    이후 리더가 팀 합을 앞지르면 Write/Edit/run을 막아 검증은 QA·구현은 owner에게 위임을 강제한다.
+        #    [교착 방지] 도달 가능한(예비 아님·타 흐름 비점유) 동료가 실제로 있을 때만 차단 — 솔로/전원 바쁨이면 통과.
+        #    [자가치유] 위임이 일어나면 그 owner/QA의 act_by가 올라 팀 합이 늘고, 곧 리더가 다시 풀린다(분배 리듬).
+        if (tool in ("Write", "Edit", "mcp__guide__run") and flow is not None and actor is not None
+                and actor == getattr(flow, "leader", None)
+                and getattr(flow, "current", None) is not None):
+            abby = getattr(flow, "act_by", None) or {}
+            lead_act = abby.get(actor, 0)
+            team_act = sum(v for k, v in abby.items() if k != actor)
+            if lead_act >= 8 and lead_act > team_act:
+                eng = getattr(getattr(flow, "comm", None), "engagement", None)
+                scope = getattr(getattr(flow, "comm", None), "scope", None)
+                def _reachable(m):
+                    if m == actor or str((flow._info(m) or "")).startswith("예비"):
+                        return False
+                    if eng is not None and scope is not None:
+                        try:
+                            if eng.busy_elsewhere(m, scope):
+                                return False
+                        except Exception:
+                            pass
+                    return True
+                peers = [m for m in (getattr(flow, "project_team", None) or []) if _reachable(m)]
+                if peers:
+                    audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                                 reason="리더 흡수(팀 합보다 많이 doing)", tool_use_id=tool_use_id)
+                    return _deny(
+                        "리더 흡수 차단: 당신(코디네이터)이 팀 전체보다 더 많이 직접 doing하고 있습니다"
+                        f"(리더 {lead_act}회 vs 팀 합 {team_act}회) — 리더의 일은 분배·조율이지 혼자 검증·디버깅·"
+                        "구현이 아닙니다(직접 일함 = 흡수). 검증은 QA에게, 수정·구현은 해당 도메인 owner에게 "
+                        "request(Work)로 위임하세요. 위임이 늘면 팀 활동이 올라 자연히 다시 풀립니다. "
+                        "동료가 무응답이면 인프라 문제이니 사용자에게 보고하세요(혼자 떠안지 말 것).")
+
         # 작업공간을 실제로 바꾸는 도구(run/Write/Edit)는 act_count로 누계 — request 도구가 wake 전후 차이로
         # 'owner가 위임 도중 실제로 일했나'를 판정해 허위완료/독점을 막는다. deny를 모두 통과한 뒤에만 집계.
         if tool in ("Write", "Edit", "mcp__guide__run") and flow is not None:

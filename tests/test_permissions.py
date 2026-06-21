@@ -269,6 +269,55 @@ def test_fork가지_Info수집은_선구현차단_Work가지는_허용():
                 "Write", {"file_path": "x.js"}) == {}
 
 
+def test_리더_흡수_상대적_차단_팀합_초과():
+    """[리더 흡수 차단 #8] #6·#7은 'delegated==0'(한 번도 위임 안 함)만 잡아 '일부 위임 후 흡수'(P-026 실측:
+    일부 위임 뒤 리더가 혼자 255회 run)가 우회됐다. 코디네이터의 직접 doing(act_by 리더)이 '팀 전체 합'을
+    넘으면 그건 분배가 아니라 흡수 — grace(>=8) 이후 Write/Edit/run을 막아 검증·구현을 동료에게 위임 강제.
+    위임으로 팀 활동이 오르면(자가치유) 다시 풀린다. owner가 직접 마감하는 게 아니라 리더가 분배하게 만든다."""
+    a = FakeAudit()
+    run_allowed = ALLOWED + ["mcp__guide__run"]
+    task = _FakeTask(owner=0, goal="g"); task.team = [11, 12, 13]
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=task, leader=11)
+    flow.project_team = [11, 12, 13]
+    flow._info = lambda i: {11: "백엔드", 12: "프론트엔드", 13: "데이터"}.get(i, "")
+    # 리더 doing(8)이 팀 합(3+2=5)을 넘고 grace(>=8) 충족 → 흡수 차단
+    flow.act_by = {11: 8, 12: 3, 13: 2}
+    hook = make_pre_tool_use_hook(a, run_allowed, actor=11, flow=flow)
+    out = _run(hook, "mcp__guide__run", {"command": "node server.js"})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "리더 흡수(팀 합보다 많이 doing)"
+    # [자가치유] 위임으로 팀 활동이 올라 팀 합(5+4=9)이 리더(8)를 넘으면 다시 허용
+    flow.act_by = {11: 8, 12: 5, 13: 4}
+    assert _run(hook, "mcp__guide__run", {"command": "curl localhost:3000"}) == {}
+    # [grace] 리더 doing이 8 미만이면 초기 셋업·통합 허용(팀보다 많아도)
+    flow.act_by = {11: 5, 12: 1, 13: 0}
+    assert _run(hook, "mcp__guide__run", {"command": "ls"}) == {}
+    # Write도 동일 차단(work_delegated>=1로 #6 우회, owner=0으로 #4 우회 → 순수 #8 검증)
+    task.work_delegated = 1; task.leader_writes = 0
+    flow.act_by = {11: 10, 12: 2, 13: 1}
+    out = _run(hook, "Write", {"file_path": "server.js"})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "리더 흡수(팀 합보다 많이 doing)"
+
+
+def test_리더_흡수_차단_교착방지_도달동료없으면_통과():
+    """[교착 방지] 도달 가능한 동료가 없으면(솔로 또는 전원 예비) 흡수 차단이 풀린다 — 혼자뿐인 흐름에서
+    리더가 멈추면 그게 교착이다. 차단은 '맡길 사람이 실제로 있을 때'만(안정성 우선)."""
+    a = FakeAudit()
+    run_allowed = ALLOWED + ["mcp__guide__run"]
+    task = _FakeTask(owner=0, goal="g"); task.team = [11]
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=task, leader=11)
+    flow.project_team = [11]                       # 동료 없음(솔로)
+    flow._info = lambda i: "백엔드"
+    flow.act_by = {11: 30}                         # 흡수처럼 보여도 맡길 사람이 없음 → 통과
+    assert _run(make_pre_tool_use_hook(a, run_allowed, actor=11, flow=flow),
+                "mcp__guide__run", {"command": "ls"}) == {}
+    # 예비(reserve)만 있는 경우도 도달 가능 동료 0 → 통과
+    flow.project_team = [11, 99]; flow._info = lambda i: ("예비 봇" if i == 99 else "백엔드")
+    assert _run(make_pre_tool_use_hook(FakeAudit(), run_allowed, actor=11, flow=flow),
+                "mcp__guide__run", {"command": "ls"}) == {}
+
+
 def test_쓰기리스_다중경로_병렬Work():
     """[RFC-006 parallel_work] 가지마다 '파일 목록' 리스 — 목록 중 어느 하나(파일 자신 일치 포함)면
     허용, 전부 밖이면 차단. Work 가지(fork_kind=WORK)의 구현 허용과 결합된 실제 병렬 형상 그대로."""
