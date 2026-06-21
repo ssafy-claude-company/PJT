@@ -246,6 +246,72 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                         "request(Work)로 위임하세요. 위임이 늘면 팀 활동이 올라 자연히 다시 풀립니다. "
                         "동료가 무응답이면 인프라 문제이니 사용자에게 보고하세요(혼자 떠안지 말 것).")
 
+        # 9) [흡수 차단 — '모르는 일까지 하지 말 것'(2026-06-21, 사용자 규명)] 어떤 행위자든(리더든 owner든)
+        #    자기 도메인 *밖*의 일을, 그 도메인 전문가가 놀고 있는데 대신 하면 = 흡수다(P-026: 백엔드가 AI 엔지니어
+        #    모델까지 다 씀; 사용자 "전문가가 놀고 있으면 대기하든가 왜 모르는 일까지 하는거야"). 신호: 이 Task 팀에
+        #    '나와 도메인이 안 겹치는(distinct) + 실작업 0(idle) + 아직 Work 위임 0 + 도달 가능'한 동료가 있으면, 그건
+        #    그 동료가 할 일을 내가 흡수하려는 상황 → Write/Edit 차단. request(Work)로 그에게 맡기거나(일하면 풀림)
+        #    끝낼 때까지 대기하게 한다. 도메인이 같으면(동질) 차단 안 함(같은 분야끼리는 흡수 아님). [교착 방지]
+        #    도달 가능자만 — 없으면 통과(맡길 사람 없으면 직접). [반-스래싱] 한 번 위임하면(work_delegated_to 진입)
+        #    그 동료는 더는 블로커가 아니라 본인이 일 안 해도 진행 가능(기회는 줬다). [하위호환] _info 없거나 팀 빈
+        #    흐름·테스트는 건너뜀(도메인 판정 불가).
+        if (tool in ("Write", "Edit") and flow is not None and actor is not None
+                and getattr(flow, "current", None) is not None
+                and callable(getattr(flow, "_info", None))
+                and (getattr(flow.current, "team", None) or [])):
+            def _jobset(m):
+                return {" ".join(j.split()).casefold()
+                        for j in str((flow._info(m) or "")).split("·") if j.strip()}
+            _mine = _jobset(actor)
+            if _mine and not any(x.startswith("예비") for x in _mine):   # 내 직군이 분명할 때만(예비/미상은 판단 불가)
+                eng2 = getattr(getattr(flow, "comm", None), "engagement", None)
+                scope2 = getattr(getattr(flow, "comm", None), "scope", None)
+                abby2 = getattr(flow, "act_by", None) or {}
+                deleg = getattr(flow.current, "work_delegated_to", None) or set()
+
+                _lead = getattr(flow, "leader", None)
+                # [사이클 방지] 지금 베턴 사슬에 들어와 있는 멤버(위임하고 잠든 상위자 포함)는 후보에서 제외 —
+                # 안 그러면 A가 자기를 깨운 상위자 B(act_by 0·미수신이라 idle처럼 보임)에게 되위임하려다 교착.
+                # 사슬 밖 '전혀 손 안 탄' 전문가만 흡수 대상으로 본다.
+                _stack = getattr(getattr(flow, "comm", None), "open_requests", None) or []
+                _engaged = set()
+                for _fr in _stack:
+                    for _at in ("from_id", "to_id"):
+                        _v = getattr(_fr, _at, None)
+                        if _v is not None:
+                            _engaged.add(_v)
+
+                def _idle_distinct_reach(m):
+                    # 리더는 '흡수당하는 전문가' 후보가 아니다(조율자 — idle이 정상). actor 자신·사슬 참여·이미 위임·일한 멤버 제외.
+                    if m == actor or m == _lead or m in _engaged or m in deleg or abby2.get(m, 0) != 0:
+                        return False
+                    lbl = str(flow._info(m) or "")
+                    if lbl.startswith("예비") or not lbl.strip():
+                        return False
+                    mj = _jobset(m)
+                    if not mj or (mj & _mine):          # 도메인 미상 또는 내 직군과 겹침 → 흡수 아님
+                        return False
+                    if eng2 is not None and scope2 is not None:
+                        try:
+                            if eng2.busy_elsewhere(m, scope2):
+                                return False
+                        except Exception:
+                            pass
+                    return True
+
+                idle_specialists = [m for m in (getattr(flow.current, "team", None) or [])
+                                    if _idle_distinct_reach(m)]
+                if idle_specialists:
+                    _nm = ", ".join(str(flow._info(m) or m) for m in idle_specialists)
+                    audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                                 reason="타 도메인 전문가 일 흡수(전문가 idle)", tool_use_id=tool_use_id)
+                    return _deny(
+                        f"흡수 차단: 당신과 도메인이 다른 전문가 [{_nm}]가 이 Task에서 아직 아무 일도 안 하고(idle) "
+                        f"위임도 못 받았습니다 — 그들의 도메인 일을 당신이 대신 하지 마세요(모르는 도메인을 대신 = 흡수, "
+                        f"그 분야 깊이가 안 납니다). request(Work)로 그들에게 맡기거나(그가 일하면 자동으로 풀립니다) "
+                        f"끝낼 때까지 대기하세요. 정말 불필요하면 한 번 위임해 본인이 판단하게 하세요(위임 후엔 진행 가능). "
+                        f"전원 도달 불가하면 인프라 문제이니 사용자에게 보고(혼자 떠안지 말 것).")
+
         # 작업공간을 실제로 바꾸는 도구(run/Write/Edit)는 act_count로 누계 — request 도구가 wake 전후 차이로
         # 'owner가 위임 도중 실제로 일했나'를 판정해 허위완료/독점을 막는다. deny를 모두 통과한 뒤에만 집계.
         if tool in ("Write", "Edit", "mcp__guide__run") and flow is not None:

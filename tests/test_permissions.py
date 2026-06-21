@@ -318,6 +318,45 @@ def test_리더_흡수_차단_교착방지_도달동료없으면_통과():
                 "mcp__guide__run", {"command": "ls"}) == {}
 
 
+def test_흡수차단_타도메인_전문가_idle이면_Write차단():
+    """[게이트 #9 흡수 차단] 자기 도메인 밖 일을, 그 도메인 전문가가 idle인데 대신 Write하면 차단 — 사용자
+    "전문가가 놀고 있으면 대기하든가, 왜 모르는 일까지 하느냐". request(Work)로 맡기거나(work_delegated_to
+    진입) 그가 일하면(act_by>0) 풀린다. P-026: 백엔드가 AI 엔지니어 모델까지 흡수한 패턴을 흐름 중 차단."""
+    a = FakeAudit()
+    # 백엔드(12)=owner가 AI 도메인(모델) Write 시도, AI 엔지니어(13)는 distinct·idle·미위임·도달가능
+    task = _FakeTask(owner=12, goal="g"); task.team = [11, 12, 13]; task.work_delegated_to = set()
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK), (11, 12, Kind.WORK)), current=task, leader=11)
+    flow._info = lambda i: {11: "게임 기획자", 12: "백엔드", 13: "AI 엔지니어"}.get(i, "")
+    flow.act_by = {12: 3, 13: 0}              # 백엔드는 일함, AI 엔지니어 idle
+    hook = make_pre_tool_use_hook(a, ALLOWED, actor=12, flow=flow)
+    out = _run(hook, "Write", {"file_path": "model/train.js"})   # 백엔드가 AI 도메인 흡수 시도
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert a.records[-1][1]["reason"] == "타 도메인 전문가 일 흡수(전문가 idle)"
+    task.work_delegated_to.add(13)                               # 위임하면(기회 부여) 풀림
+    assert _run(hook, "Write", {"file_path": "model/train.js"}) == {}
+    task.work_delegated_to.discard(13); flow.act_by[13] = 2      # 위임 대신 그가 실제로 일해도 풀림
+    assert _run(hook, "Write", {"file_path": "server.js"}) == {}
+
+
+def test_흡수차단_같은도메인_idle은_차단안함_그리고_도달불가_통과():
+    """[게이트 #9 정밀성·교착방지] (a) 같은 도메인 idle 동료엔 발동 안 함(동질끼린 흡수 아님).
+    (b) distinct 전문가라도 예비/도달불가면 통과(맡길 사람 없으면 직접 — 안정성 우선)."""
+    # (a) 같은 도메인(백엔드 둘) — 13 idle이어도 차단 안 함
+    task = _FakeTask(owner=12, goal="g"); task.team = [11, 12, 13]; task.work_delegated_to = set()
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK), (11, 12, Kind.WORK)), current=task, leader=11)
+    flow._info = lambda i: {11: "게임 기획자", 12: "백엔드", 13: "백엔드"}.get(i, "")
+    flow.act_by = {12: 3, 13: 0}
+    assert _run(make_pre_tool_use_hook(FakeAudit(), ALLOWED, actor=12, flow=flow),
+                "Write", {"file_path": "server.js"}) == {}
+    # (b) distinct지만 예비 → 도달 불가 → 통과
+    task2 = _FakeTask(owner=12, goal="g"); task2.team = [11, 12, 13]; task2.work_delegated_to = set()
+    f2 = _FakeFlow2(_comm_with((0, 11, Kind.WORK), (11, 12, Kind.WORK)), current=task2, leader=11)
+    f2._info = lambda i: {11: "게임 기획자", 12: "백엔드", 13: "예비 봇"}.get(i, "")
+    f2.act_by = {12: 3, 13: 0}
+    assert _run(make_pre_tool_use_hook(FakeAudit(), ALLOWED, actor=12, flow=f2),
+                "Write", {"file_path": "server.js"}) == {}
+
+
 def test_쓰기리스_다중경로_병렬Work():
     """[RFC-006 parallel_work] 가지마다 '파일 목록' 리스 — 목록 중 어느 하나(파일 자신 일치 포함)면
     허용, 전부 밖이면 차단. Work 가지(fork_kind=WORK)의 구현 허용과 결합된 실제 병렬 형상 그대로."""
