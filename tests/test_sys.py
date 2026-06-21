@@ -3863,6 +3863,38 @@ def test_이름충돌_다른작품은_하이재킹_금지_자동고유화(tmp_pa
     assert pid3 == pid1 and s.projects[300]["id"] == pid1      # 재사용(이동)
 
 
+def test_배포_변경없는_재배포_차단_anti_thrash(monkeypatch):
+    """[배포 반-스래싱(2026-06-21 라이브 P-026: 리더가 18회 재배포로 30분 낭비)] Render 무료 빌드는 60s+라
+    deploy가 타임아웃으로 보여도 빌드는 진행 중인데, 변경 없이 재배포하면 빌드를 리셋해 더 느려진다. 직전 배포
+    이후 Write/Edit=0이면 차단(URL을 curl 확인으로 유도), 코드 변경(writes↑) 후엔 1회 통과. deploy_inflight
+    (동시 차단)와 독립 — 그건 *순차* 재배포를 못 막았던 구멍."""
+    import src.deploy as dp
+    import os
+    f = Flow(FakeGuide(), channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L"})
+    f.start_root("root")
+    f.workspace = "/tmp/ws-x"
+    f.project_id = "P-009"
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    calls = {"n": 0}
+    def fake_deploy_sync(ws, name, *a):
+        calls["n"] += 1
+        return f"배포 성공 ✅ 라이브: https://organt-{name}.onrender.com"
+    monkeypatch.setattr(dp, "deploy_sync", fake_deploy_sync)
+    for k in ("GH_PAT", "GH_USER", "RENDER_KEY", "RENDER_OWNER"):
+        os.environ.setdefault(k, "x")
+    # 1회차: 통과(이 시점 writes 기록)
+    r1 = asyncio.run(t["deploy"].handler({"name": "site"}))
+    assert "배포 성공" in r1["content"][0]["text"] and calls["n"] == 1
+    # 2회차(코드 변경 없음): 차단 — 실제 배포 안 일어남
+    r2 = asyncio.run(t["deploy"].handler({"name": "site"}))
+    assert "재배포 차단" in r2["content"][0]["text"] and calls["n"] == 1
+    assert "curl" in r2["content"][0]["text"]                       # URL 확인으로 유도
+    # 코드 변경(writes↑) 후: 재배포 허용
+    f.writes_by_role["프론트"] = f.writes_by_role.get("프론트", 0) + 2
+    r3 = asyncio.run(t["deploy"].handler({"name": "site"}))
+    assert "배포 성공" in r3["content"][0]["text"] and calls["n"] == 2
+
+
 def test_배포_진행중_재호출은_대기_새배포_트리거_금지():
     """[배포 폴링 차단] 빌드가 길어지면 리더가 deploy를 재호출해 '점검'하려 하는데, 재호출은 새
     배포를 또 트리거(빌드 리셋)하는 자기 영속 루프가 된다(라이브: [안내][배포] 1분 간격 도배 +

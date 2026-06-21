@@ -2376,6 +2376,20 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 return _ok("[대기] 배포가 이미 진행 중입니다 — deploy를 다시 부르지 마세요(재호출은 점검이 "
                            "아니라 **새 배포를 또 트리거**해 빌드를 계속 리셋합니다). 진행 중인 배포의 "
                            "성공/실패 결과가 곧 이 도구의 응답으로 돌아옵니다 — 그때 판단하세요.")
+            # [배포 반-스래싱 — 변경 없는 재배포 차단(2026-06-21 라이브 P-026: 리더가 18회 재배포로 30분 낭비)]
+            # Render 무료 빌드는 60s+라 deploy_sync가 *타임아웃*으로 보여도 빌드는 계속 진행된다. 리더가 '실패했나'
+            # 싶어 코드 변경 없이 재배포하면 빌드를 처음부터 리셋해 *더 느려진다*(자기영속 thrash — deploy_inflight는
+            # *동시*만 막고 *순차* 재배포는 못 막음). 직전 배포 이후 Write/Edit가 0이면(=같은 코드) 차단하고 'URL을
+            # curl 확인하라'로 돌린다 — 진짜 결함을 고쳤으면 writes가 늘어 통과(교차검증 cc_held와 같은 정신, deploy판).
+            _dwrites = sum((getattr(flow, "writes_by_role", None) or {}).values())
+            if getattr(flow, "_deployed_once", False) and _dwrites == getattr(flow, "_deploy_writes", -1):
+                if flow.log:
+                    flow.log("deploy_thrash", writes=_dwrites)
+                return _ok("[재배포 차단 — 직전 배포 후 코드 변경 없음] Render 무료 빌드는 60초+라 deploy가 "
+                           "*타임아웃*으로 보여도 **빌드는 계속 진행 중**입니다. 변경 없이 재배포하면 빌드를 처음부터 "
+                           "리셋해 *더 느려집니다*(라이브 P-026: 18회 재배포로 30분 낭비). **재배포하지 말고 ~90초 뒤 "
+                           "라이브 URL을 `run`으로 curl 확인**하세요(HTTP 200이면 완료 — 그 URL을 그대로 보고). 정말 "
+                           "결함을 고쳤다면(Write/Edit) 그 변경 후에 1회만 재배포하세요.")
             name = deploy_service_name(flow, args.get("name", ""))   # 프로젝트별 결정적 서비스명
             if not name:
                 return _ok("배포 불가: 미등록 흐름은 배포 슬롯이 없습니다 — 배포는 프로젝트마다"
@@ -2394,6 +2408,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             finally:
                 flow.deploy_inflight = False
             flow.deployed = result                 # 배포 호출됨 기록(SYS의 배포 강제가 중복 안 하게)
+            flow._deployed_once = True
+            flow._deploy_writes = _dwrites         # 이 배포 시점의 저작 수 — 다음 배포가 '변경 없음'을 판정
             return _ok(result)
         tools.append(deploy)
 
