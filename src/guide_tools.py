@@ -1596,6 +1596,31 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                             f"당신 판단 — 한 능력이라도 2명이 되면 통과). 정말 1명으로 충분하면 goal이나 acceptance에 "
                             f"**'[심도 단독: <능력> — <사유>]'**를 적어 재호출하세요(의식적 — 빈 태그·그냥 재호출은 "
                             f"통과 안 됨).")
+            # [협업 — 병렬 계획 의식적 결정(2026-06-22 사용자: '병렬이 이루어지는가')] 독립 도메인이 ≥2면 직렬
+            # request 체인 대신 parallel_work로 동시에(라이브: parallel_work 2회 = 사실상 사장, 협업이 다 직렬).
+            # 실행 계획을 의식적으로 — '[병렬: 무엇을 동시에]' 또는 '[직렬: <사유>]'. 분해 강제(폐기)와 달리
+            # Task를 쪼개는 게 아니라 *한 Task 안의 독립 영역을 동시에* 돌리는 것(통합·검증은 직렬). 마커 없으면
+            # 보류(persistent). staffing_exempt와 무관(수동 구성 팀도 병렬 가능) → 별도 우회 플래그.
+            if not getattr(flow, "parallel_planned", False):
+                _par_m = bool(re.search(r"\[\s*(?:병렬|직렬)[^\]]*[:：]\s*\S{2,}",
+                                        goal + "\n" + (args.get("acceptance") or "")))
+                _wdoms = set()
+                for m in flow.current.team:
+                    if m == flow.leader or _is_spare(flow, m):
+                        continue
+                    for j in _jobs_of(flow._info(m) or ""):
+                        if _norm_job(j):
+                            _wdoms.add(_norm_job(j))
+                if not _par_m and len(_wdoms) >= 2:
+                    if flow.log:
+                        flow.log("set_goal_parallel_plan", task=flow.current.task_id, doms=len(_wdoms))
+                    return _ok(
+                        f"확정 보류(병렬 계획 — 독립 영역 동시 진행): 이 팀엔 병행 가능한 도메인이 여럿입니다"
+                        f"(**{len(_wdoms)}개**). 직렬 request 체인은 느리고 협업이 줄어듭니다 — **독립 영역은 "
+                        f"parallel_work로 *동시에***(영역 안 겹치게 파일 리스로) 진행하세요. 실행 계획을 goal에 "
+                        f"**'[병렬: 무엇을 동시에]'**로 밝히거나, 순서 의존이라 직렬이어야 하면 **'[직렬: <사유>]'**로 "
+                        f"명시해 재호출하세요(빈 태그·그냥 재호출은 통과 안 됨). 분해가 아니라 *같은 Task 안의 독립 "
+                        f"영역을 동시에* 돌리는 것입니다(통합·검증은 직렬).")
             # [단일-Task 깊은 수렴 — 분해 강제 제거(2026-06-18)] 종전엔 다도메인 목표를 '도메인별 Task로
             # 쪼개라'고 밀었으나(분해 점검 게이트), 라이브 규명: P-002 114305-1의 '한 owner가 5도메인'은
             # *구조* 문제가 아니라 전문가 8명 idle(참여 문제)이었고, P-016(216 대화·단일 Task)이 보여주듯

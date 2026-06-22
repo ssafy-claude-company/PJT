@@ -47,6 +47,7 @@ def _flow(g, leader=11):
     f.data_prov_checked = True  # 데이터 출처 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     f.staffing_exempt = True  # 스태핑 커버리지 게이트도 기본 우회(전용 테스트만 False로 검증)
     f.iface_dialogue_checked = True  # 인터페이스 직접합의 게이트도 기본 우회(전용 테스트만 False로 검증)
+    f.parallel_planned = True  # 병렬 계획 게이트도 기본 우회(전용 테스트만 False로 검증)
     return f
 
 
@@ -492,6 +493,7 @@ def test_owner는_work수신자_goal합의후():
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "A백엔드", 13: "B프론트"})
     f.start_root("root")
     f.gap_checked = True; f.decomp_checked = True   # P7 범주·분해 점검 보류 우회(이 테스트 범위 밖)
+    f.staffing_exempt = True; f.parallel_planned = True   # Stage1·2 게이트 우회(이 테스트 범위 밖)
     waked = []
 
     async def wake(to, b, k):
@@ -526,6 +528,7 @@ def test_set_goal은_Task멤버_전원_의견받은뒤에만_Task별():
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백", 13: "프"})
     f.start_root("root")
     f.gap_checked = True; f.decomp_checked = True   # P7 범주·분해 점검 보류(이 테스트는 participated 게이트 검증)
+    f.staffing_exempt = True; f.parallel_planned = True   # Stage1·2 게이트 우회(이 테스트는 participated 검증)
     f.percept_checked = True   # 지각 비대칭 점검 보류 우회(범위 밖)
     f.acceptance_checked = True   # 수용 계약 게이트 보류 우회(범위 밖)
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
@@ -556,6 +559,7 @@ def test_set_goal_점유도메인은_면제아니라_1회대기보류_후_의식
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "프론트엔드"})
     f.start_root("root")
     f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True
+    f.staffing_exempt = True; f.parallel_planned = True   # Stage1·2 게이트 우회(이 테스트는 busy-consensus 검증)
     eng = Engagement()
     f.comm.attach_engagement(eng, scope="P-THIS")
     logged = []
@@ -582,6 +586,7 @@ def test_set_goal_같은직군_잉여는_합의면제_에코방지():
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "백엔드", 14: "프론트엔드"})
     f.start_root("root")
     f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True; f.decomp_checked = True
+    f.staffing_exempt = True; f.parallel_planned = True   # Stage1·2 set_goal 게이트 우회(이 테스트는 consensus 검증)
     logged = []; f.log = lambda ev, **kw: logged.append((ev, kw))
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
     asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13,14"}))
@@ -594,6 +599,7 @@ def test_set_goal_같은직군_잉여는_합의면제_에코방지():
     g2 = FakeGuide()
     f2 = Flow(g2, channel_id=501, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "백엔드", 14: "프론트엔드"})
     f2.start_root("r2"); f2.gap_checked = True; f2.percept_checked = True; f2.acceptance_checked = True; f2.decomp_checked = True
+    f2.staffing_exempt = True; f2.parallel_planned = True
     t2 = {x.name: x for x in make_guide_tools(f2, 11, "leader")}
     asyncio.run(t2["create_project"].handler({"name": "p2", "team": "12,13,14"}))
     asyncio.run(t2["create_task"].handler({"members": "12,13,14"}))
@@ -610,6 +616,7 @@ def test_set_goal_가용한_미참여멤버는_여전히_협의요구():
     f = Flow(g, channel_id=500, guild_id=1, leader_id=11, bot_info={11: "L", 12: "백엔드", 13: "프론트엔드"})
     f.start_root("root")
     f.gap_checked = True; f.percept_checked = True; f.acceptance_checked = True; f.decomp_checked = True
+    f.staffing_exempt = True; f.parallel_planned = True   # Stage1·2 set_goal 게이트 우회(이 테스트는 consensus 검증)
     eng = Engagement()
     f.comm.attach_engagement(eng, scope="P-THIS")    # 13은 어디에도 점유 안 됨(가용)
     t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
@@ -2306,6 +2313,30 @@ def test_capability_gaps_일반화_데이터_DevOps_DBA_커버리지():
     assert "배포·인프라(DevOps)" not in _capability_gaps("CI/CD 파이프라인 구축", ["DevOps"])
     # 평범한 게임/웹엔 새 갭 없음(과발동 방지)
     assert _capability_gaps("오버워치 같은 게임 만들어줘", ["게임 기획자", "프론트엔드"]) == []
+
+
+def test_병렬_계획_의식적_결정_게이트():
+    """[Stage 2c — 병렬(2026-06-22 사용자: '병렬이 이루어지는가')] 독립 도메인 ≥2면 set_goal 보류 →
+    '[병렬: ...]' 또는 '[직렬: 사유]' 의식적 계획. 마커로 통과. 단일 도메인엔 미발동(과발동 방지)."""
+    g = FakeGuide(); f = _flow(g); f.parallel_planned = False
+    f.bot_info[12] = "백엔드"; f.bot_info[13] = "프론트엔드"
+    f.project_team += [13]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.update({12, 13})
+    r1 = asyncio.run(t["set_goal"].handler({"goal": "웹앱 만들기"}))["content"][0]["text"]
+    assert "병렬 계획" in r1 and not f.current.status.goal       # ≥2 도메인 → 보류
+    # [직렬: 사유] 마커 → 의식적 통과
+    asyncio.run(t["set_goal"].handler({"goal": "웹앱 만들기 [직렬: 백엔드 API 먼저 후 프론트]"}))
+    assert f.current.status.goal
+    # 단일 도메인 팀엔 미발동
+    g2 = FakeGuide(); f2 = _flow(g2); f2.parallel_planned = False
+    f2.bot_info[12] = "백엔드"
+    t2 = _tools(f2, 11, "leader")
+    asyncio.run(t2["create_task"].handler({"members": "12"}))
+    f2.current.participated.add(12)
+    r3 = asyncio.run(t2["set_goal"].handler({"goal": "API 만들기"}))["content"][0]["text"]
+    assert f2.current.status.goal and "병렬 계획" not in r3       # 단일 도메인 → 미발동
 
 
 def test_협업_깊이_핵심능력_복수검토_게이트():
