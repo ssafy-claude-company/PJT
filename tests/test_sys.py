@@ -48,7 +48,7 @@ def _flow(g, leader=11):
     f.data_prov_checked = True  # 데이터 출처 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     f.staffing_exempt = True  # 스태핑 커버리지 게이트도 기본 우회(전용 테스트만 False로 검증)
     f.iface_dialogue_checked = True  # 인터페이스 직접합의 게이트도 기본 우회(전용 테스트만 False로 검증)
-    f.parallel_planned = True  # 병렬 계획 게이트도 기본 우회(전용 테스트만 False로 검증)
+    f._parallel_enabled = True  # parallel_work 실경로 테스트만 활성(프로덕션은 비활성 — 단일흐름 안정성)
     f.offdomain_checked = True  # 직군밖 위임 사전차단도 기본 우회(전용 테스트만 False로 검증)
     return f
 
@@ -2369,30 +2369,6 @@ def test_배포_타겟_호환_사전검증_런타임Python_차단():
               "server.js": "const express=require('express'); express().listen(process.env.PORT);",
               "train.py": "import sklearn  # 빌드타임 오프라인 학습"})
     assert _deploy_infeasibility(d4) == ""
-
-
-def test_병렬_계획_의식적_결정_게이트():
-    """[Stage 2c — 병렬(2026-06-22 사용자: '병렬이 이루어지는가')] 독립 도메인 ≥2면 set_goal 보류 →
-    '[병렬: ...]' 또는 '[직렬: 사유]' 의식적 계획. 마커로 통과. 단일 도메인엔 미발동(과발동 방지)."""
-    g = FakeGuide(); f = _flow(g); f.parallel_planned = False
-    f.bot_info[12] = "백엔드"; f.bot_info[13] = "프론트엔드"
-    f.project_team += [13]
-    t = _tools(f, 11, "leader")
-    asyncio.run(t["create_task"].handler({"members": "12,13"}))
-    f.current.participated.update({12, 13})
-    r1 = asyncio.run(t["set_goal"].handler({"goal": "웹앱 만들기"}))["content"][0]["text"]
-    assert "병렬 계획" in r1 and not f.current.status.goal       # ≥2 도메인 → 보류
-    # [직렬: 사유] 마커 → 의식적 통과
-    asyncio.run(t["set_goal"].handler({"goal": "웹앱 만들기 [직렬: 백엔드 API 먼저 후 프론트]"}))
-    assert f.current.status.goal
-    # 단일 도메인 팀엔 미발동
-    g2 = FakeGuide(); f2 = _flow(g2); f2.parallel_planned = False
-    f2.bot_info[12] = "백엔드"
-    t2 = _tools(f2, 11, "leader")
-    asyncio.run(t2["create_task"].handler({"members": "12"}))
-    f2.current.participated.add(12)
-    r3 = asyncio.run(t2["set_goal"].handler({"goal": "API 만들기"}))["content"][0]["text"]
-    assert f2.current.status.goal and "병렬 계획" not in r3       # 단일 도메인 → 미발동
 
 
 def test_협업_깊이_핵심능력_복수검토_게이트():

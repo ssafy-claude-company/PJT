@@ -1673,31 +1673,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                             f"당신 판단 — 한 능력이라도 2명이 되면 통과). 정말 1명으로 충분하면 goal이나 acceptance에 "
                             f"**'[심도 단독: <능력> — <사유>]'**를 적어 재호출하세요(의식적 — 빈 태그·그냥 재호출은 "
                             f"통과 안 됨).")
-            # [협업 — 병렬 계획 의식적 결정(2026-06-22 사용자: '병렬이 이루어지는가')] 독립 도메인이 ≥2면 직렬
-            # request 체인 대신 parallel_work로 동시에(라이브: parallel_work 2회 = 사실상 사장, 협업이 다 직렬).
-            # 실행 계획을 의식적으로 — '[병렬: 무엇을 동시에]' 또는 '[직렬: <사유>]'. 분해 강제(폐기)와 달리
-            # Task를 쪼개는 게 아니라 *한 Task 안의 독립 영역을 동시에* 돌리는 것(통합·검증은 직렬). 마커 없으면
-            # 보류(persistent). staffing_exempt와 무관(수동 구성 팀도 병렬 가능) → 별도 우회 플래그.
-            if not getattr(flow, "parallel_planned", False):
-                _par_m = bool(re.search(r"\[\s*(?:병렬|직렬)[^\]]*[:：]\s*\S{2,}",
-                                        goal + "\n" + (args.get("acceptance") or "")))
-                _wdoms = set()
-                for m in flow.current.team:
-                    if m == flow.leader or _is_spare(flow, m):
-                        continue
-                    for j in _jobs_of(flow._info(m) or ""):
-                        if _norm_job(j):
-                            _wdoms.add(_norm_job(j))
-                if not _par_m and len(_wdoms) >= 2:
-                    if flow.log:
-                        flow.log("set_goal_parallel_plan", task=flow.current.task_id, doms=len(_wdoms))
-                    return _ok(
-                        f"확정 보류(병렬 계획 — 독립 영역 동시 진행): 이 팀엔 병행 가능한 도메인이 여럿입니다"
-                        f"(**{len(_wdoms)}개**). 직렬 request 체인은 느리고 협업이 줄어듭니다 — **독립 영역은 "
-                        f"parallel_work로 *동시에***(영역 안 겹치게 파일 리스로) 진행하세요. 실행 계획을 goal에 "
-                        f"**'[병렬: 무엇을 동시에]'**로 밝히거나, 순서 의존이라 직렬이어야 하면 **'[직렬: <사유>]'**로 "
-                        f"명시해 재호출하세요(빈 태그·그냥 재호출은 통과 안 됨). 분해가 아니라 *같은 Task 안의 독립 "
-                        f"영역을 동시에* 돌리는 것입니다(통합·검증은 직렬).")
+            # [병렬 강제 제거 — 단일흐름 안정성(2026-06-22 사용자 결정)] 병렬 fork 경로가 작업공간 cwd·게이트#9·
+            # 쓰기리스로 Write를 잃어 산출물 0 churn을 유발했다(P-029 규명). '흐름을 최대한 하나로 유지하며
+            # 안정성'이 전제이므로 병렬 강제 게이트를 걷어낸다 — 협업은 직렬(request)+meet로. parallel_work도 비활성화.
             # [단일-Task 깊은 수렴 — 분해 강제 제거(2026-06-18)] 종전엔 다도메인 목표를 '도메인별 Task로
             # 쪼개라'고 밀었으나(분해 점검 게이트), 라이브 규명: P-002 114305-1의 '한 owner가 5도메인'은
             # *구조* 문제가 아니라 전문가 8명 idle(참여 문제)이었고, P-016(216 대화·단일 Task)이 보여주듯
@@ -2458,6 +2436,14 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 코어)에 Work 의미론(쓰기 리스·owner·실작업 판정)을 입힌다 — alive-집합 전면 개편 없이
             # '병렬 실행 + 직렬 통합'(RFC-005 P1)을 연다. 가지는 comm 프레임을 열지 않으므로 재위임
             # 불가(구조 강제) — 실측 근거: P-009·P-010 워커의 중첩 request 0회(막히면 보고→리더 직렬).
+            # [병렬 비활성화 — 단일흐름 안정성(2026-06-22 사용자 결정)] 병렬 fork는 가지 에이전트의 작업공간
+            # cwd 불일치 + 게이트#9(비-fork 전문가 idle 오발) + 쓰기리스로 Write를 잃어 산출물 0 churn을
+            # 유발했다(P-029 규명). 전제가 '단일흐름 안정성'이므로 병렬 Work를 끄고 직렬(request)로 돌린다 —
+            # 통합·검증은 어차피 직렬이라 손실 없음. 테스트는 _parallel_enabled로 실경로 검증(경로 수정 후 해제).
+            if not getattr(flow, "_parallel_enabled", False):
+                return _ok("[병렬 비활성화] 병렬 Work는 현재 비활성화돼 있습니다 — 작업공간/게이트 정합 문제로 "
+                           "가지의 산출물이 유실되는 불안정이 확인됐습니다(P-029). **독립 영역도 request(Work)로 "
+                           "한 명씩 직렬 위임**하세요(단일흐름 안정성 우선 — 통합·검증은 어차피 직렬).")
             if flow.current is None:
                 return _ok("오류: 진행 중인 Task가 없습니다. create_task 먼저 여세요.")
             goal = (flow.current.status.goal or "").strip()
