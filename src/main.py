@@ -142,19 +142,27 @@ def projects_to_resume(projects: dict, already_channels: set, main_channel) -> l
     return out
 
 
-def resume_continue_body(body) -> str:
+def resume_continue_body(body, last_work="") -> str:
     """[복구 이어가기 본문 — 사용자 지적 2026-06-14] 미완 Task(open_task)가 복원되는 복구에서 원요청을
     '새 요청'처럼 재처리하면, 리더가 복원된 미완 Task를 **섣불리 complete하고 새 Task를 여는** 사고가 난다
     (라이브: 054013-1 조기완료→074010-1 신설, "기존 안 끝났는데 새로 열림"). 그래서 재발사 본문 앞에
     '복원 Task를 이어서 완성, 새 Task·조기 complete 금지'를 명시한다. 원요청은 그대로 뒤에 보존(시스템이
-    말을 지어내지 않되, 이어가기 맥락만 앞에 붙인다)."""
+    말을 지어내지 않되, 이어가기 맥락만 앞에 붙인다).
+    [정밀 복구 2026-06-22] last_work(직전 owner 위임 원문)이 있으면 동봉 — 리더가 위임을 *재작문*(드리프트:
+    라이브 5:13≠5:47)하지 말고 그 원문 그대로 다시 맡기게 한다. 완료잠금은 구조(owner_incomplete)가 강제하고,
+    이 본문은 '재작문 금지·원문 replay'만 안내한다(말 지어내기 아님 — 원문 보존)."""
+    replay = ""
+    if (last_work or "").strip():
+        replay = ("\n[직전 담당자에게 보냈던 위임 원문 — **새로 작문하지 말고** 같은 담당자에게 이 내용 그대로"
+                  "(남은 부분 중심으로) 다시 Work로 맡기세요. 시스템도 이 원문으로 그 담당자를 자동 이어가기 "
+                  f"합니다]\n{(last_work or '')[:1200]}\n")
     return ("[부팅 복구 — 이어가기] 직전 세션에서 이 요청으로 시작한 **미완 Task가 복원**됐습니다. **새 "
             "Task를 열지 말고, 복원된 그 Task를 이어서 완성**하세요 — 미완인데 섣불리 complete_task 하거나 "
             "새 create_task 하지 마세요(라이브 사고: 미완을 조기 완료하고 새로 엶). **단 '완성'을 당신이 혼자 "
             "떠안지 마세요 — 당신은 *오케스트레이터*입니다(라이브 P-024 교훈: 리더가 run 98회로 전체를 혼자 "
             "검증·디버깅하고 같은 Task를 7번 재마감한 독점)**: 남은 구현·수정은 그 도메인 owner에게 Work로 "
             "맡기고, 검증은 만든 사람 아닌 동료/QA에게 위임하세요 — 거의 다 됐어도 각자 자기 부분을 검증·인도하게 "
-            "하고, 당신이 전체를 혼자 run으로 반복 검증·재마감하지 마세요. 원요청: " + (body or ""))
+            "하고, 당신이 전체를 혼자 run으로 반복 검증·재마감하지 마세요. 원요청: " + (body or "") + replay)
 
 
 async def _connect(token: str, message_content: bool = False,
@@ -507,7 +515,8 @@ async def run() -> None:
         # 리더가 복원 Task를 조기 완료하고 새 Task를 연다(라이브: 054013-1 조기완료→074010-1 신설). 본문에
         # '이어가기'를 명시해 그 사고를 막는다(원요청은 보존).
         if ch in sysm.projects and sysm.projects[ch].get("open_task"):
-            pending.body = resume_continue_body(pending.body)
+            pending.body = resume_continue_body(
+                pending.body, sysm.projects[ch]["open_task"].get("last_work_body", ""))
         pendings.append((ch, pending))
     # [복구 갭 보완 — 사용자 지적] 위 스캔은 '미응답 마지막 [Request]'만 잡는다 — 프로젝트 채널 평문
     # 개입이 부분 처리(봇 응답 후 동면)되면 '완료'로 보여 누락된다. open_task가 남은 등록 프로젝트는

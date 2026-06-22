@@ -363,6 +363,7 @@ class Sys:
             # 라이브: 동면 5회 흐름에서 리더가 같은 협의 질문을 5회 반복(시간·토큰 낭비의 주범).
             # 협의는 '사실'이라 영속이 옳다(검증 누계와 다름 — 그건 의도적으로 0에서 재시작).
             "participated": sorted(int(x) for x in getattr(ref, "participated", []) or []),
+            "last_work_body": getattr(ref, "last_work_body", ""),  # [정밀 복구] owner 위임 원문 — 복구가 재작문 대신 replay
         }
 
     def _status_text(self, flow, t0, final=None) -> str:
@@ -475,6 +476,14 @@ class Sys:
         if snap.get("interfaces"):
             ref.interfaces = snap["interfaces"]        # [협업] 인터페이스 계약 복원 — 재개 L2 검증 일관
         ref.participated = {int(x) for x in snap.get("participated", [])}   # 협의 명단 복원(재협의 루프 차단)
+        if snap.get("last_work_body"):
+            ref.last_work_body = snap["last_work_body"]   # [정밀 복구] owner 위임 원문 복원 → SYS 이어가기가 replay
+        # [정밀 복구 — 완료잠금(구조)] 담당(owner)이 있던 미완 Task를 되살리면, owner가 '이어가기'로 재인도하기
+        # 전엔 complete를 *구조로* 막는다(종전엔 resume_continue_body 프롬프트 의존 → 모델이 잊으면 조기완료 사고:
+        # 라이브 054013-1 조기완료→074010-1 신설). owner_incomplete=True가 (1) complete_task 게이트로 마감을 막고
+        # (2) SYS 자동 이어가기(_auto_continue_owner)가 last_work_body 원문으로 owner를 직접 재개(리더 재작문·드리프트 차단).
+        if int(snap.get("owner") or 0):
+            ref.owner_incomplete = True
         flow.tasks.append(ref)
         flow.current = ref
         # 되살린 Task 멤버를 프로젝트 팀에 **합친다(union)** — 덮어쓰면 그 Task에 낀 일부 멤버로
@@ -998,8 +1007,15 @@ class Sys:
         # 작업*을 잘랐음 — P-010류, 목표=최대 품질과 모순). 무진행이면 아래 break가 즉시 잡으므로, 이 수는
         # '진행 중인 정당한 사슬'을 자르지 않는 넉넉한 한도로 둔다.
         n = int(os.environ.get("ORGANT_AUTO_CONTINUE", "100")) if limit is None else limit
-        body = ("[SYS 자동 이어가기 — 처음부터 다시 하지 말 것] 직전 작업이 도중에 끊겼습니다. "
-                "작업공간을 확인해 이미 된 부분은 그대로 두고, 남은 부분만 마저 끝내 완성하세요.")
+        _orig = (getattr(flow.current, "last_work_body", "") or "").strip() if flow.current else ""
+        if _orig:
+            # [정밀 복구 — 드리프트 차단] 리더가 재작문한 위임이 아니라 *원래 보냈던 위임 원문* 그대로 이어 보낸다
+            # (부팅 복구 5:13≠5:47 드리프트 차단). owner는 원래 받았던 그 지시로 정확히 재개한다.
+            body = ("[SYS 자동 이어가기 — 처음부터 다시 하지 말 것] 직전에 이 작업으로 위임받았습니다(원문 그대로):\n"
+                    f"{_orig}\n\n[이어가기] 작업공간에서 이미 된 부분은 그대로 두고 남은 부분만 마저 끝내 완성하세요.")
+        else:
+            body = ("[SYS 자동 이어가기 — 처음부터 다시 하지 말 것] 직전 작업이 도중에 끊겼습니다. "
+                    "작업공간을 확인해 이미 된 부분은 그대로 두고, 남은 부분만 마저 끝내 완성하세요.")
         while n > 0:
             ref = flow.current
             if (ref is None or not getattr(ref, "owner", 0) or not getattr(ref, "owner_incomplete", False)

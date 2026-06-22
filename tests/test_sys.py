@@ -1181,6 +1181,7 @@ def test_개입_미완Task_영속과_되살리기_담당자가_이어감(tmp_pat
     async def fake_complete(flow, oid, body, kind, role):
         flow.current.verified = True
         flow.current.owner = 0                                   # 리더 직접 완료(owner_delivered 게이트 우회)
+        flow.current.owner_incomplete = False                  # [정밀 복구] 복원 시 완료잠금(owner_incomplete=True) — 이어가기로 owner 재인도됐다고 가정(해제)
         flow.percept_checked = True                            # percept 게이트 우회(마감 메커니즘 테스트 — 실에셋 검증은 별도)
         flow.acceptance_checked = True                         # 수용 계약 게이트 우회(범위 밖)
         t = _tools(flow, 11, "leader")
@@ -1189,6 +1190,43 @@ def test_개입_미완Task_영속과_되살리기_담당자가_이어감(tmp_pat
     s.run_turn = fake_complete
     asyncio.run(s.handle_user_input(901, 11, "마저 끝내", root_id=None))
     assert s.projects[901].get("open_task") is None                         # 완료 → 비움
+
+
+def test_정밀복구_위임원문_영속_완료잠금_replay():
+    """[정밀 복구 #3] owner에게 보낸 Work 원문이 영속되고, 복원 시 (1) 완료잠금(owner_incomplete=True, 구조)
+    으로 조기완료를 막고 (2) SYS 자동 이어가기가 그 *원문 그대로* replay한다 — 리더 재작문(드리프트: 라이브
+    5:13≠5:47) 차단. 종전엔 resume_continue_body 프롬프트에만 의존하던 부분을 구조+원문 보존으로 교정."""
+    import tempfile
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드"},
+            workspace="/ws", session_dir=tempfile.mkdtemp(), projects_path=tempfile.mktemp())
+    f = _flow(g); f.workspace = "/ws"
+
+    async def wake(to, b, k):
+        return "[12] delta 적용 완료(run 검증)"
+    f.wake = wake
+
+    async def scenario():
+        t = _tools(f, 11, "leader")
+        await t["create_task"].handler({"members": "12"})
+        f.current.status.goal = "네트워크 최적화"
+        await t["request"].handler({"to_id": "12", "kind": "Work", "body": "delta 인코딩으로 payload 70% 감소"})
+        assert "delta 인코딩" in (f.current.last_work_body or "")          # ① owner Work 원문 저장
+        snap = s._task_snapshot(f, f.current)
+        assert "delta 인코딩" in snap.get("last_work_body", "")             # ② 스냅샷에 영속
+        f2 = _flow(g); f2.pool = [11, 12]
+        restored = await s._restore_open_task(f2, {"id": "P-002", "leader": 11, "open_task": snap})
+        assert restored and "delta 인코딩" in (f2.current.last_work_body or "")  # ③ 원문 복원
+        assert f2.current.owner_incomplete is True                        # ④ 완료잠금(구조 — 조기완료 차단)
+        seen = {}
+
+        async def wake2(to, b, k):
+            seen["body"] = b; f2.act_count += 1; f2.current.owner_incomplete = False
+            return "[12] 이어서 완료(run 검증)"
+        f2.wake = wake2
+        await s._auto_continue_owner(f2, 11, limit=1)
+        assert "delta 인코딩" in seen.get("body", "")                       # ⑤ 재작문 아닌 원문 replay
+    asyncio.run(scenario())
 
 
 def test_프로젝트_리더_봇부재시_자동재배정_프로젝트유지(tmp_path):
