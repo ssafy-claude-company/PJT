@@ -281,3 +281,47 @@ class CommunicationManager:
             self.escalated_to_origin = True
         self._release_closed(frame)     # 강제 close(복구 경로)도 점유 해제 대칭 유지
         return frame
+
+    def report_up_to(self, reporter_id: int, owner_id: int, reason: str = "") -> List[dict]:
+        """[상류 선행작업 되감기 — 임의 깊이·대상 일반형] reporter(현재 활성)가 상류 owner에게
+        '네 선행작업이 끝나야 내가 진행 가능'을 보고한다(질문이 아니라 Work 선행 이슈).
+
+        A→B→C 에서 C가 A에게 Work를 요청하는 건 'A가 선행작업을 안 끝낸 채 위임했다'는 신호다 —
+        직접 호출(잘못된 호출)을 막고 보고 체계로 거슬러 올린다. owner의 위임 프레임에 닿을 때까지
+        LIFO로 되감되(중간 동료는 **relay만** — 자기 일 아닌 걸 떠안지 않음), owner '위'(origin쪽)
+        프레임은 건드리지 않는다(**부분 되감기** — owner가 루트가 아니어도 됨). 되감으며 닫은
+        (owner→…→reporter) 서브체인을 돌려줘, owner 해결 후 그 경로로 재하강·재개하게 한다.
+
+        하드코딩 없음(임의 깊이·임의 대상): A→B→C→D→E 에서 E.report_up_to(B) → C·D relay,
+        alive=B, A→B 프레임 유지, 서브체인 [B→C, C→D, D→E] 반환. E.report_up_to(A) 면 끝까지
+        올라가 흐름이 origin 복귀(done). (reporter,owner) 쌍이 무엇이든 같은 루프가 처리한다.
+
+        주의: 되감은 동료(reporter·relay)는 **점유 해제하지 않는다** — 곧 재하강으로 재개될
+        '일시정지'이지 '완료'가 아니므로 이 흐름에 계속 묶여 있어야 한다(타 흐름 탈취 방지).
+        """
+        if self.done:
+            raise CommError("흐름이 이미 종료되었습니다.")
+        if reporter_id != self.alive:
+            raise CommError(f"활성 Organt만 보고할 수 있습니다(현재 활성={self.alive}).")
+        if reporter_id == owner_id:
+            raise CommError("자기 자신에게는 보고할 수 없습니다.")
+        if owner_id not in self._ancestors():
+            raise CommError(
+                f"{owner_id}는 응답을 기다리는 상류 위임자가 아닙니다 — 상류 보고(되감기) 대상이 아닙니다.")
+        sub_chain: List[dict] = []
+        # owner가 from_id인 프레임을 닫는 순간 alive=owner가 된다 — 그때까지 top부터 relay-close.
+        # (해제 안 함: 재하강 재개 대상이라 흐름에 묶인 채 둔다.)
+        while self.alive != owner_id:
+            frame = self._stack.pop()
+            sub_chain.append({"from": int(frame.from_id), "to": int(frame.to_id),
+                              "kind": str(getattr(frame, "kind", "work")),
+                              "body": getattr(frame, "body", "") or ""})
+            self.alive = frame.from_id
+            self.history.append(("report_relay", int(frame.to_id), int(frame.from_id),
+                                 frame.request_id, reason))
+        sub_chain.reverse()                 # owner→…→reporter 순(재하강 replay용)
+        if not self._stack:                 # owner가 origin이었다 → 흐름이 시작점에 닿아 종료
+            self.done = True
+            self.alive = self.origin
+        self.history.append(("report_up", int(reporter_id), int(owner_id), len(sub_chain), reason))
+        return sub_chain
