@@ -828,9 +828,35 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             _dbg(f"{tag} ✗거부:Goal미확정")
             return _ok("Work 위임 거부: 이 Task의 Goal이 아직 확정되지 않았습니다. 먼저 동료와 request(Info)로 "
                        "목표를 합의하고 set_goal로 확정한 뒤 Work로 맡기세요(목표는 팀 합의의 산물 — 선분배 금지).")
-        # [직군밖 사전 차단] 능력표로 *위임 전에* 능력 미스매치를 잡아 그 전문가에게 리다이렉트(흡수의 씨앗
-        # 차단). 상세·근거는 _offdomain_capability_hit 참고. offdomain_checked는 테스트 우회 플래그.
-        if kind == Kind.WORK and goal and not getattr(flow, "offdomain_checked", False):
+        me_is_leader = (me_id == flow.leader)
+        # [비-리더 교차도메인 Work 게이트 — 구조적 조율 단일화(2026-06-22, 사용자: '주어진 일과 무관한 일을
+        #  다른 도메인에 시키는 이상한 협업'은 구조 문제다)] 비-리더는 *받은 일*을 한다 — 같은 도메인 동료에게
+        # 분담(서브태스킹)하거나 검증자(QA)에게 검증을 맡기는 건 자유고, 막히거나 궁금한 건 request(Info)로
+        # 어느 도메인 전문가에게든 *자문*(자유·권장)한다. 그러나 *다른 도메인의 새 Work*를 직접 여는 것은
+        # 리더의 조율 역할이다(SINGLE FLOW·중앙 조율). 프롬프트로 '하지 마'가 아니라 구조로 막고 리더로 보낸다.
+        # 검증·자문을 막는 게 아니라 '의미없는 교차도메인 Work 위임'만 막는다(사용자 설계 방향).
+        if (kind == Kind.WORK and goal and not me_is_leader and to != flow.leader
+                and not getattr(flow, "crossdomain_checked", False)):
+            my_jobs = {_norm_job(j) for j in _jobs_of(flow._info(me_id) or "")} - {""}
+            to_jobs = {_norm_job(j) for j in _jobs_of(flow._info(to) or "")} - {""}
+            same_domain = bool(my_jobs & to_jobs)
+            to_verifier = _is_verifier(flow._info(to) or "")
+            cap_hit = _offdomain_capability_hit(flow, to, body)   # 같은 도메인이라도 내 도메인 밖 능력 요구면 hit
+            if (not same_domain or cap_hit) and not to_verifier:
+                if flow.log:
+                    flow.log("work_crossdomain_blocked", frm=me_id, to=to, my=sorted(my_jobs),
+                             to_jobs=sorted(to_jobs), caps=list(cap_hit.keys()), seg=flow.leader_segment)
+                _dbg(f"{tag} ✗거부:비리더 교차도메인")
+                return _ok(
+                    f"위임 거부(교차도메인 새 Work — 리더 조율 사안): 당신({flow._info(me_id)})은 다른 도메인의 "
+                    f"새 작업을 직접 맡길 수 없습니다 — 분담은 같은 도메인 동료, 검증은 QA로 하세요. 이 일이 "
+                    f"필요하면 **리더에게 보고**해 리더가 전체를 보고 적임 전문가에게 배정하게 하세요. 막히거나 "
+                    f"궁금하면 request(Info)로 그 전문가에게 **자문**하세요(자문·검증은 언제든 자유·권장). "
+                    f"같은 도메인 분담과 QA 검증 요청은 그대로 가능합니다.")
+        # [직군밖 사전 차단 — 리더 라우팅] 능력표로 *위임 전에* 능력 미스매치를 잡아 그 전문가에게 리다이렉트
+        # (흡수의 씨앗 차단). 리더는 조율 권한이 있어 직접 적임자에게 보낸다(비-리더는 위 교차도메인 게이트가
+        # 이미 리더로 돌렸다). 상세·근거는 _offdomain_capability_hit 참고. offdomain_checked는 테스트 우회 플래그.
+        if kind == Kind.WORK and goal and me_is_leader and not getattr(flow, "offdomain_checked", False):
             _hit = _offdomain_capability_hit(flow, to, body)
             if _hit:
                 if flow.log:

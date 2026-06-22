@@ -54,6 +54,7 @@ def _flow(g, leader=11):
     f.iface_dialogue_checked = True  # 인터페이스 직접합의 게이트도 기본 우회(전용 테스트만 False로 검증)
     f._parallel_enabled = True  # parallel_work 실경로 테스트만 활성(프로덕션은 비활성 — 단일흐름 안정성)
     f.offdomain_checked = True  # 직군밖 위임 사전차단도 기본 우회(전용 테스트만 False로 검증)
+    f.crossdomain_checked = True  # 비-리더 교차도메인 Work 게이트도 기본 우회(전용 테스트만 False로 검증)
     return f
 
 
@@ -2449,6 +2450,62 @@ def test_직군밖_위임_사전차단_능력미스매치():
     t2 = _tools(f2, 11, "leader")
     asyncio.run(t2["create_task"].handler({"members": "12,13"}))
     assert _offdomain_capability_hit(f2, 12, "AI 모델 학습") == {}
+
+
+def test_비리더_교차도메인_Work_게이트():
+    """[비-리더 교차도메인 Work 게이트(2026-06-22, 사용자: '주어진 일과 무관한 일을 다른 도메인에 시키는
+    이상한 협업'은 구조 문제다)] 비-리더는 *다른 도메인의 새 Work*를 직접 못 연다 → 리더로 리다이렉트한다.
+    같은 도메인 동료 분담·QA 검증 요청·Info 자문은 자유(검증/자문은 막지 않고 의미없는 교차도메인 Work만 차단).
+    리더는 면제(조율 권한). crossdomain_checked=False로 게이트 활성."""
+    def primed(handoff=True):
+        g = FakeGuide(); f = _flow(g)
+        f.crossdomain_checked = False                              # 게이트 활성(전용 검증)
+        f.bot_info.update({11: "프로젝트 매니저", 12: "백엔드", 13: "백엔드", 14: "QA", 15: "프론트엔드"})
+        f.pool = [11, 12, 13, 14, 15]                             # 로스터 재구성(생성 후 추가 멤버 반영)
+        f.project_team = [11, 12, 13, 14, 15]
+        tL = _tools(f, 11, "leader")
+        asyncio.run(tL["create_task"].handler({"members": "12,13,14,15"}))
+        f.current.participated.update({12, 13, 14, 15})
+        asyncio.run(tL["set_goal"].handler({"purpose": "p", "goal": "g"}))
+
+        async def wake(to, body, kind):
+            return "완료"
+        f.wake = wake
+        if handoff:
+            f.comm.request(11, 12, "r1", Kind.WORK)                # 베턴 → 12(비-리더)
+        return g, f
+
+    # ① 교차도메인 새 Work(백엔드 12 → 프론트엔드 15, 비-QA) → 차단·리더 리다이렉트 + 구조 로그
+    g, f = primed(); logged = []; f.log = lambda ev, **kw: logged.append((ev, kw))
+    r = asyncio.run(_tools(f, 12, "member")["request"].handler(
+        {"to_id": "15", "kind": "Work", "body": "로그인 화면 만들어"}))
+    txt = r["content"][0]["text"]
+    assert "교차도메인" in txt and "리더" in txt and "보고" in txt and "자문" in txt
+    assert any(ev == "work_crossdomain_blocked" for ev, _ in logged)
+
+    # ② 같은 도메인 분담(백엔드 12 → 백엔드 13) → 허용(차단 문구 없음)
+    g, f = primed()
+    r = asyncio.run(_tools(f, 12, "member")["request"].handler(
+        {"to_id": "13", "kind": "Work", "body": "DB 스키마 함께 설계"}))
+    assert "교차도메인 새 Work" not in r["content"][0]["text"]
+
+    # ③ QA 검증 요청(백엔드 12 → QA 14, 교차도메인이지만 검증 기능) → 허용
+    g, f = primed()
+    r = asyncio.run(_tools(f, 12, "member")["request"].handler(
+        {"to_id": "14", "kind": "Work", "body": "내 API 산출물을 검증해줘"}))
+    assert "교차도메인 새 Work" not in r["content"][0]["text"]
+
+    # ④ Info 자문은 자유(백엔드 12 → 프론트엔드 15, 교차도메인이라도 자문) → 허용
+    g, f = primed()
+    r = asyncio.run(_tools(f, 12, "member")["request"].handler(
+        {"to_id": "15", "kind": "Info", "body": "이 API 응답형식이 화면에 맞나요?"}))
+    assert "교차도메인 새 Work" not in r["content"][0]["text"]
+
+    # ⑤ 리더는 면제 — 11(프로젝트 매니저) → 프론트엔드 15 Work(교차도메인) 차단 안 됨(조율 권한)
+    g, f = primed(handoff=False)                                   # 베턴은 리더(11)에 유지
+    r = asyncio.run(_tools(f, 11, "leader")["request"].handler(
+        {"to_id": "15", "kind": "Work", "body": "로그인 화면 구현"}))
+    assert "교차도메인 새 Work" not in r["content"][0]["text"]
 
 
 def test_배포_타겟_호환_사전검증_런타임Python_차단():
