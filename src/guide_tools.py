@@ -271,6 +271,17 @@ def _capability_gaps(goal_text, labels):
     return [name for name, need, covered in _CAPS if need(t) and not covered(have)]
 
 
+def _needed_caps_coverage(goal_text, labels):
+    """목표가 *요구하는* 능력(need True)별 '덮는 팀원 수' {능력명: 수}. 깊이 게이트가 '필요 능력이 다 1명뿐'
+    (그 도메인 품질이 한 사람 지능에 인질)인지 보는 데 쓴다 — 갭(0)은 staffing이 먼저 잡으므로 여기선 1명 이상 전제."""
+    t = str(goal_text or "").lower()
+    out = {}
+    for name, need, covered in _CAPS:
+        if need(t):
+            out[name] = sum(1 for l in (labels or []) if covered(str(l or "").lower()))
+    return out
+
+
 # 채용 대기 인력(직군 미배정). recruit(role=…)로 런타임에 '게임 기획자·UX 디자이너' 등 필요한 직군으로
 # 채용해 합류시킨다. 로스터에서 라벨이 '예비'인 봇들이며, 첫 '전원 기획'엔 안 들어가고 필요할 때 합류한다.
 _SPARE_LABEL = "예비"
@@ -1563,6 +1574,28 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                         f"생겨 분배가 강제되고, set_goal은 자동 통과합니다(갭 사라짐). 정말 *당신 직군 역량으로* 그 "
                         f"능력까지 커버한다고 판단하면 goal에 **'[스태핑 면제: <이유>]'**를 적어 재호출하세요(의식적 "
                         f"판단 — 그냥 재호출로는 통과 안 됨).")
+                # [협업 깊이 — 핵심 능력 복수 검토(2026-06-22 사용자: '중요한 직군은 2명, 상호 같은직군 토론')]
+                # staffing 통과(필요 능력 갭 0) 후: 필요 능력이 *전부 1명뿐*이면 그 도메인 품질이 한 사람 지능에
+                # 인질이다(P-018식 1인 의존). 가장 중요한 능력 1개는 2명으로 채워 상호 검토(peer review)·병렬·
+                # 동일직군 토론이 일어나게 강제. 어느 능력을 깊게 갈지는 리더 판단(시스템이 '핵심'을 지정 안 함) —
+                # *한 능력이라도 2명*이 되면 통과(과채용을 +1봇으로 한정, '백엔드 6명' 재발 차단). 의식적 면제는
+                # '[심도 단독: <능력> — <사유>]'. 능력표 밖 도메인(게임 등)엔 _cov가 비어 발동 안 함(과발동 차단).
+                _depth_na = bool(re.search(r"\[\s*심도\s*단독[^\]]*[:：]\s*\S{2,}",
+                                           goal + "\n" + (args.get("acceptance") or "")))
+                if not _depth_na:
+                    _cov = _needed_caps_coverage(
+                        " ".join([goal, purpose, str(getattr(flow, "origin_request", "") or "")]), _labels)
+                    if _cov and all(n == 1 for n in _cov.values()):
+                        if flow.log:
+                            flow.log("set_goal_depth_gap", task=flow.current.task_id, caps=list(_cov.keys()))
+                        return _ok(
+                            f"확정 보류(협업 깊이 — 핵심 능력 복수 검토): 이 목표의 핵심 능력"
+                            f"(**{', '.join(_cov.keys())}**)이 *각 1명뿐*입니다 — 같은 한 사람의 지능에 그 도메인 "
+                            f"품질이 인질이 됩니다(상용 품질의 천장). **가장 중요한 능력 1개**는 recruit로 **2명**으로 "
+                            f"채워 *상호 검토(peer review)·병렬·동일직군 토론*이 일어나게 하세요(어느 걸 깊게 갈지는 "
+                            f"당신 판단 — 한 능력이라도 2명이 되면 통과). 정말 1명으로 충분하면 goal이나 acceptance에 "
+                            f"**'[심도 단독: <능력> — <사유>]'**를 적어 재호출하세요(의식적 — 빈 태그·그냥 재호출은 "
+                            f"통과 안 됨).")
             # [단일-Task 깊은 수렴 — 분해 강제 제거(2026-06-18)] 종전엔 다도메인 목표를 '도메인별 Task로
             # 쪼개라'고 밀었으나(분해 점검 게이트), 라이브 규명: P-002 114305-1의 '한 owner가 5도메인'은
             # *구조* 문제가 아니라 전문가 8명 idle(참여 문제)이었고, P-016(216 대화·단일 Task)이 보여주듯

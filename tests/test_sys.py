@@ -3,7 +3,7 @@ import asyncio
 
 from src.guide_tools import (Flow, make_guide_tools, _wants_real_data,
                              _synthesizes_data, _has_real_dataset, _is_verifier,
-                             _capability_gaps, _perceptual_essential)
+                             _capability_gaps, _needed_caps_coverage, _perceptual_essential)
 from src.protocol import Kind
 from src.sys_core import Sys
 
@@ -2306,6 +2306,47 @@ def test_capability_gaps_일반화_데이터_DevOps_DBA_커버리지():
     assert "배포·인프라(DevOps)" not in _capability_gaps("CI/CD 파이프라인 구축", ["DevOps"])
     # 평범한 게임/웹엔 새 갭 없음(과발동 방지)
     assert _capability_gaps("오버워치 같은 게임 만들어줘", ["게임 기획자", "프론트엔드"]) == []
+
+
+def test_협업_깊이_핵심능력_복수검토_게이트():
+    """[Stage 2b — 협업 깊이(2026-06-22 사용자: '중요한 직군은 2명, 상호 같은직군 토론')] 필요 능력이 전부
+    1명뿐이면 set_goal 보류 → 핵심 1개를 2명으로(peer review·병렬). 한 능력이라도 2명이면 통과(+1봇 한정).
+    '[심도 단독]' 탈출, 능력표 밖(게임)엔 미발동(과발동 방지)."""
+    # 헬퍼: 필요 능력별 커버 수
+    assert _needed_caps_coverage("공공데이터 받아와 AI 학습", ["AI 엔지니어", "데이터 엔지니어"]) == {
+        "AI/ML(모델 학습·예측)": 1, "실데이터 수집·파이프라인": 1}
+    goal = "공공데이터를 받아와 AI를 학습시키고 예측하는 웹"
+    # ① 필요 능력 각 1명 → 보류
+    g = FakeGuide(); f = _flow(g); f.staffing_exempt = False
+    f.bot_info[11] = "백엔드"; f.bot_info[12] = "AI 엔지니어"; f.bot_info[13] = "데이터 엔지니어"
+    f.project_team += [13]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.update({12, 13})
+    r1 = asyncio.run(t["set_goal"].handler({"goal": goal}))["content"][0]["text"]
+    assert "협업 깊이" in r1 and not f.current.status.goal
+    # ② 같은 AI/ML 능력 2명째 → 한 능력이 2명 → 통과(+1봇 한정)
+    f.bot_info[14] = "AI 엔지니어"; f.project_team.append(14); f.current.team.append(14)
+    asyncio.run(t["set_goal"].handler({"goal": goal}))
+    assert f.current.status.goal
+    # ③ [심도 단독] 마커 → 의식적 통과(1명 유지)
+    g2 = FakeGuide(); f2 = _flow(g2); f2.staffing_exempt = False
+    f2.bot_info[11] = "백엔드"; f2.bot_info[12] = "AI 엔지니어"; f2.bot_info[13] = "데이터 엔지니어"
+    f2.project_team += [13]
+    t2 = _tools(f2, 11, "leader")
+    asyncio.run(t2["create_task"].handler({"members": "12,13"}))
+    f2.current.participated.update({12, 13})
+    asyncio.run(t2["set_goal"].handler({"goal": goal + " [심도 단독: AI/ML — 단일 모델로 충분]"}))
+    assert f2.current.status.goal
+    # ④ 능력표 밖(게임)엔 미발동
+    g3 = FakeGuide(); f3 = _flow(g3); f3.staffing_exempt = False
+    f3.bot_info[11] = "게임 기획자"; f3.bot_info[12] = "프론트엔드"; f3.bot_info[13] = "게임 비주얼"
+    f3.project_team += [13]
+    t3 = _tools(f3, 11, "leader")
+    asyncio.run(t3["create_task"].handler({"members": "12,13"}))
+    f3.current.participated.update({12, 13})
+    r4 = asyncio.run(t3["set_goal"].handler({"goal": "스네이크 게임 만들어줘"}))["content"][0]["text"]
+    assert f3.current.status.goal and "협업 깊이" not in r4
 
 
 def test_인터페이스_직접합의_게이트_전문가간_대화_강제():
