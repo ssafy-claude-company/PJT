@@ -3,7 +3,8 @@ import asyncio
 
 from src.guide_tools import (Flow, make_guide_tools, _wants_real_data,
                              _synthesizes_data, _has_real_dataset, _is_verifier,
-                             _capability_gaps, _needed_caps_coverage, _perceptual_essential)
+                             _capability_gaps, _needed_caps_coverage, _deploy_infeasibility,
+                             _perceptual_essential)
 from src.protocol import Kind
 from src.sys_core import Sys
 
@@ -2313,6 +2314,35 @@ def test_capability_gaps_일반화_데이터_DevOps_DBA_커버리지():
     assert "배포·인프라(DevOps)" not in _capability_gaps("CI/CD 파이프라인 구축", ["DevOps"])
     # 평범한 게임/웹엔 새 갭 없음(과발동 방지)
     assert _capability_gaps("오버워치 같은 게임 만들어줘", ["게임 기획자", "프론트엔드"]) == []
+
+
+def test_배포_타겟_호환_사전검증_런타임Python_차단():
+    """[Stage 3 — 배포 타겟 호환(2026-06-22 P-028)] Render Node 런타임엔 Python이 없다 — 서버가 런타임에
+    Python을 spawn하거나 start가 Python류면 배포 전 차단(명확한 처방). 빌드타임 학습용 Python은 통과."""
+    import tempfile, os as _os, json as _json
+
+    def _ws(files):
+        d = tempfile.mkdtemp()
+        for name, content in files.items():
+            with open(_os.path.join(d, name), "w", encoding="utf-8") as fh:
+                fh.write(content)
+        return d
+    # ① Node 서버가 런타임에 python spawn → 불가
+    d1 = _ws({"package.json": _json.dumps({"scripts": {"start": "node server.js"}}),
+              "server.js": "const {spawn}=require('child_process'); const py=spawn('python',['m.py']);"})
+    assert "spawn/exec" in _deploy_infeasibility(d1)
+    # ② start 커맨드가 gunicorn(Python) → 불가
+    d2 = _ws({"package.json": _json.dumps({"scripts": {"start": "gunicorn app:app"}})})
+    assert "Python류를 실행" in _deploy_infeasibility(d2)
+    # ③ 깨끗한 Node 앱(express, node 서빙) → 통과
+    d3 = _ws({"package.json": _json.dumps({"scripts": {"start": "node server.js"}}),
+              "server.js": "const express=require('express'); express().listen(process.env.PORT);"})
+    assert _deploy_infeasibility(d3) == ""
+    # ④ 빌드타임 학습용 Python(train.py)만 있고 서빙은 Node → 통과(런타임 의존 아님)
+    d4 = _ws({"package.json": _json.dumps({"scripts": {"start": "node server.js"}}),
+              "server.js": "const express=require('express'); express().listen(process.env.PORT);",
+              "train.py": "import sklearn  # 빌드타임 오프라인 학습"})
+    assert _deploy_infeasibility(d4) == ""
 
 
 def test_병렬_계획_의식적_결정_게이트():
