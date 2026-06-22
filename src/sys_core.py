@@ -553,12 +553,15 @@ class Sys:
         "[규약은 합의로] 필드명·데이터 형태·API 경로·디자인 토큰 같은 인터페이스는 혼자 임의로 "
         "정하지 말고, 그걸 함께 쓰는 동료와 request(Info)로 합의해 정하세요. 동료 산출물은 "
         "Read/Glob로 직접 확인해 검증하세요.\n"
-        "[요청은 하나씩] 한 턴에 request는 하나만 보내세요 — 여러 개를 한꺼번에 던지면 단일흐름에서 "
-        "직렬화되어 대기·지연됩니다. 응답을 받은 뒤 다음 요청을 보내세요.\n"
-        "[동료는 비동기로 일하지 않음] 동료는 당신의 request 호출 동안만 일하고 응답과 함께 멈춥니다 — "
-        "백그라운드 작업이나 '시차를 두고 도착하는 파일'은 존재하지 않습니다. 파일 도착을 ls/run으로 "
-        "기다리며 폴링하지 마세요(아무것도 진행되지 않습니다). 산출물이 미완이면 그 owner에게 "
-        "request(Work)로 '이어서'를 보내야만 작업이 계속됩니다.\n"
+        "[요청은 하나씩 — 보내면 이 턴을 마치세요] 한 턴에 request는 하나만 보내세요. 보내면 '[위임됨]'이 "
+        "즉시 돌아옵니다 — 그 즉시 이 턴을 마치세요('처리 중' 같은 말이나 추가 도구 호출·재위임·폴링 금지). "
+        "SYS가 그 동료를 **끝까지 완주**시키고 그 결과와 함께 당신을 자동으로 다시 깨웁니다 — 그때 검증·통합하고 "
+        "다음 요청을 보냅니다. 동료의 응답을 같은 턴 안에서 기다리려 하지 마세요(기다림은 SYS의 몫).\n"
+        "[동료는 비동기로 일하지 않음 — 단일활성] 동료는 **한 번에 한 명만** 일합니다(SYS가 베턴으로 보장) — "
+        "백그라운드 작업이나 '시차를 두고 도착하는 파일', 여러 동료 동시 진행은 존재하지 않습니다. 결과를 아직 "
+        "못 받았다고 ls/run으로 기다리며 폴링하지 마세요(아무것도 진행되지 않고, SYS가 결과를 가져다줍니다). "
+        "받은 산출물이 미완(응답에 '⚠ 턴 한도 도달'·남은 파일)이면 그 owner에게 request(Work)로 '이어서'를 "
+        "보내야만 작업이 계속됩니다.\n"
         "[재현으로 진단 — 스펙 아닌 '실제 행동'에서] 보고된 버그·요청은 문서·스펙(design-spec 등)에서 "
         "'유추'하지 말고, 먼저 run으로 실제 산출물을 돌려 보고된 증상을 직접 재현·관찰한 뒤 그 증상을 "
         "일으키는 '실제 코드'를 찾아 고치세요. **동작·규칙·계산(데이터·로직)의 문제와 표현·배치(겉보기)의 "
@@ -1059,10 +1062,11 @@ class Sys:
             await asyncio.gather(*tasks, return_exceptions=True)
         res = getattr(flow, "detached_results", None)
         if res:
-            out = ("\n\n[도착한 위임 결과 — 직전에 보냈던 위임이 완료돼 응답이 도착했습니다] 그 동료는 "
-                   "이 응답과 함께 **멈췄습니다**(백그라운드에서 계속 일하지 않음). 처음부터 다시 시키지 "
-                   "말고: 결과가 완성이면 검증 후 진행, **미완(남은 파일·턴 한도)이면 기다리지 말고 지금 "
-                   "즉시 같은 owner에게 request(Work)로 '이어서'를 보내세요** — 그래야만 작업이 계속됩니다.\n"
+            out = ("\n\n[도착한 결과 — 직전에 진행하던 작업(동료 위임·배포·표결 등)이 끝나 결과가 도착했습니다] "
+                   "백그라운드로 계속 돌지 않습니다(결과와 함께 멈춤). 결과가 완성이면 검증 후 진행/보고하고, "
+                   "**위임 산출물이 미완(남은 파일·'⚠ 턴 한도')이면 기다리지 말고 즉시 같은 owner에게 "
+                   "request(Work)로 '이어서'**를 보내세요(그래야만 작업이 계속됩니다). 배포 결과면 라이브 URL을 "
+                   "확인해 보고하세요.\n"
                    + "\n".join(res[-3:]))
             del res[:]
             return out
@@ -1095,6 +1099,14 @@ class Sys:
                 res = await tools["request"].handler(
                     {"to_id": str(ref.owner), "kind": "Work", "body": body})
                 txt = (res.get("content") or [{}])[0].get("text", "")
+                # [핸드오프 — SYS 내부 호출은 결과까지 동기 회수] 프로덕션 request는 즉시 '[위임됨]'을 반환하고
+                # 동료 작업을 인플라이트로 등록한다. SYS 내부 호출은 75초 도구호출이 아니라 블록 가능하므로,
+                # 여기서 그 인플라이트를 완주시켜 *실제 결과*를 받고 베턴을 리더로 복귀시킨다(동기처럼). 안 그러면
+                # 리더 run_turn이 owner 인플라이트와 동시에 돌아 이중 활성이 되고, 진행 판정도 빈 '[위임됨]'을 본다.
+                if "[위임됨" in (txt or ""):
+                    _d = await self._drain_inflight(flow)
+                    if _d:
+                        txt = _d
             except Exception as e:
                 txt = f"(자동 이어가기 처리 오류: {e})"
                 out.append(txt)
@@ -1130,6 +1142,12 @@ class Sys:
         try:
             res = await tools["request"].handler({"to_id": str(ref.owner), "kind": "Work", "body": body})
             txt = (res.get("content") or [{}])[0].get("text", "")
+            # [핸드오프 — SYS 내부 호출은 결과까지 동기 회수] 즉시 '[위임됨]'이면 인플라이트를 완주시켜 실제
+            # 결과를 받고 베턴을 리더로 복귀(이중 활성·빈 결과 차단). _auto_continue_owner와 동일 이유.
+            if "[위임됨" in (txt or ""):
+                _d = await self._drain_inflight(flow)
+                if _d:
+                    txt = _d
         except Exception as e:
             return f"\n(SYS 자동 위임 처리 오류: {e})"
         from .guide_tools import _speech_clip as _sc
@@ -1388,6 +1406,8 @@ class Sys:
             self._sync_topic(channel_id)   # 토픽(서버 영속)에도 반영 — 리클레임 후 시드로 원복되지 않게
         lead = self._valid_leader(proj) if proj else leader_id
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
+        flow._handoff = True   # [논블로킹 핸드오프] 프로덕션은 위임을 즉시-반환 핸드오프로(75초 detach·비동기 churn
+                               #   차단). 동료 작업은 SYS가 호출 밖에서 직렬 완주시켜 결과로 잇는다. (테스트는 기본 동기.)
         flow.session_scope = session_scope
         # [교차오염 차단 — 흐름별 원문 스냅샷] 사용자 원문을 흐름 객체에 '박제'한다. self._origin_request는
         # 다음 개입이 오면 덮어쓰이는 전역 단일 필드라, 동시 흐름이 있으면 먼저 돌던 흐름의 봇들이 _prompt에서

@@ -575,6 +575,9 @@ class Flow:
         self.inflight_tasks = set()    # 진행 중 위임의 '완주 태스크'들 — CLI가 도구 호출을 포기해도 위임은
                                        #   계속 완주하며(중첩 가능), SYS가 이어가기 전에 이들의 완주를 기다린다
         self.detached_results = []     # 포기당한(detached) 위임의 완주 결과 — 이어가기 리더에게 전달
+        self.handoff_inflight = {}     # [논블로킹 핸드오프] 요청자 id→그가 만든 인플라이트 위임. 중첩 위임을
+                                       #   SYS가 호출 밖에서 직렬 완주시키고(블록킹 도구호출 없음 → CLI 75초
+                                       #   포기·detach·비동기 churn 차단), 요청자가 활성일 때만 1건(베턴=단일).
         self.write_lease = {}          # 행위자→샌드박스(쓰기 리스, 휴면 인프라): 훅이 리스 밖 Write/Edit 거부
         self.fork_kind = {}            # [fork 수집] 행위자→Kind: 프레임 없는 가지에도 선구현 게이트 적용
         self.fork_active = 0           # [fork 동시성 가드] 수집 진행 수 — 수집 중 신규 요청/수집은 [대기]
@@ -953,12 +956,34 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             runs_before = flow.current.run_count if flow.current else 0
             acts_before = flow.act_count   # 위임 도중 owner(단일흐름이라 깨운 동료만 활성)가 실제로 일했는지 측정
             mine_before = flow.act_by.get(me_id, 0) if getattr(flow, "act_by", None) is not None else 0
-            try:
-                result = await flow.wake(to, owner_body, kind)      # 동료 깨워 응답(중첩 베턴)
-                if _looks_transient(result):                        # 일시 오류면 한 번 더(답으로 취급 X)
-                    result = await flow.wake(to, owner_body, kind)
-            except Exception as e:
-                result = f"(동료 처리 중 오류: {e})"
+            _body_local = owner_body
+            result = ""
+            _nest_guard = 0
+            while True:
+                try:
+                    result = await flow.wake(to, _body_local, kind)     # 동료 깨워 응답(중첩 베턴)
+                    if _looks_transient(result):                        # 일시 오류면 한 번 더(답으로 취급 X)
+                        result = await flow.wake(to, _body_local, kind)
+                except Exception as e:
+                    result = f"(동료 처리 중 오류: {e})"
+                # [중첩 위임 — 동기처럼 완주(논블로킹 핸드오프)] `to`가 자기 턴에서 다른 동료에게 핸드오프했으면
+                # SYS가 그 하위 위임을 호출 *밖*에서 완주시키고 `to`를 그 결과로 이어간다 — 블록킹 도구호출 없이
+                # 중첩이 직렬로 완주(75초 미닿음). 판정은 `to`의 출력 문자열('[위임됨' 등 — 봇 표현은 못 믿음)이
+                # 아니라 **handoff_inflight[to]에 실제로 하위 위임이 등록됐다는 사실**로 한다(견고). _nest_guard는
+                # 폭주 백스톱(같은 `to`가 끝없이 재위임만 하는 병적 경우) — 정상 사슬은 한참 못 미친다.
+                _sub = (getattr(flow, "handoff_inflight", None) or {}).pop(to, None)
+                _nest_guard += 1
+                if _sub is None or _nest_guard > 50:
+                    if _sub is not None and flow.log:
+                        flow.log("handoff_nest_guard", to=to, depth=_nest_guard)
+                    break
+                try:
+                    _sr = await _sub
+                    _srt = _sr["content"][0]["text"] if isinstance(_sr, dict) else str(_sr)
+                except Exception as e:
+                    _srt = f"(하위 위임 오류: {e})"
+                _body_local = ("[당신이 맡긴 위임의 결과가 도착했습니다 — 이어서 통합·검증·완성하세요(추가 위임이 "
+                               f"더 필요하면 한 번에 하나씩, 끝나면 보고로 응답):\n{_speech_clip(_srt, 4000)}")
             # 깨운 동료가 '나(위임자)에게 확인요청'을 남기고 턴을 마쳤으면, 그 질문을 응답으로 표면화 →
             # 내가 답을 정해 다시 맡긴다(되묻기가 에러가 아니라 협업으로 흐름). 이는 '완료'가 아니므로
             # delivered로 기록하지 않는다(되묻기 후 재위임은 Redo가 아니라 '첫 구현').
@@ -1146,6 +1171,18 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         inner = asyncio.ensure_future(_deliver_tracked())
         flow.inflight_tasks.add(inner)
         inner.add_done_callback(flow.inflight_tasks.discard)
+        if getattr(flow, "_handoff", False):
+            # [논블로킹 핸드오프 — 단일흐름 안정성(2026-06-22 사용자 설계)] 동료의 *턴 전체*를 도구호출 안에서
+            # 기다리지 않는다. 기다리면 75초 넘을 때 CLI가 도구호출을 포기→CancelledError→detach→백그라운드
+            # 비동기 churn(P-029: 6위임 전부 detach·'처리 중 턴종료' 누수·빈 산출물). 대신 위임을 인플라이트로
+            # 등록하고 *즉시* 반환 — 동료 작업은 SYS 이어가기 루프(_drain_inflight)와 _deliver 중첩 루프가 호출
+            # *밖*에서 완주시켜 결과로 요청자를 잇는다. 베턴은 이미 to로 넘어가 요청자는 비활성 → 재위임 불가
+            # (규약이 막음). 도구호출이 1초라 75초가 닿지 않고, 베턴 1개라 비동기 다중실행이 구조적으로 불가 = 단일흐름.
+            detached["on"] = True
+            flow.handoff_inflight[me_id] = inner
+            return _ok("[위임됨 — SYS가 동료를 끝까지 완주시켜 *결과로 당신을 이어줍니다*(비동기 아님 · 한 번에 "
+                       "한 위임). **'처리 중' 같은 말이나 재위임·추가 행동 없이 이 턴을 여기서 마치세요** — "
+                       "결과가 도착하면 SYS가 자동으로 당신을 재개합니다.]")
         try:
             return await asyncio.shield(inner)
         except asyncio.CancelledError:
@@ -1342,6 +1379,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         cmd = str(args.get("command", ""))
         if not getattr(flow, "workspace", None):
             return _ok("실행 불가: 작업공간이 설정되지 않았습니다.")
+        # [단일활성 구조화 — 논블로킹 핸드오프] 내가 위임을 보내 그 동료가 지금 활성(베턴=동료)인데 내가
+        # solo run을 돌리면 '리더+동료 동시 실행'(이중 활성)이 된다. 핸드오프는 request를 즉시 반환하므로
+        # 프롬프트가 아니라 구조로 막는다: 내 인플라이트 위임이 살아 있고 내가 비활성이면 run을 거부하고
+        # 턴을 마치게 한다 — SYS가 위임을 완주시켜 결과로 나를 재개한다(활성은 언제나 한 명). 동료 자신은
+        # 활성(alive==me_id)이라 이 게이트에 안 걸려 자기 작업을 정상 실행한다.
+        if (any(not t.done() for t in getattr(flow, "inflight_tasks", ()))
+                and flow.comm.alive != me_id and not flow.comm.done):
+            return _ok("[대기] 직전 위임이 아직 진행 중입니다 — 지금 직접 실행(run)하면 동료와 동시 작업(이중 "
+                       "활성)이 됩니다. 추가 행동 없이 이 턴을 마치세요. 위임이 완료되면 SYS가 그 결과와 함께 "
+                       "당신을 다시 깨웁니다(그때 검증·통합하세요).")
         if any(d in cmd.lower() for d in _RUN_DENY):
             return _ok(f"실행 거부(안전): 파괴/저장소/시스템 패턴 포함 — {cmd[:80]}")
         if any(p in cmd for p in _RUN_AUTHOR):
@@ -2636,15 +2683,41 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     f"다시 배포하세요(이건 코드 수정으로 안 고쳐지는 *구조* 문제 — 재시도 말고 아키텍처를 바꾸세요).")
             from .deploy import deploy_sync
             flow.deploy_inflight = True
-            try:
-                result = await anyio.to_thread.run_sync(deploy_sync, flow.workspace, name, gh, ghu, rk, owner)
-            finally:
-                flow.deploy_inflight = False
-            flow.deployed = result                 # 배포 호출됨 기록(SYS의 배포 강제가 중복 안 하게)
-            flow._deployed_once = True
-            flow._deploy_count = getattr(flow, "_deploy_count", 0) + 1   # 런어웨이 상한 카운트(실배포만 +1)
             flow._deploy_writes = _dwrites         # 이 배포 시점의 저작 수 — 다음 배포가 '변경 없음'을 판정
-            return _ok(result)
+            _dep = {"on": False}
+
+            async def _do_deploy():
+                # [논블로킹 배포 — 단일흐름 안정성(2026-06-22)] Render 빌드는 수 분(deploy_sync 폴링 480초)이라
+                # 도구 호출 안에서 기다리면 75초 CLI 한도에 잘려 detach→리더가 '실패로 오인'→재배포 thrash
+                # (라이브 P-026 18회·P-028 23회)의 뿌리였다. 위임과 동일하게: 즉시 반환하고 deploy_sync는
+                # 인플라이트로 돌려 SYS가 호출 *밖*에서(75초 미적용·idle 720초>빌드 480초) 완주시켜 라이브 URL로
+                # 리더를 재개한다. 베턴은 안 건드린다(배포는 위임 아님) — 동시 재배포는 deploy_inflight가 단속.
+                try:
+                    r = await anyio.to_thread.run_sync(deploy_sync, flow.workspace, name, gh, ghu, rk, owner)
+                except Exception as e:
+                    r = f"배포 처리 오류: {e}"
+                flow.deploy_inflight = False
+                flow.deployed = r                  # 배포 호출됨 기록(SYS의 배포 강제가 중복 안 하게)
+                flow._deployed_once = True
+                flow._deploy_count = getattr(flow, "_deploy_count", 0) + 1   # 런어웨이 상한 카운트(실배포만 +1)
+                if _dep["on"]:
+                    flow.detached_results.append(f"배포 결과 → {_speech_clip(r, 4000)}")
+                return _ok(r)
+
+            inner = asyncio.ensure_future(_do_deploy())
+            flow.inflight_tasks.add(inner)
+            inner.add_done_callback(flow.inflight_tasks.discard)
+            if getattr(flow, "_handoff", False):
+                _dep["on"] = True
+                return _ok("[배포 트리거됨 — SYS가 빌드가 라이브가 될 때까지 확인해 그 결과(라이브 URL)로 당신을 "
+                           "재개합니다. **재배포·추가 행동 없이 이 턴을 마치세요** — 재배포는 빌드를 처음부터 "
+                           "리셋합니다. 결과가 도착하면 그때 URL을 확인·보고하세요.]")
+            try:
+                return await asyncio.shield(inner)
+            except asyncio.CancelledError:
+                if not inner.done():
+                    _dep["on"] = True       # 도구 호출만 죽고 배포는 계속 — 결과는 detached로 전달
+                raise
         tools.append(deploy)
 
     return tools

@@ -4216,6 +4216,98 @@ def test_신규요청은_같은이름이라도_신설_P번호명시만_재사용
     assert pid3 == pid1 and s.projects[901]["id"] == pid1 and 500 not in s.projects
 
 
+def test_논블로킹_핸드오프_위임_즉시반환_드레인_완주():
+    """[논블로킹 핸드오프 — 단일흐름 안정성(2026-06-22)] _handoff 모드에서 request는 동료 턴을 *블록하지
+    않고* 즉시 '[위임됨]' 반환(75초 CLI detach·비동기 churn 차단). 동료 작업은 인플라이트로 등록돼 SYS가
+    호출 밖에서 완주(드레인)하고, 베턴이 to로 넘어가 요청자는 비활성(재위임 불가). 응답 시 베턴 복귀."""
+    g = FakeGuide(); f = _flow(g); f._handoff = True
+    f.bot_info[12] = "백엔드"
+
+    async def wake(to, body, kind):
+        return "[백엔드] server.js 구현 완료(run 검증함)"
+    f.wake = wake
+
+    async def scenario():
+        t = _tools(f, 11, "leader")
+        await t["create_task"].handler({"members": "12"})
+        f.current.status.goal = "웹앱"
+        r = (await t["request"].handler({"to_id": "12", "kind": "Work", "body": "구현"}))["content"][0]["text"]
+        assert "위임됨" in r and "이 턴을 여기서 마치세요" in r   # 즉시 핸드오프 반환(블록 X)
+        assert f.comm.alive == 12                                # 베턴 핸드오프 → 요청자 비활성
+        inner = f.handoff_inflight.get(11)
+        assert inner is not None                                 # 인플라이트 등록
+        res = await inner                                        # SYS 드레인(호출 밖 완주)
+        assert "server.js 구현 완료" in res["content"][0]["text"]
+        assert f.comm.alive == 11                                # 응답 후 베턴 복귀
+        assert f.detached_results                                # 결과가 detached_results로(이어가기 리더에 전달)
+    asyncio.run(scenario())
+
+
+def test_논블로킹_핸드오프_중첩위임_직렬완주():
+    """중첩(데이터엔지니어→AI엔지니어)도 블록킹 도구호출 없이 SYS가 *직렬로* 완주시킨다. _deliver 중첩 루프가
+    하위 위임을 드레인하고 상위를 그 결과로 이어간다 — 75초 미닿음, 비동기 다중실행 없음, 베턴은 1개."""
+    g = FakeGuide(); f = _flow(g); f._handoff = True
+    f.bot_info[12] = "데이터 엔지니어"; f.bot_info[13] = "AI 엔지니어"
+    f.project_team += [13]
+
+    async def wake(to, body, kind):
+        if to == 12:
+            if "도착했습니다" not in body:             # 1차: AI에게 핸드오프하고 턴 종료(SYS 재개 대기)
+                t12 = _tools(f, 12, "member")
+                await t12["request"].handler({"to_id": "13", "kind": "Work", "body": "모델 학습"})
+                return "[위임됨 — AI엔지니어에게 모델 학습 맡김]"
+            # 2차: SYS가 하위(13) 결과로 재개 → 통합·검증(실작업 = owner_acted, 허위완료 아님)
+            f.act_count += 1; f.act_by[12] = f.act_by.get(12, 0) + 1; f.current.run_count += 1
+            return "[데이터] 파이프라인+모델 통합 완료"
+        if to == 13:
+            return "[AI] 모델 학습 완료 MAPE 10%"
+        return ""
+    f.wake = wake
+
+    async def scenario():
+        t = _tools(f, 11, "leader")
+        await t["create_task"].handler({"members": "12,13"})
+        f.current.status.goal = "공공데이터 AI 웹"
+        f.current.participated.update({12, 13})
+        r = (await t["request"].handler({"to_id": "12", "kind": "Work", "body": "데이터+모델"}))["content"][0]["text"]
+        assert "위임됨" in r
+        res = await f.handoff_inflight.get(11)        # 12 완주(내부에서 13 직렬 완주 + 통합)
+        assert "파이프라인+모델 통합 완료" in res["content"][0]["text"]   # 12가 13 결과로 이어 통합한 최종
+        assert f.comm.alive == 11                     # 전부 응답 후 베턴 리더 복귀
+    asyncio.run(scenario())
+
+
+def test_논블로킹_핸드오프_배포_즉시반환_드레인_완주(monkeypatch):
+    """[논블로킹 배포 핸드오프(2026-06-22)] Render 빌드는 수 분(deploy_sync 폴링 480초)이라 도구 호출 안에서
+    기다리면 75초 CLI 한도에 잘려 detach→리더 '실패 오인'→재배포 thrash(P-026 18회·P-028 23회)였다. _handoff
+    모드에서 deploy는 즉시 '[배포 트리거됨]'을 반환하고 deploy_sync를 인플라이트로 돌려 SYS가 호출 밖에서
+    완주(idle 720초>빌드 480초)시켜 라이브 URL로 잇는다. 진행 중엔 deploy_inflight=True로 재배포 차단."""
+    import src.deploy as dp, os
+    f = _flow(FakeGuide()); f._handoff = True
+    f.workspace = "/tmp/ws-hof"; f.project_id = "P-077"
+    t = _tools(f, 11, "leader")
+    calls = {"n": 0}
+
+    def fake(ws, name, *a):
+        calls["n"] += 1
+        return f"배포 성공 ✅ 라이브: https://organt-{name}.onrender.com"
+    monkeypatch.setattr(dp, "deploy_sync", fake)
+    for k in ("GH_PAT", "GH_USER", "RENDER_KEY", "RENDER_OWNER"):
+        os.environ.setdefault(k, "x")
+
+    async def scenario():
+        r = (await t["deploy"].handler({"name": "site"}))["content"][0]["text"]
+        assert "배포 트리거됨" in r and "이 턴을 마치세요" in r   # 즉시 핸드오프 반환(블록 X)
+        assert f.deploy_inflight is True and calls["n"] == 0      # 빌드 트리거 전(아직 인플라이트 미실행)·재배포 차단상태
+        inner = next(iter(f.inflight_tasks))                     # SYS 드레인(호출 밖 완주)
+        res = await inner
+        assert "배포 성공" in res["content"][0]["text"] and calls["n"] == 1
+        assert f.deployed and "배포 성공" in f.deployed           # 시스템 권위 URL 기록(마감 보고에 주입됨)
+        assert f.deploy_inflight is False                        # 완주 후 해제 → 다음 배포 가능
+        assert f.detached_results                                # 결과가 detached로(이어가기 리더에 전달)
+    asyncio.run(scenario())
+
+
 def test_병렬Work_동시실행_리스_조인_owner():
     """[RFC-006 Work-fork v1] 독립 영역 Work 2건이 '동시에' 실행되고(두 wake가 서로를 기다려야
     풀리는 게이트로 증명), 가지 동안 쓰기 리스가 활성·조인 시 해제되며, 조인 합본·owner(첫 수신자)·
