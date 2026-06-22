@@ -1428,7 +1428,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if timed_out:
             _dbg(f"[RUN] {me_id} `{cmd[:60]}` TIMEOUT")
             return _ok("실행 시간초과(60s) — 그룹째 정리함. 서버는 'node server.js & sleep 1; curl ...'처럼 "
-                       "백그라운드로 띄우세요(포그라운드로 서버를 실행하면 멈춥니다).\n"
+                       "백그라운드로 띄우세요(포그라운드로 서버를 실행하면 멈춥니다). **큰 단일 다운로드/빌드"
+                       "(수백MB+ 도구·모델)는 60초에 안 끝납니다 — 작은 패키지·에셋으로, 또는 닿는 경량 대안으로 "
+                       "갈아타세요(이 환경엔 GPU 없음·Render는 Node-웹 전용).\n"
                        f"[부분 stdout]\n{out[-800:]}\n[부분 stderr]\n{err[-400:]}")
         _dbg(f"[RUN] {me_id} `{cmd[:60]}` exit={rc}")
         if flow.current is not None:
