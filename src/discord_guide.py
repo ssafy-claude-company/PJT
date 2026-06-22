@@ -162,6 +162,26 @@ class DiscordGuide:
         client = self.organts.get(sender_id, self.system)
         return await self._send(client, int(channel_id), content, reply_to=reply_to)
 
+    async def send_file(self, channel_id: int, path: str, sender_id: int = 0, caption: str = "") -> str:
+        """워크스페이스 산출물 파일을 채널에 Discord 첨부로 전송한다(사용자가 받게) — best-effort + 일시오류
+        백오프 재시도(전송과 같은 견고화). sender 미등록이면 system 봇으로. 반환=메시지 id(실패 시 '0')."""
+        import discord
+        import os
+        client = self.organts.get(int(sender_id), self.system)
+        ch = await self._resolve(client, int(channel_id))
+        name = os.path.basename(str(path)) or "file"
+        for attempt in range(1, 5):
+            try:
+                msg = await ch.send(content=(caption or "")[:1900],
+                                    file=discord.File(str(path), filename=name))
+                return str(msg.id)
+            except Exception as e:   # 조용한 유실 방지 — 실패를 보이게
+                print(f"[discord_guide] 파일 전송 실패(시도 {attempt}/4) {type(e).__name__}: {e} "
+                      f"(path={path})", flush=True)
+                if attempt < 4:
+                    await asyncio.sleep(2 ** (attempt - 1))   # 1s, 2s, 4s
+        return "0"
+
     async def hide_channel(self, guild_id: int, channel_id: int) -> None:
         """채널을 사람 눈에서 숨긴다(@everyone 보기 차단, system 봇만 허용) — 시스템 내부 채널
         (sys-canary 등)이 사이드바·알림에 나타나지 않게. best-effort."""

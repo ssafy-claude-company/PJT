@@ -341,6 +341,32 @@ class Sys:
         if changed:
             self._save_projects()
 
+    def _stage_inbound(self, flow) -> None:
+        """[파일 전송 — 인바운드] 사용자가 첨부한 파일을 작업공간 inbox/로 옮긴다(워크스페이스가 준비됐을 때 1회)
+        — 봇이 Read/run으로 사용하게. create_project가 워크스페이스를 만든 직후 + 매 턴 시작에 호출(멱등)."""
+        atts = getattr(flow, "inbound_attachments", None)
+        ws = getattr(flow, "workspace", None)
+        if not atts or not ws:
+            return
+        inbox = os.path.join(str(ws), "inbox")
+        try:
+            os.makedirs(inbox, exist_ok=True)
+            names = []
+            for item in atts:
+                try:
+                    name, data = item
+                    safe = os.path.basename(str(name)) or "file"
+                    with open(os.path.join(inbox, safe), "wb") as fh:
+                        fh.write(data)
+                    names.append(safe)
+                except Exception:
+                    continue
+            flow.inbound_files = list(getattr(flow, "inbound_files", []) or []) + names
+            flow.inbound_attachments = []   # 1회만(중복 staging 방지)
+            self._log("inbound_files_staged", files=names)
+        except Exception as e:
+            self._log("inbound_stage_error", err=str(e)[:100])
+
     def _task_snapshot(self, flow, ref) -> dict:
         """미완 Task를 다음 개입에서 '되살릴' 수 있도록 최소 스냅샷으로 직렬화한다(상태블록·스레드·담당자·
         팀·목표). 검증 누계(verified/run_count/owner_delivered 등)는 저장하지 않는다 — 되살릴 때 0에서
@@ -714,6 +740,12 @@ class Sys:
         origin_note = (f"[사용자 원문 요청 — 진짜 의도(누구의 요약·해석도 아닌, 사용자가 실제로 한 말)]: {orig}\n"
                        f"이 원문이 기준입니다. 받은 지시·질문이 원문과 어긋나 보이면 원문 의도를 우선하고, 모호하면 되물으세요.\n\n"
                        if orig else "")
+        # [파일 전송 — 인바운드] 사용자가 첨부한 파일은 작업공간 inbox/에 staging됨 → 봇이 Read로 확인해 쓰게 안내.
+        _inb = (getattr(flow, "inbound_files", None) if flow is not None else None) or []
+        inbound_note = ((f"[사용자가 첨부한 파일 — 작업공간 inbox/에 있습니다] "
+                         f"{', '.join('inbox/' + n for n in _inb)}\n이 파일들을 Read로 확인해 요청에 반영하세요"
+                         f"(사용자가 자료로 함께 보낸 것 — 추측 말고 실제 내용 확인). owner에게 위임 시 이 경로를 알려주세요.\n\n")
+                        if _inb else "")
         if role == "leader":
             my_role = f"{domain}(담당자)" if domain else "담당자"
             # 담당자가 '예비'(직군 미배정)로 호명된 경우: 자길 예비로 방치하지 말고 먼저 자기 직군부터 채용해
@@ -740,6 +772,7 @@ class Sys:
                 f"이번 흐름의 담당이 된 것이며(다른 흐름에선 한 직원으로 참여), 특별한 권력자가 아닙니다. "
                 f"당신의 역할: {my_role}\n"
                 f"{origin_note}"
+                f"{inbound_note}"
                 f"{portfolio_note}"
                 f"{self._env_note()}"
                 f"받은 형태: {body}\n동료: {peers}\n\n"
@@ -788,7 +821,7 @@ class Sys:
         my_role = domain or "팀원"
         return (
             f"당신은 자율적으로 일하는 팀원입니다(당신도 필요하면 동료에게 먼저 묻습니다). "
-            f"당신의 역할: {my_role}\n{origin_note}받은 요청({getattr(kind, 'value', kind)}): {body}\n동료: {peers}\n\n"
+            f"당신의 역할: {my_role}\n{origin_note}{inbound_note}받은 요청({getattr(kind, 'value', kind)}): {body}\n동료: {peers}\n\n"
             f"{self._craft_note(me)}"
             f"{self._PRINCIPLE}\n\n"
             f"**기획 단계에서 '당신 도메인의 할 일·담당'을 물으면** 당신 전문 영역의 할 일을 스스로 정의해 제안하고 맡을 "
@@ -1119,6 +1152,7 @@ class Sys:
         # 에이전트가 죽으면(SDK 메시지리더 크래시·서브프로세스 SIGTERM 등) 같은 세션으로 되살려 재시도.
         # State는 organt_id별 파일에 영속되므로 새 인스턴스가 세션을 이어간다(전체 워크플로우 보호).
         flow.last_activity = time.monotonic()   # 진행 신호(턴 시작) — 무진행 워치독 갱신
+        self._stage_inbound(flow)               # [파일 전송] 사용자 첨부를 작업공간 inbox/로(워크스페이스 준비됐으면, 멱등)
         # [일로 직업 획득 — Discord 역할 비동기 부여] 첫 실작업으로 '획득'된 직군을 Discord 역할로 영속한다
         # (jobs.json은 권한 훅이 이미 동기로 박음; Discord는 리클레임 복원용 — 비동기라 여기 턴 경계에서 드레인).
         _q = getattr(flow, "role_earned_queue", None)
@@ -1278,7 +1312,7 @@ class Sys:
                 pass
         return pick or lead
 
-    async def handle_user_input(self, channel_id, leader_id, user_text, root_id=None) -> dict:
+    async def handle_user_input(self, channel_id, leader_id, user_text, root_id=None, attachments=None) -> dict:
         proj = self.projects.get(int(channel_id))   # 이 채널이 등록된 프로젝트면 '개입'(이어지는 작업)
         # [신규×신규 병렬 완화] 신규 요청도 고유 스코프로 동시 진행한다 — 과거 'main' 직렬은 등록
         # 경합 방지용이었으나 전역 점유·스코프 선점·원자 등록 이후 근거가 소멸(라이브: 서로 다른
@@ -1338,6 +1372,8 @@ class Sys:
         flow = Flow(self.guide, channel_id, self.guild_id, lead, self.bot_info)
         flow._handoff = True   # [논블로킹 핸드오프] 프로덕션은 위임을 즉시-반환 핸드오프로(75초 detach·비동기 churn
                                #   차단). 동료 작업은 SYS가 호출 밖에서 직렬 완주시켜 결과로 잇는다. (테스트는 기본 동기.)
+        flow.inbound_attachments = list(attachments or [])   # [파일 전송] 사용자 첨부 — 워크스페이스 준비 시 inbox/로 staging
+        flow.stage_inbound = lambda: self._stage_inbound(flow)  # create_project가 워크스페이스 만든 직후 즉시 staging(turn1 가용)
         flow.session_scope = session_scope
         # [교차오염 차단 — 흐름별 원문 스냅샷] 사용자 원문을 흐름 객체에 '박제'한다. self._origin_request는
         # 다음 개입이 오면 덮어쓰이는 전역 단일 필드라, 동시 흐름이 있으면 먼저 돌던 흐름의 봇들이 _prompt에서
@@ -1383,6 +1419,7 @@ class Sys:
             p = self.projects.get(int(ch))
             if p and p.get("workspace"):
                 flow.workspace = p["workspace"]   # id-개명(p-00n-슬러그)/재사용(기존 산출물) 결과 채택
+                self._stage_inbound(flow)         # [파일 전송] 워크스페이스 생긴 즉시 사용자 첨부를 inbox/로(turn1 가용)
             return pid
         flow.register_project = _reg
         # '기억'(직업 고정): 예비가 recruit로 직군을 받으면 그 직업을 다음 흐름에도 유지하도록 로스터 라벨에 반영
@@ -1727,4 +1764,5 @@ class Sys:
             self._log("ignored", reason="To 없음")
             return {"mode": "ignored"}
         return await self.handle_user_input(channel_id, request.to_id, request.body,
-                                            root_id=request.message_id)
+                                            root_id=request.message_id,
+                                            attachments=getattr(request, "attachments", None))

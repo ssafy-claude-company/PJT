@@ -439,6 +439,17 @@ async def run() -> None:
             seen.add(str(message.id))
             if req.to_id is None:
                 req.to_id = sysm.projects[ch]["leader"] if is_project else leader_id
+            # [파일 전송 — 인바운드] 사용자가 첨부한 파일을 받아 흐름에 싣는다(작업공간 inbox/로 staging돼 봇이
+            # Read/run으로 사용). 25MB 초과는 건너뛴다(Discord 한도). 첨부 없으면 no-op.
+            for att in (getattr(message, "attachments", None) or []):
+                try:
+                    if int(getattr(att, "size", 0) or 0) > 25 * 1024 * 1024:
+                        log.info("첨부 건너뜀(25MB 초과): %s (%sB)", att.filename, att.size)
+                        continue
+                    req.attachments.append((att.filename, await att.read()))
+                    log.info("첨부 수신: %s (%sB)", att.filename, getattr(att, "size", "?"))
+                except Exception as e:
+                    log.error("첨부 다운로드 실패 %s: %s", getattr(att, "filename", "?"), e)
             audit.record("user_request", to=req.to_id, body=req.body[:200])
             log.info("요청 수신: to=%s body=%r", req.to_id, (req.body or '')[:60])
             # [RFC-011 M3 — 취향 축적] 등록 프로젝트 채널의 사용자 발화를 그 프로젝트에 누적(라우팅 전에 —

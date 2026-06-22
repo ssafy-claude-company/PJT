@@ -27,6 +27,7 @@ class Request:
     body: str                       # Work면 목표, Info면 질문
     from_id: Optional[int] = None   # From: 보낸 봇(수신 시 Discord가 채움)
     message_id: Optional[str] = None
+    attachments: list = field(default_factory=list)  # [파일 전송] 사용자가 첨부한 파일 [(filename, bytes), ...]
 
 
 @dataclass

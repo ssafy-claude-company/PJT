@@ -37,6 +37,10 @@ class FakeGuide:
         self.calls.append(("resp", sender, body))
         return "respid"
 
+    async def send_file(self, channel_id, path, sender_id=0, caption=""):
+        self.calls.append(("file", channel_id, path, sender_id, caption))
+        return "fileid"
+
 
 def _flow(g, leader=11):
     f = Flow(g, channel_id=500, guild_id=1, leader_id=leader, bot_info={11: "L", 12: "M"})
@@ -78,7 +82,7 @@ def test_leader는_project_task_도구():
     names = {t.name for t in make_guide_tools(f, 11, "leader")}
     # 보고/답변 툴 없음(반환=Response). 흐름 도구(request·recruit·run)+리더 셋업·배포 도구.
     assert names == {"request", "recruit", "run",
-                     "create_project", "create_task", "set_goal", "complete_task", "deploy",
+                     "create_project", "create_task", "set_goal", "complete_task", "deploy", "send_file",
                      "vote", "meet", "parallel_work"}   # Discord 심화 대화: 표결·회의(1R 동시 수집). 경쟁 구현은
                                        # 사용자 판단으로 제거(같은 모델 중복 비교 — 효과는 협업에서)
 
@@ -92,6 +96,42 @@ def test_리더_등록툴이_전부_허용목록에_있음():
     allowed = set(FLOW_TOOLS) | set(LEADER_TOOLS)
     missing = {n for n in names if f"mcp__guide__{n}" not in allowed}
     assert not missing, f"허용목록(FLOW_TOOLS+LEADER_TOOLS)에서 빠진 리더 툴: {missing}"
+
+
+def test_send_file_도구_작업공간_샌드박스_전송(tmp_path):
+    """[파일 전송 — 아웃바운드] 산출물 파일을 사용자에게 Discord 첨부로 보낸다(on-demand). 작업공간 안의
+    파일만(경로 탈출 차단), 없는 파일은 거부. g.send_file로 채널에 첨부 전송."""
+    g = FakeGuide(); f = _flow(g)
+    f.workspace = str(tmp_path)
+    (tmp_path / "report.md").write_text("결과 보고서")
+    t = _tools(f, 11, "leader")
+    r = asyncio.run(t["send_file"].handler({"path": "report.md", "caption": "보고서입니다"}))["content"][0]["text"]
+    assert "전송됨" in r
+    assert any(c[0] == "file" and str(c[2]).endswith("report.md") and c[4] == "보고서입니다" for c in g.calls)  # g.send_file 호출
+    r2 = asyncio.run(t["send_file"].handler({"path": "nope.zip"}))["content"][0]["text"]
+    assert "없습니다" in r2                                                     # 없는 파일 거부
+    r3 = asyncio.run(t["send_file"].handler({"path": "../../etc/passwd"}))["content"][0]["text"]
+    assert "작업공간 밖" in r3                                                  # 경로 탈출 차단
+
+
+def test_파일전송_인바운드_staging과_프롬프트(tmp_path):
+    """[파일 전송 — 인바운드] 사용자가 첨부한 파일을 작업공간 inbox/로 staging(멱등)하고, 프롬프트가 그 경로를
+    리더·워커에게 안내해 봇이 Read로 쓰게 한다."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드"})
+    f = _flow(g); f.workspace = str(tmp_path)
+    f.inbound_attachments = [("data.csv", b"a,b\n1,2\n"), ("ref.png", b"\x89PNG\r\n")]
+    s._stage_inbound(f)
+    assert (tmp_path / "inbox" / "data.csv").read_bytes() == b"a,b\n1,2\n"     # inbox/로 저장
+    assert (tmp_path / "inbox" / "ref.png").exists()
+    assert set(f.inbound_files) == {"data.csv", "ref.png"}
+    assert f.inbound_attachments == []                                        # 1회만(멱등)
+    s._stage_inbound(f)                                                       # 재호출 — 중복 staging 없음
+    assert set(f.inbound_files) == {"data.csv", "ref.png"}
+    p_lead = s._prompt("x", Kind.WORK, "leader", 11, leader_id=11, flow=f)
+    p_mem = s._prompt("x", Kind.INFO, "member", 12, leader_id=11, flow=f)
+    assert "inbox/data.csv" in p_lead and "첨부한 파일" in p_lead             # 리더 프롬프트 안내
+    assert "inbox/ref.png" in p_mem                                           # 워커 프롬프트 안내
 
 
 def test_run_안전가드():

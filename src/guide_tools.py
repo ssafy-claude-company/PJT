@@ -47,7 +47,8 @@ FLOW_TOOLS = [REQUEST_TOOL, RECRUIT_TOOL, RUN_TOOL]
 # 리더(코디네이터) 흐름 도구: 조율만(run 없음) — 구현·실행은 owner/QA가 한다.
 COORD_TOOLS = [REQUEST_TOOL, RECRUIT_TOOL]
 LEADER_TOOLS = [f"mcp__guide__{n}" for n in
-                ("create_project", "create_task", "set_goal", "complete_task", "deploy", "vote", "meet", "parallel_work")]
+                ("create_project", "create_task", "set_goal", "complete_task", "deploy", "send_file",
+                 "vote", "meet", "parallel_work")]
 
 # run 툴 안전 차단: 파괴/탈출/저장소·시스템 경로/네트워크 외 명령은 막는다(npm·node·curl·python은 허용).
 _RUN_DENY = ("rm -rf", "rm -r ", "sudo", "shutdown", "reboot", "mkfs", "dd if=", ":(){",
@@ -2728,6 +2729,40 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     _dep["on"] = True       # 도구 호출만 죽고 배포는 계속 — 결과는 detached로 전달
                 raise
         tools.append(deploy)
+
+        @tool("send_file",
+              "산출물 파일을 사용자에게 Discord 첨부로 보낸다 — 사용자가 '파일로 받고 싶다'고 했거나 산출물이 "
+              "파일 형태(이미지·문서·데이터·코드 번들 등)일 때만(항시 보내지 말 것). path=작업공간 기준 상대경로, "
+              "caption=한 줄 설명(선택). 25MB 이하만 — 큰 건 deploy(배포 URL)로.",
+              {"path": str, "caption": str})
+        async def send_file(args):
+            rel = str(args.get("path", "")).strip()
+            if not rel:
+                return _ok("오류: path가 비었습니다(작업공간 기준 상대경로를 주세요).")
+            ws = getattr(flow, "workspace", None)
+            if not ws:
+                return _ok("전송 불가: 작업공간이 없습니다.")
+            # [보안] 작업공간 안의 파일만 — 경로 탈출(../)·시스템 경로 차단
+            base = os.path.realpath(str(ws))
+            full = os.path.realpath(os.path.join(base, rel))
+            if not (full == base or full.startswith(base + os.sep)):
+                return _ok("전송 거부: 작업공간 밖 경로는 보낼 수 없습니다 — 작업공간 기준 상대경로를 주세요.")
+            if not os.path.isfile(full):
+                return _ok(f"전송 거부: 그런 파일이 없습니다 — {rel}(작업공간 기준). run으로 만든 뒤 보내세요.")
+            sz = os.path.getsize(full)
+            if sz > 25 * 1024 * 1024:
+                return _ok(f"전송 거부: {sz // (1024 * 1024)}MB — Discord 첨부 한도(25MB) 초과. 큰 산출물은 "
+                           f"deploy(배포 URL)로 전달하세요.")
+            try:
+                await g.send_file(flow.user_channel, full, sender_id=me_id,
+                                  caption=str(args.get("caption", "")))
+            except Exception as e:
+                return _ok(f"파일 전송 오류: {e}")
+            if flow.log:
+                flow.log("file_sent_to_user", path=rel, size=sz, seg=getattr(flow, "leader_segment", 0))
+            _dbg(f"[FILE→user] {me_id} {rel} ({sz}B)")
+            return _ok(f"파일 전송됨 → 사용자: {rel} ({sz // 1024}KB). 사용자가 Discord에서 직접 받습니다.")
+        tools.append(send_file)
 
     return tools
 
