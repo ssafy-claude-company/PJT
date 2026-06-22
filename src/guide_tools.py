@@ -448,6 +448,8 @@ class TaskRef:
     team: List[int] = field(default_factory=list)   # 이 Task에 배정된 Organt들
     owner: int = 0                                   # 이 산출물의 단일 책임자(accountable)
     participated: set = field(default_factory=set)   # 이 Task 정의에 '실질 협의'로 참여한 동료(보낸/받은 쪽 모두)
+    peer_info_pairs: set = field(default_factory=set)  # [협업] owner↔owner 직접 Info 교환 쌍(리더 중계 아닌 전문가
+                                                     #   간 직접 대화) — 인터페이스 계약을 직접 합의했나 마감 게이트가 판정
     owner_incomplete: bool = False                   # owner가 '턴 한도'로 미완 반환 → 완료 차단(이어서 끝내야)
     owner_delivered: bool = False                    # owner가 '검증된 실작업 산출물'을 위임 도중 실제로 내고 응답이 돌아왔나
                                                      #   → 거짓이면 complete_task 거부(owner 미응답·착수전인데 리더가 대신 허위완료 차단)
@@ -786,6 +788,16 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                               f"**첫 줄**에 `[직군밖] 필요직군명` 을 적어 반려하세요. 리더가 그 직군을 채용하거나 "
                               f"실제 제작 자원으로 충족합니다(전문화 원칙: '구현 가능'이 아니라 '전문성 정합'으로 판단).\n"
                               f"[요청 맥락] {body}")
+                iface = (getattr(flow.current, "interfaces", "") or "").strip()
+                if iface:
+                    # [협업 — 인터페이스 직접 전달·합의(2026-06-22 사용자: '전문가끼리 서로 대화하는가')] 종전엔
+                    # interfaces가 Task에만 저장되고 owner에게 전달 안 돼(여기 누락) owner가 계약을 못 보고 추측
+                    # → 통합 불일치(P-028 API 미스매치). 이제 계약을 owner에게 주고, 맞물리는 부분은 그 도메인
+                    # owner에게 *직접 request(Info)*로 확인하게 한다(리더 중계·추측 금지).
+                    owner_body += (f"\n[도메인 간 인터페이스 계약 — 준수]\n{_speech_clip(iface, 1500)}"
+                                   f"\n[직접 합의 — 리더 중계 금지] 당신 작업이 다른 도메인과 맞물리면(데이터 포맷·"
+                                   f"API·이벤트 타이밍 등) 추측하거나 리더에게 되묻지 말고 **그 도메인 owner에게 "
+                                   f"직접 request(Info)**로 계약을 확인·합의하세요 — 전문가끼리 직접 소통합니다.")
                 notes = getattr(flow.current, "collab_notes", "")
                 if notes:
                     # [스펙 증발 방지] 회의·표결의 합의는 리더 머릿속이 아니라 위임 계약에 실린다 —
@@ -835,6 +847,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             for x in (me_id, to):
                 if x in flow.current.team and x != flow.leader:
                     flow.current.participated.add(x)
+            # [협업 — 전문가 간 직접 대화(2026-06-22 사용자 설계)] 양쪽 다 비-리더 팀원이면 owner↔owner 직접
+            # Info(리더 경유 아님) — 쌍으로 기록. 인터페이스 계약을 '리더 중계·추측'이 아니라 *당사자끼리*
+            # 합의했는지 마감 게이트(iface_dialogue)가 본다.
+            if (me_id != flow.leader and to != flow.leader
+                    and me_id in flow.current.team and to in flow.current.team):
+                flow.current.peer_info_pairs.add(frozenset((me_id, to)))
         # ── 위임 완주 보장(detach-safe) ─────────────────────────────────────────
         # 여기서부터의 '깨우기→응답 처리→프레임 close'는 별도 태스크(_deliver)로 돌고, 도구 호출
         # 자체는 shield로 감싼다. CLI가 (자체 한도 등으로) 이 도구 호출을 포기·취소해도 위임은
@@ -1952,6 +1970,28 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                                "(taste 아님). 미달·누락 요소는 그 도메인 owner에게 개선 위임 후 재검증(이게 깊이의 "
                                "반복 — 0-redo를 깨는 지점). 표준이 통째로 부적용이면 **'[최대성 N/A: <사유>]'**(빈 "
                                "재호출 통과 안 됨 — 사유 필수).")
+            # [협업 — 인터페이스 직접 합의 강제(2026-06-22 사용자: '전문가끼리 서로 대화하는가')] interfaces(도메인
+            # 간 계약)를 선언했는데 owner들이 서로 직접 확인(peer↔peer Info)한 적이 없으면 = 계약을 리더만 경유
+            # 전달(사일로·중계 병목)했거나 owner가 추측한 것(P-028 API 미스매치). ≥2개 도메인이 실작업했을 때만
+            # (맞물릴 대상이 있을 때) 발동 — 과발동 차단. peer 직접 대화가 생기거나 '[인터페이스 직접합의 N/A:
+            # 사유]'일 때까지 보류(persistent-until-resolved — staffing 게이트와 동형, 1회 재호출론 통과 안 됨).
+            _iface_x = (getattr(flow.current, "interfaces", "") or "").strip()
+            _iface_na = bool(re.search(r"\[\s*인터페이스\s*직접\s*합의\s*(?:n\s*/?\s*a|면제|단독|불필요)",
+                                       (args.get("result") or ""), re.IGNORECASE))
+            if (has_product and _iface_x and not getattr(flow.current, "peer_info_pairs", None)
+                    and not _iface_na and not getattr(flow, "iface_dialogue_checked", False)):
+                _iwk = [m for m in flow.current.team if m != flow.leader and flow.act_by.get(m, 0) > 0]
+                _idoms = {_norm_job(j) for m in _iwk for j in _jobs_of(flow._info(m) or "")} - {""}
+                if len(_idoms) >= 2:
+                    if flow.log:
+                        flow.log("iface_dialogue_gate", task=flow.current.task_id)
+                    return _ok("완료 보류(인터페이스 직접 합의 — 전문가끼리 직접 대화): 이 Task는 도메인 간 "
+                               "인터페이스 계약(interfaces)을 선언했는데 **owner들이 서로 직접 확인한 기록이 "
+                               "없습니다**(리더만 경유 = 사일로·중계 병목, owner는 계약을 추측 → 통합 불일치). "
+                               "맞물리는 도메인 owner끼리 **request(Info)로 계약을 직접 합의**하게 하세요(데이터 "
+                               "포맷·API·이벤트 타이밍을 리더 중계·추측 말고 *당사자끼리*). 정말 단방향/단독이라 "
+                               "직접 합의가 불필요하면 result에 **'[인터페이스 직접합의 N/A: <사유>]'**를 적어 "
+                               "재호출하세요(사유 필수).")
             # [팀 기여 의무 게이트 — RFC-009] 교차 검증(cross_checks)과 **독립**. 검증이 됐어도(검증은
             # 기능 위주라 폴리시 부재를 못 잡음 — RFC-009 §3), 팀에 부른 직군이 이 흐름에서 회의 발언만 하고
             # 실작업·검증 0(act_by==0: Write/Edit/run 한 번도 없음)이면 그 도메인(타격감·그래픽·사운드·디자인·

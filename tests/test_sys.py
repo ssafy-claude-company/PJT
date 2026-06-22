@@ -46,6 +46,7 @@ def _flow(g, leader=11):
     f.decomp_checked = True  # 분해 점검 보류도 기본 우회(전용 테스트만 False로 검증)
     f.data_prov_checked = True  # 데이터 출처 게이트 보류도 기본 우회(전용 테스트만 False로 검증)
     f.staffing_exempt = True  # 스태핑 커버리지 게이트도 기본 우회(전용 테스트만 False로 검증)
+    f.iface_dialogue_checked = True  # 인터페이스 직접합의 게이트도 기본 우회(전용 테스트만 False로 검증)
     return f
 
 
@@ -2305,6 +2306,64 @@ def test_capability_gaps_일반화_데이터_DevOps_DBA_커버리지():
     assert "배포·인프라(DevOps)" not in _capability_gaps("CI/CD 파이프라인 구축", ["DevOps"])
     # 평범한 게임/웹엔 새 갭 없음(과발동 방지)
     assert _capability_gaps("오버워치 같은 게임 만들어줘", ["게임 기획자", "프론트엔드"]) == []
+
+
+def test_인터페이스_직접합의_게이트_전문가간_대화_강제():
+    """[Stage 2 — 전문가 간 직접 대화 강제(2026-06-22 사용자 선택)] interfaces(도메인 간 계약)를 선언했는데
+    owner들이 서로 직접 확인(peer↔peer Info)한 적이 없으면 마감 보류 — 리더 중계·추측 차단. peer 직접
+    대화가 생기면 자동 통과. 1회 재호출론 통과 안 됨(persistent)."""
+    g = FakeGuide()
+    f = _flow(g)
+    f.iface_dialogue_checked = False                            # 이 게이트만 켠다
+    f.bot_info[12] = "백엔드"; f.bot_info[13] = "프론트엔드"
+    f.project_team += [13]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.update({12, 13})
+    asyncio.run(t["set_goal"].handler({"goal": "공공데이터 웹", "interfaces": "백→프 JSON {city,aqi}"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5; f.act_by[13] = 2                          # 두 도메인 실작업(맞물릴 대상 존재)
+    f.current.cross_checks = f.current.cross_check_offdomain = 1   # 교차검증은 통과(이 게이트 격리)
+    # peer 직접 대화 없음 → 보류
+    r1 = asyncio.run(t["complete_task"].handler({"result": "끝"}))["content"][0]["text"]
+    assert "인터페이스 직접 합의" in r1 and f.current is not None
+    # 재호출만으론 통과 안 됨(persistent-until-resolved)
+    r2 = asyncio.run(t["complete_task"].handler({"result": "끝"}))["content"][0]["text"]
+    assert "인터페이스 직접 합의" in r2 and f.current is not None
+    # owner끼리 직접 Info 대화가 생기면 → 자동 통과
+    f.current.peer_info_pairs.add(frozenset((12, 13)))
+    r3 = asyncio.run(t["complete_task"].handler({"result": "끝"}))["content"][0]["text"]
+    assert f.current is None and "인터페이스 직접 합의" not in r3
+
+
+def test_인터페이스_직접합의_게이트_NA마커와_단일도메인_예외():
+    """N/A 마커(의식적 면제)와 '맞물릴 다른 도메인이 없음'(단일 도메인)은 보류 아님 — 과발동 방지."""
+    # ① N/A 마커 → 의식적 통과
+    g = FakeGuide(); f = _flow(g); f.iface_dialogue_checked = False
+    f.bot_info[12] = "백엔드"; f.bot_info[13] = "프론트엔드"; f.project_team += [13]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    f.current.participated.update({12, 13})
+    asyncio.run(t["set_goal"].handler({"goal": "웹", "interfaces": "백→프 JSON"}))
+    f.current.owner, f.current.owner_delivered, f.current.verified = 12, True, True
+    f.act_by[12] = 5; f.act_by[13] = 2
+    f.current.cross_checks = f.current.cross_check_offdomain = 1
+    r = asyncio.run(t["complete_task"].handler(
+        {"result": "끝 [인터페이스 직접합의 N/A: 단방향 정적 계약]"}))["content"][0]["text"]
+    assert f.current is None and "인터페이스 직접 합의" not in r
+    # ② 같은 도메인 둘뿐 → 맞물릴 *다른* 도메인 없음 → 미발동(과발동 방지)
+    g2 = FakeGuide(); f2 = _flow(g2); f2.iface_dialogue_checked = False
+    f2.bot_info[12] = "백엔드"; f2.bot_info[13] = "백엔드"; f2.project_team += [13]
+    t2 = _tools(f2, 11, "leader")
+    asyncio.run(t2["create_task"].handler({"members": "12,13"}))
+    f2.current.participated.update({12, 13})
+    asyncio.run(t2["set_goal"].handler({"goal": "웹", "interfaces": "내부 모듈 계약"}))
+    f2.current.owner, f2.current.owner_delivered, f2.current.verified = 12, True, True
+    f2.current.contrib_checked = True                          # contrib만 우회(이 테스트 관심사 아님)
+    f2.act_by[12] = 5; f2.act_by[13] = 2
+    f2.current.cross_checks = f2.current.cross_check_offdomain = 1
+    r2 = asyncio.run(t2["complete_task"].handler({"result": "끝"}))["content"][0]["text"]
+    assert f2.current is None and "인터페이스 직접 합의" not in r2
 
 
 def test_complete_task_최대성_기준이_교차검증에_주입_PHASE3():
