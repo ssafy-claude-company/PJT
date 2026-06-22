@@ -2282,6 +2282,31 @@ def test_스태핑_커버리지_AI능력없으면_set_goal보류_리더흡수차
     assert f.current.status.goal                               # 면제로 goal 확정
 
 
+def test_capability_gaps_일반화_데이터_DevOps_DBA_커버리지():
+    """[Stage 1 — 능력 커버리지 일반화(2026-06-22)] 단일 AI/ML → 일반 능력 표(_CAPS). 목표가 그 능력을
+    *실질 축*으로 요구하는데 팀이 아무도 못 덮으면 갭 → set_goal이 recruit 강제. 고신호만(과채용 방지):
+    평범한 '웹 배포'엔 DevOps 갭 안 걸리고, 백엔드가 있으면 기본 DB(DBA)는 cover."""
+    # 기존 AI/ML 거동 보존
+    assert _capability_gaps("AI를 학습시키고 예측 웹", ["백엔드", "프론트엔드"]) == ["AI/ML(모델 학습·예측)"]
+    assert _capability_gaps("AI를 학습시키고", ["백엔드", "AI 엔지니어"]) == []
+    assert _capability_gaps("스네이크 게임 만들어줘", ["백엔드"]) == []
+    # 실데이터 수집·파이프라인 — 공공/실데이터 + 취득동사일 때(백엔드는 cover 아님 → 전담 데이터 직군 강제)
+    assert "실데이터 수집·파이프라인" in _capability_gaps("공공데이터를 받아와 통계 사이트", ["백엔드", "프론트엔드"])
+    assert "실데이터 수집·파이프라인" not in _capability_gaps("공공데이터를 받아와 통계", ["데이터 엔지니어"])
+    # 반복 수요('공공데이터로 AI 학습 웹')는 AI/ML + 데이터 두 갭을 동시에 — 두 전문가 협업 강제
+    assert set(_capability_gaps("공공데이터를 활용해서 AI를 학습시키고 웹사이트", ["백엔드", "프론트엔드"])) == {
+        "AI/ML(모델 학습·예측)", "실데이터 수집·파이프라인"}
+    # 데이터 영속·DB — 백엔드·DBA가 둘 다 없을 때만 갭(백엔드 있으면 기본 CRUD cover → 과채용 방지)
+    assert "데이터 영속·DB" in _capability_gaps("회원가입 로그인 계정 기록 저장", ["프론트엔드"])
+    assert "데이터 영속·DB" not in _capability_gaps("회원가입 로그인 계정", ["백엔드"])
+    # 배포·인프라(DevOps) — 명시적 인프라 수요에만(평범한 '배포'는 표준 파이프라인 → 갭 없음)
+    assert "배포·인프라(DevOps)" in _capability_gaps("CI/CD 파이프라인 구축, 쿠버네티스 오토스케일", ["백엔드"])
+    assert "배포·인프라(DevOps)" not in _capability_gaps("웹사이트 만들어서 배포해줘", ["백엔드"])
+    assert "배포·인프라(DevOps)" not in _capability_gaps("CI/CD 파이프라인 구축", ["DevOps"])
+    # 평범한 게임/웹엔 새 갭 없음(과발동 방지)
+    assert _capability_gaps("오버워치 같은 게임 만들어줘", ["게임 기획자", "프론트엔드"]) == []
+
+
 def test_complete_task_최대성_기준이_교차검증에_주입_PHASE3():
     """[최대화 — PHASE 3 lynchpin] flow.standard(최대 표준)가 설정되면 마감 교차검증 메시지에 '최대성 기준
     대조'가 주입된다 — 검증자(다른 도메인)가 *돌아가나*가 아니라 *실제 최대만큼인가*를 워크스페이스 실측으로
