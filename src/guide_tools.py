@@ -282,6 +282,28 @@ def _needed_caps_coverage(goal_text, labels):
     return out
 
 
+def _offdomain_capability_hit(flow, to, body):
+    """[직군밖 사전 차단 — P4 직군밖 거부 부활(2026-06-22)] Work body가 요구하는 능력(_CAPS need) 중 수신자(to)
+    직군이 못 덮고 *다른* 팀원(리더 제외)이 덮는 것 → {능력명: [멤버]}. 비면 직군밖 아님(또는 덮는 전문가가
+    없어 staffing 영역). 종전 [직군밖]는 받은 봇이 거부하는 사후 채널인데 1회만 쓰였다(봇은 받으면 그냥 흡수)
+    — 이건 *위임 전에* 능력표로 잡아 그 전문가에게 리다이렉트(P-022 백엔드가 AI·data 흡수 차단). 의식적 예외는
+    body '[직군초과: 사유]'. 능력표 밖 도메인(사운드↔VFX 등)은 봇-side [직군밖] 반려가 백스톱."""
+    if "[직군초과" in (body or ""):
+        return {}
+    tl = (flow._info(to) or "").lower()
+    bn = [name for name, need, covered in _CAPS if need((body or "").lower()) and not covered(tl)]
+    if not bn:
+        return {}
+    hit = {}
+    for name, need, cov in _CAPS:
+        if name in bn:
+            ms = [m for m in flow.current.team if m != to and m != flow.leader
+                  and cov((flow._info(m) or "").lower())]
+            if ms:
+                hit[name] = ms
+    return hit
+
+
 # 채용 대기 인력(직군 미배정). recruit(role=…)로 런타임에 '게임 기획자·UX 디자이너' 등 필요한 직군으로
 # 채용해 합류시킨다. 로스터에서 라벨이 '예비'인 봇들이며, 첫 '전원 기획'엔 안 들어가고 필요할 때 합류한다.
 _SPARE_LABEL = "예비"
@@ -800,6 +822,19 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             _dbg(f"{tag} ✗거부:Goal미확정")
             return _ok("Work 위임 거부: 이 Task의 Goal이 아직 확정되지 않았습니다. 먼저 동료와 request(Info)로 "
                        "목표를 합의하고 set_goal로 확정한 뒤 Work로 맡기세요(목표는 팀 합의의 산물 — 선분배 금지).")
+        # [직군밖 사전 차단] 능력표로 *위임 전에* 능력 미스매치를 잡아 그 전문가에게 리다이렉트(흡수의 씨앗
+        # 차단). 상세·근거는 _offdomain_capability_hit 참고. offdomain_checked는 테스트 우회 플래그.
+        if kind == Kind.WORK and goal and not getattr(flow, "offdomain_checked", False):
+            _hit = _offdomain_capability_hit(flow, to, body)
+            if _hit:
+                if flow.log:
+                    flow.log("work_offdomain_blocked", to=to, caps=list(_hit.keys()), seg=flow.leader_segment)
+                _who = "; ".join(f"{n} → {flow._names(ms)}" for n, ms in _hit.items())
+                return _ok(
+                    f"위임 거부(직군밖 — 능력 미스매치): 이 작업은 **{', '.join(_hit)}** 능력이 필요한데 "
+                    f"{flow._info(to) or to}의 직군 밖입니다. 그 능력을 가진 전문가가 팀에 있습니다 — {_who}. "
+                    f"**그 전문가에게 위임**하세요(범용·비전문이 떠안으면 흡수 — placeholder 품질). 정말 {to}가 "
+                    f"맡아야 할 합당한 이유가 있으면 body에 '[직군초과: <사유>]'를 적어 다시 보내세요.")
         # Work Response → Accept/Redo (docs Communication.md §5). 이미 이 owner가 '완료 응답'까지 낸
         # 산출물을 같은 위임자가 또 Work로 보내면, 그건 '새 위임'이 아니라 직전 산출물의 Redo다.
         # → 새 프레임이 아니라 redo()로 처리한다(한계까지만, 초과 시 반복 위임 거부). 이로써 '되풀이

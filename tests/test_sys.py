@@ -4,7 +4,7 @@ import asyncio
 from src.guide_tools import (Flow, make_guide_tools, _wants_real_data,
                              _synthesizes_data, _has_real_dataset, _is_verifier,
                              _capability_gaps, _needed_caps_coverage, _deploy_infeasibility,
-                             _perceptual_essential)
+                             _offdomain_capability_hit, _perceptual_essential)
 from src.protocol import Kind
 from src.sys_core import Sys
 
@@ -49,6 +49,7 @@ def _flow(g, leader=11):
     f.staffing_exempt = True  # 스태핑 커버리지 게이트도 기본 우회(전용 테스트만 False로 검증)
     f.iface_dialogue_checked = True  # 인터페이스 직접합의 게이트도 기본 우회(전용 테스트만 False로 검증)
     f.parallel_planned = True  # 병렬 계획 게이트도 기본 우회(전용 테스트만 False로 검증)
+    f.offdomain_checked = True  # 직군밖 위임 사전차단도 기본 우회(전용 테스트만 False로 검증)
     return f
 
 
@@ -2314,6 +2315,31 @@ def test_capability_gaps_일반화_데이터_DevOps_DBA_커버리지():
     assert "배포·인프라(DevOps)" not in _capability_gaps("CI/CD 파이프라인 구축", ["DevOps"])
     # 평범한 게임/웹엔 새 갭 없음(과발동 방지)
     assert _capability_gaps("오버워치 같은 게임 만들어줘", ["게임 기획자", "프론트엔드"]) == []
+
+
+def test_직군밖_위임_사전차단_능력미스매치():
+    """[Stage 4 — 직군밖 거부 부활(2026-06-22)] Work body가 능력(_CAPS need)을 요구하는데 수신자 직군이 못
+    덮고 그 능력을 덮는 다른 팀원이 있으면 hit → 위임 거부·리다이렉트. 덮는 사람 없으면 빈(staffing 영역).
+    '[직군초과]' 의식적 예외. 올바른 전문가에게 직접이면 hit 없음."""
+    g = FakeGuide(); f = _flow(g)
+    f.bot_info[12] = "백엔드"; f.bot_info[13] = "AI 엔지니어"; f.project_team += [13]
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13"}))
+    # AI 학습 Work를 백엔드(12)에게 → AI 엔지니어(13)가 덮음 → hit(리다이렉트)
+    hit = _offdomain_capability_hit(f, 12, "AI 모델을 학습시켜줘")
+    assert "AI/ML(모델 학습·예측)" in hit and 13 in hit["AI/ML(모델 학습·예측)"]
+    # [직군초과] 마커 → 빈(의식적 예외)
+    assert _offdomain_capability_hit(f, 12, "AI 모델 학습 [직군초과: 임시]") == {}
+    # 올바른 전문가(AI 엔지니어)에게 직접 → hit 없음
+    assert _offdomain_capability_hit(f, 13, "AI 모델 학습") == {}
+    # 일반 백엔드 작업(능력 트리거 없음)은 백엔드에게 OK → hit 없음
+    assert _offdomain_capability_hit(f, 12, "REST API 엔드포인트 추가") == {}
+    # 덮는 전문가 없으면 빈(staffing 영역 — set_goal이 잡음)
+    g2 = FakeGuide(); f2 = _flow(g2)
+    f2.bot_info[12] = "백엔드"; f2.bot_info[13] = "프론트엔드"; f2.project_team += [13]
+    t2 = _tools(f2, 11, "leader")
+    asyncio.run(t2["create_task"].handler({"members": "12,13"}))
+    assert _offdomain_capability_hit(f2, 12, "AI 모델 학습") == {}
 
 
 def test_배포_타겟_호환_사전검증_런타임Python_차단():
