@@ -484,6 +484,8 @@ class Flow:
                                        #   한 프로젝트의 봇이 '남의 프로젝트 원문'을 진짜 의도로 받아 엉뚱한 걸
                                        #   만든다(라이브: 웹 흐름이 게임 개입 원문을 받아 게임을 짓기 시작).
         self.deployed = None           # deploy 툴이 불리면 결과 문자열(배포 강제용 추적)
+        self._deploy_count = 0         # [런어웨이 차단] 흐름당 실배포 횟수 — 상한 넘으면 차단+사용자 보고로
+                                       #   에스컬레이트(라이브 P-028: 깨진 배포를 코드 바꿔가며 23회 재배포한 루프 방지)
         self.pending_clarify = None    # 위임자에게 되묻기(확인요청 반환) 임시 보관
         self.leader_segment = 0        # 리더 턴 세그먼트 번호(시작=1, continue마다 +1) — 관측용
         self.req_results = {}          # (seg,from,to,kind,body)->응답: 같은 턴 병렬 중복요청 합치기용 캐시
@@ -2390,6 +2392,19 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 return _ok("[대기] 배포가 이미 진행 중입니다 — deploy를 다시 부르지 마세요(재호출은 점검이 "
                            "아니라 **새 배포를 또 트리거**해 빌드를 계속 리셋합니다). 진행 중인 배포의 "
                            "성공/실패 결과가 곧 이 도구의 응답으로 돌아옵니다 — 그때 판단하세요.")
+            # [런어웨이 배포 차단 — 횟수 상한(2026-06-21 라이브 P-028: 깨진 배포를 코드 바꿔가며 23회 재배포한 루프)]
+            # 위의 anti-thrash는 '코드 변경 없는 재배포'만 잡아, '코드를 만지며 무한 재배포'(근본은 배포 구조 문제라 코드
+            # 수정으론 안 고쳐짐)는 통과됐다. 흐름당 실배포 N회를 넘으면 *하드 차단*하고 사용자 보고로 에스컬레이트 —
+            # 못 고치는 걸 무한 재시도하는 토큰·빌드 낭비를 구조적으로 끊는다(횟수는 품질판정 아닌 안전 백스톱).
+            if getattr(flow, "_deploy_count", 0) >= 5:
+                if flow.log:
+                    flow.log("deploy_cap", count=flow._deploy_count)
+                return _ok(
+                    "[배포 중단 — 5회 초과(런어웨이 차단)] 이 작업에서 배포를 이미 5번 시도했습니다. 라이브가 아직 "
+                    "정상이 아니라면 이건 *앱 코드*가 아니라 **배포 구조/타겟 문제**일 가능성이 큽니다(예: Node 서버가 "
+                    "Python을 spawn하는데 Render Node 환경엔 Python이 없음 — 같은 종류의 불일치). **더 재배포하지 마세요** "
+                    "— (1) 라이브 URL을 run으로 curl해 실제 상태를 확인하고, (2) 코드로 못 고치는 배포 구조 문제면 "
+                    "complete_task에 '배포 구조 문제: <원인>'을 정직하게 적어 사용자에게 보고하세요. 무한 재시도는 금지입니다.")
             # [배포 반-스래싱 — 변경 없는 재배포 차단(2026-06-21 라이브 P-026: 리더가 18회 재배포로 30분 낭비)]
             # Render 무료 빌드는 60s+라 deploy_sync가 *타임아웃*으로 보여도 빌드는 계속 진행된다. 리더가 '실패했나'
             # 싶어 코드 변경 없이 재배포하면 빌드를 처음부터 리셋해 *더 느려진다*(자기영속 thrash — deploy_inflight는
@@ -2423,6 +2438,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 flow.deploy_inflight = False
             flow.deployed = result                 # 배포 호출됨 기록(SYS의 배포 강제가 중복 안 하게)
             flow._deployed_once = True
+            flow._deploy_count = getattr(flow, "_deploy_count", 0) + 1   # 런어웨이 상한 카운트(실배포만 +1)
             flow._deploy_writes = _dwrites         # 이 배포 시점의 저작 수 — 다음 배포가 '변경 없음'을 판정
             return _ok(result)
         tools.append(deploy)

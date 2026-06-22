@@ -3890,6 +3890,36 @@ def test_배포_변경없는_재배포_차단_anti_thrash(monkeypatch):
     assert "배포 성공" in r3["content"][0]["text"] and calls["n"] == 2
 
 
+def test_배포_런어웨이_횟수상한_차단(monkeypatch):
+    """[런어웨이 배포 차단(2026-06-21 라이브 P-028: 깨진 배포를 코드 바꿔가며 23회 재배포)] anti-thrash는 '코드
+    변경 없는 재배포'만 막아, 코드를 만지며 무한 재배포(근본은 배포 구조 문제라 코드 수정으론 안 고쳐짐)는 통과됐다.
+    흐름당 실배포 5회를 넘으면 하드 차단하고 '배포 구조 문제로 사용자에게 보고'로 에스컬레이트 — 무한 재시도 금지."""
+    import src.deploy as dp, os
+    f = Flow(FakeGuide(), channel_id=501, guild_id=1, leader_id=11, bot_info={11: "L"})
+    f.start_root("root")
+    f.workspace = "/tmp/ws-cap"; f.project_id = "P-028"
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    calls = {"n": 0}
+    def fake(ws, name, *a):
+        calls["n"] += 1
+        return f"배포 성공 ✅ https://organt-{name}.onrender.com"
+    monkeypatch.setattr(dp, "deploy_sync", fake)
+    for k in ("GH_PAT", "GH_USER", "RENDER_KEY", "RENDER_OWNER"):
+        os.environ.setdefault(k, "x")
+    # 코드를 매번 바꿔가며(anti-thrash 우회) 5회 배포 — 모두 통과(런어웨이 흉내)
+    for i in range(5):
+        f.writes_by_role["프론트"] = f.writes_by_role.get("프론트", 0) + 1
+        r = asyncio.run(t["deploy"].handler({"name": "site"}))
+        assert "배포 성공" in r["content"][0]["text"], f"{i+1}회차 통과 실패"
+    assert calls["n"] == 5
+    # 6회차: 코드 변경해도 횟수 상한으로 하드 차단 — 실배포 안 일어남, 사용자 보고로 에스컬레이트
+    f.writes_by_role["프론트"] += 1
+    r6 = asyncio.run(t["deploy"].handler({"name": "site"}))
+    assert "배포 중단" in r6["content"][0]["text"] and "5회 초과" in r6["content"][0]["text"]
+    assert "사용자에게 보고" in r6["content"][0]["text"]
+    assert calls["n"] == 5   # 실배포 안 늘어남(차단됨)
+
+
 def test_배포_진행중_재호출은_대기_새배포_트리거_금지():
     """[배포 폴링 차단] 빌드가 길어지면 리더가 deploy를 재호출해 '점검'하려 하는데, 재호출은 새
     배포를 또 트리거(빌드 리셋)하는 자기 영속 루프가 된다(라이브: [안내][배포] 1분 간격 도배 +
