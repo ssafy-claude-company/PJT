@@ -279,9 +279,21 @@ class Sys:
     def _spawn_topic_write(self, channel_id, topic: str):
         if not hasattr(self.guide, "set_channel_topic"):
             return
+
+        async def _write():
+            try:
+                r = await self.guide.set_channel_topic(int(channel_id), topic)
+            except Exception:
+                return
+            if r is None:   # 404 — 채널 죽음. 프로젝트 *기록은 유지*하되 'channel_dead' 표시만 →
+                # 다음 부팅부터 reconcile이 이 채널 토픽쓰기를 건너뛴다(죽은 채널 churn 제거, 부팅 stall 차단).
+                p = self.projects.get(int(channel_id))
+                if p is not None and not p.get("channel_dead"):
+                    p["channel_dead"] = True
+                    self._save_projects()
+                    self._log("channel_marked_dead", channel=int(channel_id), project=p.get("id"))
         try:
-            asyncio.get_running_loop().create_task(
-                self.guide.set_channel_topic(int(channel_id), topic))
+            asyncio.get_running_loop().create_task(_write())
         except RuntimeError:    # 이벤트 루프 밖(동기 테스트 등) — best-effort라 건너뜀
             pass
 
@@ -336,8 +348,8 @@ class Sys:
         for ch, p in self.projects.items():
             if p.pop("seeded", None):    # 토픽이 없던 시드 항목 — 시드 값이 최선, 마커만 제거
                 changed = True
-            if self.parse_project_topic(topics.get(int(ch), "")) is None:
-                self._sync_topic(ch)     # 자가치유: 등록돼 있는데 토픽이 없으면/깨졌으면 다시 기록
+            if not p.get("channel_dead") and self.parse_project_topic(topics.get(int(ch), "")) is None:
+                self._sync_topic(ch)     # 자가치유: 등록돼 있는데 토픽이 없으면/깨졌으면 다시 기록(죽은 채널은 스킵)
         if changed:
             self._save_projects()
 

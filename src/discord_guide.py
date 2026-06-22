@@ -374,10 +374,17 @@ class DiscordGuide:
         """채널 '주제(topic)'를 설정한다 — 프로젝트 레지스트리 요지의 영속 기록용. 토픽은 서버에
         영속되므로 logs/(gitignore)가 컨테이너 리클레임으로 사라져도 채널 자체가 등록 정보를 들고
         있어, 부팅 시 레지스트리를 복원할 수 있다(best-effort)."""
+        import discord
         try:
             ch = await self._resolve(self.system, int(channel_id))
             await ch.edit(topic=(topic or "")[:1024])
             return True
+        except discord.NotFound:
+            # 채널이 삭제됨(404) — 일시 오류가 아니라 '죽은 채널'. 호출부가 표시해 다음 부팅부터 토픽
+            # 시도를 건너뛰게 한다(매 부팅 죽은 채널 20+개에 404 토픽쓰기를 날려 레이트리밋·게이트웨이를
+            # 압박하고 부팅복구를 굶기던 stall의 뿌리). None=죽음 신호(프로젝트 기록 자체는 유지).
+            print(f"[discord_guide] 토픽 설정: 채널 없음(404, 죽은 채널) ch={channel_id}", flush=True)
+            return None
         except Exception as e:
             print(f"[discord_guide] 토픽 설정 실패 ch={channel_id}: {type(e).__name__}: {e}", flush=True)
             return False
