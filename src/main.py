@@ -526,8 +526,11 @@ async def run() -> None:
         # 리더가 복원 Task를 조기 완료하고 새 Task를 연다(라이브: 054013-1 조기완료→074010-1 신설). 본문에
         # '이어가기'를 명시해 그 사고를 막는다(원요청은 보존).
         if ch in sysm.projects and sysm.projects[ch].get("open_task"):
-            pending.body = resume_continue_body(
-                pending.body, sysm.projects[ch]["open_task"].get("last_work_body", ""))
+            _ot = sysm.projects[ch]["open_task"]
+            # [정밀 복구] 가장 깊은 활성 위임(active_chain 끝)을 replay 원문으로 — 없으면 레벨1 owner 원문(fallback)
+            _chain = _ot.get("active_chain") or []
+            _replay = ((_chain[-1].get("body") if _chain else _ot.get("last_work_body", "")) or "")
+            pending.body = resume_continue_body(pending.body, _replay)
         pendings.append((ch, pending))
     # [복구 갭 보완 — 사용자 지적] 위 스캔은 '미응답 마지막 [Request]'만 잡는다 — 프로젝트 채널 평문
     # 개입이 부분 처리(봇 응답 후 동면)되면 '완료'로 보여 누락된다. open_task가 남은 등록 프로젝트는

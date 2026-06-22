@@ -849,7 +849,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         owner_body = body
         if is_redo:
             try:
-                frame = flow.comm.redo(me_id, to, "pending")    # 베턴 점유 + Redo 카운트(한계 시 RedoLimitExceeded)
+                frame = flow.comm.redo(me_id, to, "pending", body=body)    # 베턴 점유 + Redo 카운트(한계 시 RedoLimitExceeded)
             except RedoLimitExceeded:
                 _dbg(f"{tag} ✗재위임 한도초과")
                 # [품질>토큰 — 리더 셀프 마무리 권유 제거] 종전 안내("직접 Write/Edit로 마무리")는
@@ -863,7 +863,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             owner_body = (f"[보완 요청(Redo) — 직전 산출물이 목표에 못 미쳐 되돌아왔습니다] 고칠 구체적 결함: {body}\n"
                           f"[이 Task의 Goal] {goal}\n결함만 정확히 고치고 run으로 재검증해 그 증거와 함께 보고하세요.")
         else:
-            frame = flow.comm.request(me_id, to, "pending", kind)   # 베턴 점유(alive→to)
+            frame = flow.comm.request(me_id, to, "pending", kind, body=body)   # 베턴 점유(alive→to) + 원문(정밀복구)
             if kind == Kind.WORK:
                 # 위임의 '계약'은 리더가 매번 새로 쓰는 스펙이 아니라 팀 합의로 확정된 Goal이다(스펙 리파인
                 # 루프=재요청의 뿌리를 끊는다). owner가 그 목표를 끝까지(구현+검증) 책임진다.
@@ -930,12 +930,13 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         if kind == Kind.WORK and flow.current:
             flow.current.work_delegated_to.add(to)   # 누가 위임했든(리더든 peer든) 'Work를 실제로 받은' 멤버 기록
             if to == flow.current.owner:
-                # [정밀 복구] owner에게 보낸 Work 원문을 영속용으로 보관 — 부팅 복구가 리더 재작문(드리프트)
-                # 대신 이 원본을 그대로 이어 보낸다. owner에게 가는 Work만(검증자 등 비-owner 위임은 제외).
+                # [정밀 복구] owner에게 보낸 Work 원문 보관(레벨1 fallback).
                 flow.current.last_work_body = body
-                _ckpt(flow)
             if me_id == flow.leader:
                 flow.current.work_delegated += 1   # 리더의 구현 위임 카운트 — 0이면 '자문만 받고 독식'(권한 훅이 차단)
+            # [정밀 복구 — 체인 깊이 영속] 모든 Work 위임마다 체크포인트 → 스냅샷의 active_chain이 *현재 깊이*를
+            # 반영. 끊김 시 가장 깊은 활성 워커(체인 끝)를 그 원문으로 재개(리더로 안 튐). 깊은 전문가 협업 보존.
+            _ckpt(flow)
         _dbg(f"{tag} ✓전송 req={req}{' (Redo)' if is_redo else ''}")
         if flow.log:   # 관측: 모든 요청을 '보낸 순서'대로 영속 기록(중첩 PostToolUse 타이밍에 안 묻힘)
             flow.log("req_sent", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),

@@ -1269,6 +1269,37 @@ def test_정밀복구_위임원문_영속_완료잠금_replay():
     asyncio.run(scenario())
 
 
+def test_정밀복구_깊은체인_가장깊은워커_재개():
+    """[정밀 복구 #7] 깊은 전문가 체인(리더→백엔드→AI→디자이너)이 끊기면, 복구가 레벨1 owner(백엔드)가 아니라
+    *가장 깊은 활성 워커(디자이너)*를 그 원문으로 재개 owner로 세운다 — 깊은 작업이 리더로 안 튄다. 전체 체인
+    (active_chain)을 원문과 함께 영속하고, 복원 시 그 깊이의 원문 + 체인 경로 맥락을 실어 #3이 정확히 재개."""
+    import tempfile
+    from src.communication import Kind as CK
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "PM", 12: "백엔드", 13: "AI", 14: "디자이너"},
+            session_dir=tempfile.mkdtemp(), projects_path=tempfile.mktemp())
+    f = _flow(g); f.workspace = "/ws"; f.bot_info = {11: "PM", 12: "백엔드", 13: "AI", 14: "디자이너"}
+    t = _tools(f, 11, "leader")
+    asyncio.run(t["create_task"].handler({"members": "12,13,14"}))
+    f.current.status.goal = "책 추천 웹앱"; f.current.owner = 12
+    # 깊은 베턴 체인 구성(각 단계 위임 원문 포함): 11→12→13→14
+    f.comm._stack.clear(); f.comm.done = False; f.comm.alive = 11
+    f.comm.request(11, 12, "r1", CK.WORK, body="백엔드 Express 서버 구현")
+    f.comm.request(12, 13, "r2", CK.WORK, body="TF-IDF 추천 모델 구현")
+    f.comm.request(13, 14, "r3", CK.WORK, body="Bootstrap CSS 디자인 시스템 구현")
+    snap = s._task_snapshot(f, f.current)
+    ac = snap["active_chain"]
+    assert ac[-1]["to"] == 14 and "CSS" in ac[-1]["body"]            # 가장 깊은 프레임 = 디자이너
+    assert len([c for c in ac if c["to"] in (12, 13, 14)]) == 3      # 3단 체인 전부 영속
+    # 복원 → 레벨1(백엔드 12)이 아니라 가장 깊은 워커(디자이너 14) 재개
+    f2 = _flow(g); f2.pool = [11, 12, 13, 14]; f2.bot_info = {11: "PM", 12: "백엔드", 13: "AI", 14: "디자이너"}
+    asyncio.run(s._restore_open_task(f2, {"id": "P-X", "leader": 11, "open_task": snap}))
+    assert f2.current.owner == 14                                    # ★ 가장 깊은 워커가 재개 owner
+    assert "CSS" in f2.current.last_work_body                        # 그 깊이의 원문 replay
+    assert "→" in f2.current.last_work_body                          # 체인 경로 맥락 동봉(리더 통합용)
+    assert f2.current.owner_incomplete is True                       # 완료잠금(조기완료 차단)
+
+
 def test_프로젝트_리더_봇부재시_자동재배정_프로젝트유지(tmp_path):
     """[프로젝트↔봇 결합 해제 2026-06-15] 프로젝트 리더 봇이 로스터에서 빠지면(해고·예비환원·미연결)
     _valid_leader가 가용 봇으로 자동 재배정 → 봇을 자유롭게 빼도 기존 프로젝트가 안 깨진다. 유효한

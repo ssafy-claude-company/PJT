@@ -390,6 +390,14 @@ class Sys:
             # 협의는 '사실'이라 영속이 옳다(검증 누계와 다름 — 그건 의도적으로 0에서 재시작).
             "participated": sorted(int(x) for x in getattr(ref, "participated", []) or []),
             "last_work_body": getattr(ref, "last_work_body", ""),  # [정밀 복구] owner 위임 원문 — 복구가 재작문 대신 replay
+            # [정밀 복구 — 전체 체인] 열린 베턴 프레임 전부(원문 포함)를 영속한다. 끊김 시 owner(레벨1)만이 아니라
+            # *가장 깊은 활성 워커*(체인 끝)를 그 원문으로 재개하기 위함 — 깊은 전문가 협업이 리더로 튀지 않게.
+            "active_chain": [
+                {"from": int(f.from_id), "to": int(f.to_id), "kind": str(getattr(f, "kind", "work")),
+                 "body": (getattr(f, "body", "") or "")[:1500]}
+                for f in flow.comm.open_requests
+                if int(f.to_id) != int(flow.comm.origin)
+            ],
         }
 
     def _status_text(self, flow, t0, final=None) -> str:
@@ -510,6 +518,28 @@ class Sys:
         # (2) SYS 자동 이어가기(_auto_continue_owner)가 last_work_body 원문으로 owner를 직접 재개(리더 재작문·드리프트 차단).
         if int(snap.get("owner") or 0):
             ref.owner_incomplete = True
+        # [정밀 복구 — 가장 깊은 워커 재개(#7)] 전체 체인(active_chain)이 있으면, 재개 owner를 *가장 깊은 활성
+        # 워커*로 덮어쓴다 — 레벨1 owner가 아니라 끊긴 그 깊이(예: 8단 체인 끝의 디자이너)에서 재개해 깊은
+        # 전문가 작업이 리더로 튀지 않게. last_work_body에 그 깊이 원문 + 체인 경로를 실어, #3의 _auto_continue_
+        # owner가 그 워커를 정확히 재개하게 한다(상류 이미 끝난 부분은 작업공간 보존 → 리더가 통합).
+        chain = snap.get("active_chain") or []
+        if chain:
+            deepest = chain[-1]
+            wk = int(deepest.get("to") or 0)
+            # 가장 깊은 프레임이 *진짜 더 깊은 워커*일 때만 덮어쓴다 — 리더/origin 프레임이거나 원문이 비면
+            # (동기 완주로 깊은 위임이 이미 닫힘) 레벨1 owner 로직(#3)을 그대로 둔다(오발동 방지).
+            if (wk and wk in flow.pool and wk != flow.leader and (deepest.get("body") or "").strip()):
+                ref.owner = wk
+                ref.status.owner = flow._info(wk) or f"<@{wk}>"
+                path = " → ".join(f"{flow._info(c.get('from'))}→{flow._info(c.get('to'))}" for c in chain)
+                ref.last_work_body = (
+                    f"[끊긴 깊은 전문가 체인: {path}]\n[가장 깊은 이 작업을 당신({flow._info(wk)})이 받아 진행 중 "
+                    f"끊겼습니다 — 작업공간에 이미 된 부분은 보존됨. 처음부터 다시 하지 말고 이어서 완성하세요]\n"
+                    f"{(deepest.get('body') or '')[:1200]}")
+                ref.owner_incomplete = True
+                if wk not in ref.team:
+                    ref.team.append(wk)
+                self._log("deep_chain_restored", depth=len(chain), deepest=wk, task=ref.task_id)
         flow.tasks.append(ref)
         flow.current = ref
         # 되살린 Task 멤버를 프로젝트 팀에 **합친다(union)** — 덮어쓰면 그 Task에 낀 일부 멤버로

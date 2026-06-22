@@ -91,6 +91,7 @@ class Frame:
     to_id: int
     request_id: str
     kind: str
+    body: str = ""        # [정밀 복구] 이 위임의 원문 — 전체 체인 영속·끊김 시 가장 깊은 워커를 원문으로 재개
 
 
 class CommunicationManager:
@@ -182,9 +183,9 @@ class CommunicationManager:
         if self._is_work(kind) and to_id in self._participants():
             raise CommError(f"{to_id} 는 미완 Work 보유/흐름 참여 중 → Work Request 거부(겹침·순환 방지).")
 
-    def request(self, from_id: int, to_id: int, request_id, kind: str = "work") -> Frame:
+    def request(self, from_id: int, to_id: int, request_id, kind: str = "work", body: str = "") -> Frame:
         self.check_request(from_id, to_id, kind)
-        frame = Frame(from_id, to_id, str(request_id), kind)
+        frame = Frame(from_id, to_id, str(request_id), kind, body=body)
         self._stack.append(frame)
         self._engage_frame(frame)        # 전역 점유 등록(요청자·수신자 — 베턴 점유와 같은 지점)
         self.alive = to_id  # receiver wake, sender sleep
@@ -252,7 +253,7 @@ class CommunicationManager:
             return kind == Kind.WORK
         return str(kind).strip().lower() == "work"
 
-    def redo(self, from_id: int, to_id: int, request_id) -> Frame:
+    def redo(self, from_id: int, to_id: int, request_id, body: str = "") -> Frame:
         """직전 응답이 불만족 → 같은 대상에 재요청(Redo). 한계 초과 시 RedoLimitExceeded."""
         if from_id != self.alive:
             raise CommError(f"활성 Organt만 redo할 수 있습니다(현재 활성={self.alive}).")
@@ -262,7 +263,7 @@ class CommunicationManager:
             raise RedoLimitExceeded(f"redo 한계({self.redo_limit}) 초과 → 상신 필요.")
         self._redo_counts[key] = count
         self.history.append(("redo", from_id, to_id, str(request_id), count))
-        return self.request(from_id, to_id, request_id, kind="work")
+        return self.request(from_id, to_id, request_id, kind="work", body=body)
 
     def escalate(self, reason: str = "") -> Frame:
         """top 요청을 강제 close하고 상신(위로). 타임아웃/죽은 Organt로 인한 교착 방지."""
