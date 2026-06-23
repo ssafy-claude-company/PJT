@@ -1594,9 +1594,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
         @tool("create_task",
               "Task '빈 껍데기'를 연다 — **Purpose도 비운 채 멤버만 배정**한다(리더가 할 일을 미리 못 박음 = 중앙집권 "
               "방지). 이후 **배정된 팀이 모여(request Info) Purpose(풀 문제)·Goal(성공기준)을 함께 정해 set_goal로 "
-              "확정**한다. Owner는 그 일을 Work로 받은 동료가 된다(선배정 금지). **members=이 일에 필요한 직군 동료를 "
-              "당신이 직접 고른다**(자동 전원 소집 아님 — 직군 고정 방지). 비우면 프로젝트팀(예비 제외) 기본, 모자란 "
-              "직군은 recruit(role=)로 채운다.",
+              "확정**한다 — 이때 **각 직군 전문가가 *자기 도메인*의 Task·소유를 직접 제안**하게 하라(리더가 남의 "
+              "도메인을 정하지 말 것 — 전문가가 자기 분야를 정의). Owner는 그 일을 Work로 받은 동료가 된다(선배정 "
+              "금지). **members=이 일에 필요한 직군 동료를 당신이 직접 고른다**(자동 전원 소집 아님 — 직군 고정 방지) — "
+              "고를 때 **각 동료의 누적 경험·강점(직무 기준)을 살려** 적임자에게 맡겨라. 비우면 프로젝트팀(예비 제외) "
+              "기본, 모자란 직군은 recruit(role=)로 채운다.",
               {"members": str})
         async def create_task(args):
             if flow.current is not None and flow.current.status.status != "완료":
