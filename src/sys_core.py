@@ -1504,6 +1504,19 @@ class Sys:
         rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")
         from .guide_tools import deploy_service_name
         name = deploy_service_name(flow)   # [멀티 프로젝트] 프로젝트별 결정적 서비스명(env 고정 제거)
+        # [cap 우회 차단(2026-06-23 전수감사)] 배포 런어웨이 cap(5회)이 걸리면 deploy_capped가 서고, 여기서
+        # SYS 강제배포를 *건너뛴다* — 종전엔 cap이 flow.deployed를 안 세팅해 여기가 6번째 배포를 강제하던 결함.
+        # 대신 사용자에게 직접 에스컬레이트(봇 자발 보고에 의존하지 않음).
+        if getattr(flow, "deploy_capped", False):
+            self._log("ensure_deploy_skipped_capped", count=getattr(flow, "_deploy_count", 0))
+            try:
+                await self.guide.post(
+                    flow.user_channel, 0,
+                    "[배포 중단 — 런어웨이 차단] 프로젝트 배포를 5회 초과 시도했습니다(코드 수정으론 안 고쳐지는 "
+                    "*배포 구조/타겟 문제* 가능성). 자동 재배포를 멈췄습니다 — 확인이 필요합니다.")
+            except Exception:
+                pass
+            return result
         if flow.deployed or not (deployable and name and gh and ghu and rk and owner):
             return result
         try:

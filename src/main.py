@@ -13,6 +13,7 @@ Organt 로스터는 ORGANT_ROSTER 환경변수로 구성한다(없으면 TEST_BO
 import asyncio
 import logging
 import os
+import signal
 import time
 import traceback
 from typing import Dict, List, Optional, Tuple
@@ -369,6 +370,36 @@ async def run() -> None:
     if sysm.role_profiles:   # 직무 기준은 디스크(role_profiles.json)에서 Sys가 로드(리클레임 시 자가 재생)
         log.info("직무 기준 로드: %d개 직군", len(sysm.role_profiles))
 
+    # [SIGTERM 우아한 종료 — 컨테이너 회수(~40분) 전 상태 flush(2026-06-23 전수감사)] 종전엔 SIGTERM 핸들러가
+    # *전혀 없어* 컨테이너 킬(exit 143)이 라이브 flow의 미체크포인트 상태(act_by·진행)를 통째로 잃었고, 복구가
+    # 그걸 0에서 재구성하던 churn(~30회/프로젝트)의 근원이었다. 죽기 직전 모든 라이브 flow를 즉시 checkpoint하면
+    # 복구가 *최신* 상태에서 이어가 staleness·재작업이 사라진다. flush는 동기·빠름(projects.json 1회 쓰기)이라
+    # 컨테이너 grace 안에 끝난다. 핵심 상태가 이미 영속됐으니 즉시 종료(run_listener/supervisor가 respawn).
+    _shutting_down = {"on": False}
+
+    def _graceful_shutdown(signame: str):
+        if _shutting_down["on"]:
+            return
+        _shutting_down["on"] = True
+        log.warning("%s 수신 — 라이브 flow %d개 상태 flush 후 종료", signame, len(sysm.active_flows))
+        try:
+            for scope, f in list(sysm.active_flows.items()):
+                try:
+                    sysm._checkpoint_open_task(f)
+                except Exception:
+                    log.error("종료 flush 실패(%s):\n%s", scope, traceback.format_exc())
+            sysm._save_projects()
+        except Exception:
+            log.error("종료 flush 오류:\n%s", traceback.format_exc())
+        os._exit(0)
+
+    try:
+        _sig_loop = asyncio.get_running_loop()
+        for _sig in (signal.SIGTERM, signal.SIGINT):
+            _sig_loop.add_signal_handler(_sig, lambda s=_sig: _graceful_shutdown(s.name))
+    except (NotImplementedError, RuntimeError):
+        log.warning("시그널 핸들러 설치 실패(플랫폼 미지원) — SIGTERM flush 불가")
+
     print(f"SYS 가동 — 리더={bot_info[leader_id]}({leader_id}), 팀={list(bot_info.values())}")
     print(f"#{channel.name} 에서 User 입력 대기 중 — 메인 채널은 '[Request] To: @봇' 형식, "
           f"등록 프로젝트 채널은 평문도 개입으로 받습니다(Ctrl+C 종료)")
@@ -678,7 +709,14 @@ async def run() -> None:
     tasks.append(asyncio.create_task(_sleep_cycle()))
     tasks.append(asyncio.create_task(_gateway_canary()))
     tasks.append(asyncio.create_task(_watch_new_tokens()))
-    await asyncio.gather(*tasks)
+    # [cascade 사망 차단(2026-06-23 전수감사)] 종전 bare gather는 *한* 백그라운드 루프/봇 태스크가 던지면
+    # 즉시 전파돼 run()이 끝나고 리스너 전체가 죽었다(supervisor와 동반사망의 한 경로). return_exceptions로
+    # 한 태스크 실패가 나머지를 안 죽이게 하고, 무엇이 죽었는지 로깅한다.
+    _results = await asyncio.gather(*tasks, return_exceptions=True)
+    for _r in _results:
+        if isinstance(_r, BaseException) and not isinstance(_r, asyncio.CancelledError):
+            log.error("백그라운드 태스크 종료(예외):\n%s",
+                      "".join(traceback.format_exception(type(_r), _r, _r.__traceback__)))
 
 
 def main() -> None:

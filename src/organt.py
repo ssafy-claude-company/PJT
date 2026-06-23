@@ -78,11 +78,14 @@ def _is_transient_api_error(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t.startswith("api error"):
         return False
+    # [과민 재시도 교정(2026-06-23 전수감사)] bare 토큰 'cancel/abort/disconnect/stream/closed'는 watchdog의
+    # *의도적* 취소나 무관한 "...closed" 텍스트까지 transient로 오인해 죽은 서브프로세스에 3회 재시도 churn을
+    # 냈다. 특정 구문('stream closed' 등)·서브프로세스 사망 신호(sigterm/143/process exited=resume 의도)는
+    # 유지하되 bare 토큰은 제거한다.
     return any(s in t for s in ("429", "500", "502", "503", "529", "overload", "rate", "timeout",
                                 "command failed", "exit code", "sigterm", "143", "137",
                                 "broken pipe", "message reader", "connection",
-                                "stream closed", "stream is closed", "stream", "closed",
-                                "process exited", "cancel", "abort", "disconnect"))
+                                "stream closed", "stream is closed", "process exited"))
 
 
 def _strip_decoration(text: str) -> str:

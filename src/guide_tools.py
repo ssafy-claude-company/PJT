@@ -2716,6 +2716,11 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             if getattr(flow, "_deploy_count", 0) >= 5:
                 if flow.log:
                     flow.log("deploy_cap", count=flow._deploy_count)
+                # [cap 우회 차단(2026-06-23 전수감사)] 종전엔 cap 시 flow.deployed를 안 세팅해, 흐름 끝의
+                # _ensure_deploy(sys_core)가 '아직 배포 안 됨'으로 보고 6번째 배포를 *강제* → cap이 무력화됐다.
+                # deploy_capped 플래그로 SYS 강제배포를 막고, SYS가 사용자에게 직접 에스컬레이트한다.
+                flow.deploy_capped = True
+                _ckpt(flow)
                 return _ok(
                     "[배포 중단 — 5회 초과(런어웨이 차단)] 이 작업에서 배포를 이미 5번 시도했습니다. 라이브가 아직 "
                     "정상이 아니라면 이건 *앱 코드*가 아니라 **배포 구조/타겟 문제**일 가능성이 큽니다(예: Node 서버가 "
@@ -2780,6 +2785,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 flow.deployed = r                  # 배포 호출됨 기록(SYS의 배포 강제가 중복 안 하게)
                 flow._deployed_once = True
                 flow._deploy_count = getattr(flow, "_deploy_count", 0) + 1   # 런어웨이 상한 카운트(실배포만 +1)
+                _ckpt(flow)   # [즉시 영속(2026-06-23 전수감사)] deploy_count는 Task 전이 사이에 증가하므로
+                              # 전이 때만 찍던 스냅샷은 stale → 죽으면 cap이 0으로 리셋돼 무한 재배포. 배포 즉시 영속.
                 if _dep["on"]:
                     flow.detached_results.append(f"배포 결과 → {_speech_clip(r, 4000)}")
                 return _ok(r)
