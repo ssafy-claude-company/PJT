@@ -1333,6 +1333,37 @@ def test_정밀복구_정밀재개_각자깊이한번씩_unwind():
     assert "13 완료" in out and "12 완료" in out
 
 
+def test_리더조율강제_SYS가_큐를_직접위임_소비():
+    """[리더 조율 강제 — 구조(2026-06-23, 사용자)] 게이트가 막아 pending_coordination에 쌓인 교차도메인
+    일을, 리더(LLM)가 무시할 때 SYS가 리더 명의로 *직접* 그 도메인 전문가에게 위임한다(프롬프트 의존 제거).
+    ① 빈 큐·비활성이면 no-op ② 큐 있으면 그 전문가(to)를 깨우고 큐를 소비. 라이브 P-030/P-031 정지 교정."""
+    import tempfile
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "PM", 12: "백엔드", 15: "프론트엔드"},
+            session_dir=tempfile.mkdtemp(), projects_path=tempfile.mktemp())
+    f = _flow(g, leader=11); f.bot_info = {11: "PM", 12: "백엔드", 15: "프론트엔드"}
+    f.pool = [11, 12, 15]; f.project_team = [11, 12, 15]
+    tL = _tools(f, 11, "leader")
+    asyncio.run(tL["create_task"].handler({"members": "12,15"}))
+    f.current.participated.update({12, 15})
+    f.current.status.goal = "g"                        # Goal 직접 확정(set_goal 합의 게이트 우회 — 전용 테스트)
+    woken = []
+
+    async def wake(to, body, kind):
+        woken.append(int(to)); return f"{to} 완료"
+    f.wake = wake
+    f.comm.alive = 11                                  # 베턴이 리더(continue 루프 상태 모사)
+    # ① 빈 큐 → no-op
+    assert asyncio.run(s._auto_coordinate(f, 11)) == ""
+    # ② 큐 적재(백엔드 12가 프론트 15에 막힘) → SYS가 15에 직접 위임, 큐 소비
+    f.pending_coordination = [{"requester": 12, "req_role": "백엔드", "to": 15,
+                               "to_role": "프론트엔드", "body": "로그인 화면 구현"}]
+    out = asyncio.run(s._auto_coordinate(f, 11))
+    assert 15 in woken                                 # ★ SYS가 프론트(15)에 직접 위임(리더가 무시하던 needs)
+    assert f.pending_coordination == []                # 큐 소비
+    assert "조율" in out
+
+
 def test_프로젝트_리더_봇부재시_자동재배정_프로젝트유지(tmp_path):
     """[프로젝트↔봇 결합 해제 2026-06-15] 프로젝트 리더 봇이 로스터에서 빠지면(해고·예비환원·미연결)
     _valid_leader가 가용 봇으로 자동 재배정 → 봇을 자유롭게 빼도 기존 프로젝트가 안 깨진다. 유효한

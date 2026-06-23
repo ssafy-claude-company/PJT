@@ -1232,6 +1232,47 @@ class Sys:
         from .guide_tools import _speech_clip as _sc
         return "\n\n[SYS 자동 위임 — 리더 헛돎 차단, 담당자에게 직접 발사한 결과]\n" + _sc(txt, 4000)
 
+    async def _auto_coordinate(self, flow, lead) -> str:
+        """[리더 조율 강제 — 구조(2026-06-23, 사용자)] 게이트가 막아 pending_coordination에 쌓인 교차도메인
+        일을, 리더(LLM)가 프롬프트(coord_note)를 무시하고 안 집을 때 — SYS가 리더 명의로 *직접* 그 도메인
+        전문가에게 위임한다. 워커가 보고로 올린 cross-domain needs를 리더가 안 비우면 영영 미배정(라이브
+        P-030/P-031 정지의 직접 원인: 리더가 owner에만 재위임하고 프론트·데이터·AI needs 방치 → 그 일이 아무
+        에게도 안 감). 리더는 게이트 면제라 그 전문가에게 통과한다. _auto_delegate_owner와 같은 동기 회수 —
+        결과를 리더가 판정만. 프롬프트 의존(무시되던) 제거하고 구조로 큐를 비운다. 같은 도메인은 1회만."""
+        coord = list(getattr(flow, "pending_coordination", None) or [])
+        if not coord or flow.comm.alive != lead or flow.comm.done:
+            return ""
+        flow.pending_coordination = []          # SYS가 처리하므로 소비
+        from .guide_tools import _speech_clip as _sc
+        tools = {t.name: t for t in make_guide_tools(flow, lead, "leader")}
+        out, seen = [], set()
+        for c in coord:
+            try:
+                to = int(c.get("to") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not to or to in seen:            # 같은 도메인 중복 위임 방지
+                continue
+            seen.add(to)
+            body = (f"[SYS 조율 — {c.get('req_role')}이(가) 막혀 리더가 당신({c.get('to_role')}) 도메인에 배정] "
+                    f"{(c.get('body') or '')}\n작업공간에 이미 된 부분은 두고 당신 도메인 부분을 직접 구현·검증해 보고하세요.")
+            self._log("auto_coordinate", to=to, frm=c.get("requester"))
+            try:
+                res = await tools["request"].handler({"to_id": str(to), "kind": "Work", "body": body})
+                txt = (res.get("content") or [{}])[0].get("text", "")
+                if "[위임됨" in (txt or ""):
+                    _d = await self._drain_inflight(flow)
+                    if _d:
+                        txt = _d
+                out.append(_sc(txt or "", 3000))
+            except Exception as e:
+                out.append(f"(조율 위임 오류 {to}: {e})")
+            if flow.comm.alive != lead or flow.comm.done:
+                break
+        if out:
+            return "\n\n[SYS 조율 — 막혔던 교차도메인 일을 해당 도메인 전문가에게 직접 배정한 결과]\n" + "\n".join(out)
+        return ""
+
     async def _run_until_silent(self, coro_factory, flow) -> str:
         """coro를 실행하되, '도구 활동(flow.last_activity)이 turn_timeout 동안 한 번도 갱신되지 않은'
         경우(=진짜 행)에만 취소하고 TimeoutError를 낸다. 도구가 하나라도 돌면 시계가 갱신되어 무한정
@@ -1749,6 +1790,10 @@ class Sys:
                 # [헛돎 발생 차단] 리더가 designated owner에게 위임 0건이고 솔로 독식에만 막혀 헛돌면,
                 # SYS가 직접 owner에게 첫 위임을 발사한다(위 _auto_continue_owner의 '위임 0건' 빈틈 메움).
                 drained += await self._auto_delegate_owner(flow, lead)
+                # [리더 조율 강제 — 구조(2026-06-23, 사용자)] 워커가 막혀 큐에 쌓인 교차도메인 일을 리더가
+                # 무시하던 것(라이브 P-030/P-031: owner에만 재위임, 프론트·데이터·AI needs 방치 → 정지)을 SYS가
+                # 직접 그 전문가에게 위임해 메운다(프롬프트 의존 제거). 결과는 drained로 리더에 전달(판정만).
+                drained += await self._auto_coordinate(flow, lead)
                 # [활동 기반 예산 — "작업 중이면 얼마가 걸리든 안 끊는다"(확립 원칙)의 세그먼트 적용]
                 # 직전 세그먼트에 실작업(act_count 증가)이나 위임 완주 도착(drained)이 있었으면 예산을
                 # 소모하지 않는다 — 예산의 목적은 '무진행 루프 차단'이지 '대형 작업 총량 제한'이 아니다.
@@ -1784,23 +1829,10 @@ class Sys:
                 # 'SYS가 확인한 사실'로 주입한다 — 워커가 막혔다고 보고한 걸 리더가 '핑계'로 묵살하고 같은
                 # 워커에게 일만 재발사하던 루프(라이브 P-030 backend2↔PM 핑퐁)를 끊는다. 리더가 *직접* 해당
                 # 도메인 전문가에게 위임하게 한다(이게 리더의 조율 책임 — '단순 분배'가 아니라).
-                coord_note = ""
-                coord = getattr(flow, "pending_coordination", None) or []
-                if coord:
-                    try:
-                        lines = "\n".join(
-                            f"  · {c.get('req_role')}(이/가) **{c.get('to_role')}** 도메인 작업이 필요해 막혔습니다 "
-                            f"→ 당신이 그 도메인 팀원에게 request(Work)로 **직접 위임**하세요: {(c.get('body') or '')[:140]}"
-                            for c in coord)
-                        coord_note = (
-                            "[조율 필요 — SYS가 확인한 사실(워커 핑계 아님)] 아래 교차도메인 작업이 게이트에 막혀 "
-                            "**당신에게 이관**됐습니다. 워커에게 '그냥 하라'고 되돌리지 말고, **당신이 직접 해당 "
-                            "도메인 전문가에게 request(Work)로 위임**해 조율하세요(이게 리더의 일입니다 — 단순 분배가 "
-                            "아니라 누가 무엇을 해야 하는지 판단·배정):\n" + lines + "\n\n")
-                    except Exception:
-                        coord_note = ""
-                    flow.pending_coordination = []   # 주입했으니 소비(다음 턴에 중복 주입 방지)
-                result = await self.run_turn(flow, lead, _CONTINUE_BODY + coord_note + team_note + drained,
+                # (조율 큐는 위 _auto_coordinate가 SYS 명의로 *직접 위임*해 처리·소비함 — 그 결과가 drained에
+                #  담겨 리더에게 전달되니, 여기선 프롬프트 주입[리더가 무시하던 coord_note]을 제거한다. 리더는
+                #  SYS가 배정한 그 교차도메인 결과를 통합·판정만 한다. 프롬프트→구조 전환의 핵심 지점.)
+                result = await self.run_turn(flow, lead, _CONTINUE_BODY + team_note + drained,
                                              Kind.WORK, "leader")
             # 이어가기 한도 소진/마감 후에도 완주 중인 위임이 있으면 그 결과까지 받아 보고에 붙인다
             # (작업 유실 방지 — 마지막 위임이 마감 직전에 끝나는 경우).
