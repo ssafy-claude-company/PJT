@@ -34,6 +34,13 @@ export ORGANT_MAX_CONTINUE="${ORGANT_MAX_CONTINUE:-12}"
 # node_modules 누적 507MB)에서 떠 CLI 시동 시 그 트리를 스캔→RSS 11GB로 부풀어 머신 전역 OOM(리스너
 # 동반사망)을 매 10분 반복했다(라이브 야간). 근본 교정(증류에 빈 cwd 부여)이 들어가면 600으로 복원할 것.
 export ORGANT_SLEEP_PERIOD="${ORGANT_SLEEP_PERIOD:-0}"
+# [작업공간 베이스 = 깨끗한 새 디렉터리(2026-06-23) — 루트 스캔 OOM 방지] 기존 organt_workspace는 32개
+# 프로젝트·node_modules 2만 파일이 누적돼, *미스코프 워커*(create_project 전의 새 프로젝트 첫 리더 워커,
+# Flow 기본 workspace=루트)가 CLI 시동 때 그 트리를 스캔→RSS 11GB로 부풀어 머신 전역 OOM을 일으킨다.
+# 베이스를 빈 디렉터리로 바꾸면 새 프로젝트의 첫 워커가 빈 cwd에서 떠 폭탄을 구조적으로 차단한다(스캔 대상
+# 0). 기존 프로젝트는 projects.json의 *절대경로*로 재개되므로 영향 없음(복구·배포 무관). 한 방 e2e엔 오히려
+# 깨끗한 작업공간이 이상적. (되돌리려면 이 줄 제거 — 기본은 organt_workspace.)
+export ORGANT_WORKSPACE="${ORGANT_WORKSPACE:-/home/user/organt_workspace_v2}"
 export CHANNEL_ID="${CHANNEL_ID:-1510828120490643517}"
 # DEPLOY_NAME 주입은 제거됨(2026-06-12) — 배포 슬롯은 프로젝트 신원(P-번호)으로만 정해지며,
 # 미등록 흐름은 슬롯이 없다(공유 슬롯 폴백이 P-002 라이브를 덮어쓸 수 있던 위험 종결).
