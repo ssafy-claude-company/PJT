@@ -84,7 +84,7 @@ def _is_transient_api_error(text: str) -> bool:
     # 유지하되 bare 토큰은 제거한다.
     return any(s in t for s in ("429", "500", "502", "503", "529", "overload", "rate", "timeout",
                                 "command failed", "exit code", "sigterm", "143", "137",
-                                "broken pipe", "message reader", "connection",
+                                "broken pipe", "message reader", "connection", "disconnected",
                                 "stream closed", "stream is closed", "process exited"))
 
 

@@ -4957,3 +4957,46 @@ def test_수렴사실_포괄영속_act_by_contrib_deploy_복구왕복():
     assert frozenset({12, 13}) in f2.current.peer_info_pairs   # iface 합의 사실 복원(재협의 루프 차단)
     # verified는 복구 후 False(백스톱) — 재개 직후 새 run 증거를 강제해 허위완료를 막는다
     assert f2.current.verified is False
+
+
+def test_배치A_재위임차단_검증종료_큐_복구왕복(tmp_path):
+    """[배치A 마감 신뢰성(2026-06-23 전수감사)] 재위임 차단(_delivered/_redo_counts)·검증 종료상태
+    (last_verify_writes)·배포 thrash 상태(writes_by_role·_deployed_once)·큐가 복구 너머 영속해야
+    churn(재위임 런어웨이·재검증 루프·대기요청 유실)이 되살아나지 않는다."""
+    g = FakeGuide()
+    pf = str(tmp_path / "projects.json")
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드", 13: "프론트엔드"},
+            projects_path=pf)
+    f = _flow(g, leader=11)
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
+    f.current.team = [12, 13]
+    # 배치A 사실들
+    f.current.last_verify_writes = 7        # 검증 종료상태(이 시점 저작수) — 이후 변경 0이면 재검증 차단
+    f.writes_by_role = {"백엔드": 7}         # 배포 thrash 가드 입력
+    f.consec_fail = 2
+    f._deployed_once = True
+    f._deploy_writes = 5
+    f.comm._delivered = {(11, 12)}          # 리더→백엔드 완료 쌍(재위임=Redo 판별의 근거)
+    f.comm._redo_counts = {(11, 12): 2}
+    snap = s._task_snapshot(f, f.current)
+    assert snap["last_verify_writes"] == 7
+    assert snap["writes_by_role"] == {"백엔드": 7} and snap["consec_fail"] == 2
+    assert snap["deployed_once"] is True and snap["deploy_writes"] == 5
+    assert snap["delivered_pairs"] == [[11, 12]] and snap["redo_counts"] == {"11,12": 2}
+    # 복원
+    f2 = _flow(g, leader=11)
+    f2.pool = [11, 12, 13]
+    asyncio.run(s._restore_open_task(f2, {"id": "P-1", "open_task": snap}))
+    assert f2.current.last_verify_writes == 7
+    assert f2.writes_by_role.get("백엔드") == 7 and f2.consec_fail == 2
+    assert f2._deployed_once is True and f2._deploy_writes == 5
+    # 재위임 차단: 완료 쌍 복원 → delivered_work=True(재위임을 Redo로 인식해 한도 작동)
+    assert f2.comm.delivered_work(11, 12) is True
+    assert f2.comm._redo_counts.get((11, 12)) == 2
+    # 큐 영속: _save_projects → 새 Sys가 _load_projects로 복원(죽어도 대기요청 안 사라짐)
+    s.queue = [(100, 11, "대기요청", 200)]
+    s._save_projects()
+    s2 = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"}, projects_path=pf)
+    assert s2.queue == [(100, 11, "대기요청", 200)]
