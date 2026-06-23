@@ -190,6 +190,17 @@ class Organt:
             if line and len(err_tail) < 20:
                 err_tail.append(str(line).strip())
 
+        # [작업공간 앵커 — cwd 오진 차단(2026-06-23, 사용자)] 봇은 자기 작업공간 절대경로를 구조적으로
+        # 못 받아 모델 내장 프라이어('/workspace')로 흘러, 빈 /workspace를 보고 '이전 파일 모두 유실'로
+        # 오판해 중복 리빌드를 지시하던 라이브 결함(P-031 5925). 경로가 닿는 통로가 '위임자가 본문에 직접
+        # 타이핑'뿐이라 봇마다 들쭉날쭉했다. system_prompt는 resume 세션에 재적용이 불확실하므로, *매 턴
+        # 메시지 본문*에 cwd 절대경로를 못 박아 모든 봇·모든 턴에 구조적으로 보장한다(단일 chokepoint).
+        _cwd = getattr(self.options, "cwd", None)
+        if _cwd:
+            prompt = (f"[작업공간 — 절대경로] 당신의 모든 파일은 정확히 여기 있습니다: {_cwd}\n"
+                      f"이 경로가 당신의 cwd입니다 — `/workspace`가 아닙니다. 파일·디렉터리는 항상 이 절대경로로 "
+                      f"확인하고, 무언가 안 보여도 '유실'로 단정하지 말고 먼저 이 경로를 Read/ls 하세요.\n\n") + prompt
+
         opts = dataclasses.replace(self._options_for_call(), stderr=_collect_stderr)
         try:
             async with ClaudeSDKClient(options=opts) as client:

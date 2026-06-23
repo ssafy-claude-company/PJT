@@ -282,7 +282,16 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                 return {" ".join(j.split()).casefold()
                         for j in str((flow._info(m) or "")).split("·") if j.strip()}
             _mine = _jobset(actor)
-            if _mine and not any(x.startswith("예비") for x in _mine):   # 내 직군이 분명할 때만(예비/미상은 판단 불가)
+            # [테스트 파일 면제 — 테스트는 흡수 아님(2026-06-23, 사용자)] *테스트/검증 파일*을 쓰는 건 그 도메인을
+            # **검증**하는 것이지 **구현**(흡수)이 아니다. 테스트는 자기가 검증하는 도메인을 자연히 *언급*하므로
+            # (라이브 규명: QA의 qa_test.js 주석 '비로그인'이 _CAPS의 DB 능력으로 오판돼 차단됨) 키워드 분류가
+            # 거짓양성을 낸다. 파일명이 테스트 관례면 게이트를 건너뛴다 — *구현* 파일(server.js 등)엔 그대로 적용해
+            # 'QA가 구현 흡수'는 여전히 막는다(검증자 전면 면제 아님 — 그건 QA 오버리치를 되살림).
+            _fp = str(tool_input.get("file_path") or tool_input.get("path") or "").lower()
+            _fname = _fp.rsplit("/", 1)[-1]
+            _is_testfile = (any(s in _fname for s in ("test_", "_test", ".test", "test.", "qa_", ".spec", "spec."))
+                            or "/tests/" in _fp or "/test/" in _fp or "/__tests__/" in _fp)
+            if _mine and not any(x.startswith("예비") for x in _mine) and not _is_testfile:
                 eng2 = getattr(getattr(flow, "comm", None), "engagement", None)
                 scope2 = getattr(getattr(flow, "comm", None), "scope", None)
                 abby2 = getattr(flow, "act_by", None) or {}

@@ -375,6 +375,25 @@ def test_흡수차단_자기도메인_Write는_idle전문가있어도_통과_그
     assert out["hookSpecificOutput"]["permissionDecisionReason"].startswith("흡수 차단")
 
 
+def test_흡수차단_테스트파일_면제_그러나_구현파일은_여전히_차단():
+    """[게이트 #9 테스트파일 면제(2026-06-23, 사용자)] 테스트 파일을 쓰는 건 그 도메인을 *검증*하는 것이지
+    *구현*(흡수)이 아니다. QA의 qa_test.js는 인증을 테스트하느라 '로그인'을 언급해 _CAPS의 DB 능력으로
+    오판돼 막히던 라이브 거짓양성 — 테스트 관례 파일명은 면제한다. 단 *구현* 파일(server.js)에 같은
+    로그인 로직을 쓰면 여전히 흡수 차단(검증자 전면 면제가 아니라 '테스트≠구현'만 면제)."""
+    task = _FakeTask(owner=12, goal="g"); task.team = [11, 12, 13, 14]; task.work_delegated_to = set()
+    flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK), (11, 12, Kind.WORK)), current=task, leader=11)
+    flow._info = lambda i: {11: "게임 기획자", 12: "QA", 13: "백엔드", 14: "AI 엔지니어"}.get(i, "")
+    flow.act_by = {12: 1, 13: 0, 14: 0}              # 백엔드·AI idle
+    hook = make_pre_tool_use_hook(FakeAudit(), ALLOWED, actor=12, flow=flow)
+    # (a) 테스트 파일 — '로그인' 키워드 있어도 면제(종전엔 DB 오판으로 차단됐던 라이브 지점)
+    assert _run(hook, "Write", {"file_path": "qa_test.js",
+                                "content": "// 6. 비로그인 POST /api/posts → 401\nrequire('http')"}) == {}
+    # (b) 같은 QA가 *구현* 파일(server.js)에 로그인 로직 — 테스트 아님 → 여전히 흡수 차단
+    out = _run(hook, "Write", {"file_path": "server.js", "content": "app.post('/login') // 로그인 구현"})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert out["hookSpecificOutput"]["permissionDecisionReason"].startswith("흡수 차단")
+
+
 def test_막힘흡수차단_막힌동료_일_대신못함_재요청유도():
     """[게이트 #10] 하위 담당이 막혀 베턴이 위임자에게 돌아온 순간(flow._stall_victim 기록), 위임자가 막힌
     사람과 도메인이 다른 일을 '내가 하지'로 대신 Write하면 차단 — request로 '같은 사람 재요청' 유도(재채용 X).

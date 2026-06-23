@@ -1422,7 +1422,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
     tools.append(recruit)
 
     @tool("run",
-          "작업공간에서 명령을 실행해 산출물을 직접 검증(빌드/구동/테스트). cwd=작업공간, 60s 제한, "
+          f"작업공간에서 명령을 실행해 산출물을 직접 검증(빌드/구동/테스트). cwd={flow.workspace or '작업공간 루트'} "
+          f"(이 절대경로가 작업공간 — `/workspace` 아님). 60s 제한, "
           "웹 작품은 **실제 브라우저 검증 가능**: playwright+chromium 설치됨 — 예: PJT venv의 python -c로 "
           "sync_playwright 페이지 로드→로드시간·콘솔에러·스크린샷 확인('실행됨'과 '사용할 만함'은 다르다). "
           "출력 반환. 서버 구동은 'node server.js & sleep 1; curl -s localhost:3000/'처럼 백그라운드+점검으로 "
