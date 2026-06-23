@@ -380,9 +380,14 @@ class Sys:
             self._log("inbound_stage_error", err=str(e)[:100])
 
     def _task_snapshot(self, flow, ref) -> dict:
-        """미완 Task를 다음 개입에서 '되살릴' 수 있도록 최소 스냅샷으로 직렬화한다(상태블록·스레드·담당자·
-        팀·목표). 검증 누계(verified/run_count/owner_delivered 등)는 저장하지 않는다 — 되살릴 때 0에서
-        다시 시작해 '완료'엔 새 run 증거를 다시 요구하기 위함(되살린 직후 허위완료 방지)."""
+        """미완 Task를 다음 개입에서 '되살릴' 수 있도록 직렬화한다(상태블록·스레드·담당자·팀·목표 +
+        수렴 진행 사실 전체). 원칙(2026-06-23, 사용자 '메모리 안정적으로 — field별 땜질 말고'): *사실*
+        (무슨 일이 일어났나 — 작업·검증·기여, 작업공간 파일이 복구에 보존됨)은 영속, *재검 sanity*
+        (verified — 새 run 증거)만 0 리셋한다. verified 리셋이 '허위완료 방지'의 단일 백스톱이므로(되살린
+        직후 새 run 증거 없이는 complete_task 첫 게이트에서 막힘) 나머지 사실을 다 영속해도 완료는 fresh
+        run에 묶여 안전하다. (종전 field별 영속이 act_by·contrib_checked 등을 빠뜨려 contrib 게이트가
+        복구마다 '전원 idle'로 오판, 마감이 영영 안 닫히던 결함 — line 595·sys 521 주석이 'act_by 인메모리
+        리셋 결함'을 알려진 결함으로 명시했으나 미수정이었음 — 을 포괄 교정.)"""
         return {
             "task_id": ref.task_id,
             "thread_id": ref.thread_id,
@@ -420,6 +425,22 @@ class Sys:
             # verified(실행)는 리더가 재개 때 1회 재실행하는 저비용 sanity라 종전대로 0 리셋(완료 직전 run 증거).
             "owner_delivered": bool(getattr(ref, "owner_delivered", False)),
             "cross_checks": int(getattr(ref, "cross_checks", 0) or 0),
+            # [수렴 사실 포괄 영속(2026-06-23, 사용자: '메모리 안정적으로 — field별 땜질 말고')] 게이트가 읽는
+            # 진행 '사실'을 전부 영속한다. act_by(누가 Write/Edit/run 했나 — contrib 게이트의 idle 판정 입력),
+            # contrib_checked(기여 게이트 통과), cross_check_offdomain(독립검증 누계), run_count·evidence(실행
+            # 진행·영수증), cc_held(교차검증 보류 횟수), leader_writes(리더 독식 누계), deploy_count(배포 런어웨이
+            # 캡). 종전 인메모리라 컨테이너 회수·재시작마다 0 리셋 → contrib 게이트가 '전원 idle' 오판(act_by),
+            # 배포 캡 에스컬레이션 무력화(deploy_count) 등으로 마감/캡이 영영 작동 안 함. 작업·검증은 일어났고
+            # 작업공간 파일이 복구에 보존되므로 이 사실들의 영속은 유효. verified만 리셋 유지(허위완료 백스톱).
+            "act_by": {str(int(m)): int(flow.act_by.get(m, 0))
+                       for m in ref.team if int((flow.act_by or {}).get(m, 0) or 0) > 0},
+            "contrib_checked": bool(getattr(ref, "contrib_checked", False)),
+            "cross_check_offdomain": int(getattr(ref, "cross_check_offdomain", 0) or 0),
+            "run_count": int(getattr(ref, "run_count", 0) or 0),
+            "evidence": (getattr(ref, "evidence", "") or "")[:500],
+            "cc_held": int(getattr(ref, "cc_held", 0) or 0),
+            "leader_writes": int(getattr(ref, "leader_writes", 0) or 0),
+            "deploy_count": int(getattr(flow, "_deploy_count", 0) or 0),
             "last_work_body": getattr(ref, "last_work_body", ""),  # [정밀 복구] owner 위임 원문 — 복구가 재작문 대신 replay
             # [정밀 복구 — 전체 체인] 열린 베턴 프레임 전부(원문 포함)를 영속한다. 끊김 시 owner(레벨1)만이 아니라
             # *가장 깊은 활성 워커*(체인 끝)를 그 원문으로 재개하기 위함 — 깊은 전문가 협업이 리더로 튀지 않게.
@@ -611,6 +632,20 @@ class Sys:
         # 다시 요구해 마감이 안 닫히던 진짜 원인 차단(verified는 종전대로 0 — 재개 때 1회 재실행).
         ref.owner_delivered = bool(snap.get("owner_delivered", False))
         ref.cross_checks = int(snap.get("cross_checks", 0) or 0)
+        # [수렴 사실 포괄 복원(2026-06-23, 사용자: '메모리 안정적으로')] 게이트가 읽는 진행 사실 전부 복원 —
+        # act_by(누가 Write/Edit/run 했나)는 contrib 게이트의 idle 판정 입력이라, 이걸 안 되살리면 복구마다
+        # '전원 idle'로 마감이 막힌다(사용자가 짚은 act_by 리셋). deploy_count는 배포 런어웨이 캡이 재시작 너머
+        # 누적돼 에스컬레이션이 작동하게. verified만 0 유지(허위완료 백스톱 — 재개 직후 새 run 증거 강제).
+        ref.contrib_checked = bool(snap.get("contrib_checked", False))
+        ref.cross_check_offdomain = int(snap.get("cross_check_offdomain", 0) or 0)
+        ref.run_count = int(snap.get("run_count", 0) or 0)
+        if snap.get("evidence"):
+            ref.evidence = snap["evidence"]
+        ref.cc_held = int(snap.get("cc_held", 0) or 0)
+        ref.leader_writes = int(snap.get("leader_writes", 0) or 0)
+        for _m, _c in (snap.get("act_by") or {}).items():
+            flow.act_by[int(_m)] = int(_c)
+        flow._deploy_count = int(snap.get("deploy_count", 0) or 0)
         if snap.get("last_work_body"):
             ref.last_work_body = snap["last_work_body"]   # [정밀 복구] owner 위임 원문 복원 → SYS 이어가기가 replay
         # [정밀 복구 — 완료잠금(구조)] 담당(owner)이 있던 미완 Task를 되살리면, owner가 '이어가기'로 재인도하기

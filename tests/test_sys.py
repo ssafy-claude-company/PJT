@@ -4916,3 +4916,41 @@ def test_완료검증사실_영속_owner_delivered_cross_checks_work_delegated()
     assert f2.current.work_delegated == 2 and 12 in f2.current.work_delegated_to
     # owner가 인도했으니 복구가 미완(owner_incomplete)으로 안 잡음 → 리더가 마감 가능
     assert f2.current.owner_incomplete is False
+
+
+def test_수렴사실_포괄영속_act_by_contrib_deploy_복구왕복():
+    """[수렴 사실 포괄 영속(2026-06-23, 사용자: '메모리 안정적으로 — field별 땜질 말고')] 게이트가 읽는
+    진행 사실(act_by·contrib_checked·cross_check_offdomain·run_count·deploy_count)이 복구 너머 영속해야
+    마감/캡이 작동한다. 특히 act_by(누가 Write/Edit/run 했나)는 contrib 게이트 idle 판정 입력이라, 리셋되면
+    복구마다 '전원 idle' 오판으로 마감이 영영 안 닫혔다(코드 주석도 '알려진 결함'으로 명시했으나 미수정이던
+    것). 안전판: verified(실행 sanity)만 0 유지 — 되살린 직후 새 run 증거 없이는 완료 불가(허위완료 백스톱)."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드", 13: "프론트엔드"})
+    f = _flow(g, leader=11)
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
+    f.current.team = [12, 13]             # 팀 명시(스냅샷은 act_by를 team 멤버로 필터)
+    # 진행 사실 — 팀원이 실작업(act_by>0), 기여 게이트 통과, 독립검증, 배포 캡 누적
+    f.act_by = {12: 5, 13: 3}             # 백엔드·프론트엔드가 실작업함 → contrib 게이트 idle 아님
+    f.current.contrib_checked = True
+    f.current.cross_check_offdomain = 2
+    f.current.run_count = 4
+    f.current.verified = True             # 이것만 영속 안 됨(허위완료 백스톱)
+    f._deploy_count = 3
+    snap = s._task_snapshot(f, f.current)
+    # 직렬화: 사실은 저장, verified는 의도적으로 저장 안 함
+    assert snap["act_by"] == {"12": 5, "13": 3}
+    assert snap["contrib_checked"] is True and snap["cross_check_offdomain"] == 2
+    assert snap["run_count"] == 4 and snap["deploy_count"] == 3
+    assert "verified" not in snap         # 의도적 리셋 — 허위완료 백스톱(완료는 fresh run에 묶임)
+    # 복원
+    f2 = _flow(g, leader=11)
+    f2.pool = [11, 12, 13]
+    asyncio.run(s._restore_open_task(f2, {"id": "P-1", "open_task": snap}))
+    # act_by 복원 → contrib 게이트가 '전원 idle' 오판 안 함(마감 가능). deploy_count도 캡 누적 유지.
+    assert f2.act_by.get(12) == 5 and f2.act_by.get(13) == 3
+    assert f2.current.contrib_checked is True and f2.current.cross_check_offdomain == 2
+    assert f2.current.run_count == 4 and f2._deploy_count == 3
+    # verified는 복구 후 False(백스톱) — 재개 직후 새 run 증거를 강제해 허위완료를 막는다
+    assert f2.current.verified is False
