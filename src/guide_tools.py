@@ -2178,7 +2178,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 회계가 뒤따르는 통과, 탈출(N/A·불필요·면제)은 사유 필수. 교차검증 통과 *뒤* 단계(standard_v 테스트 보존).
             _std_bind = (flow.current.standard or "").strip()
             # standard가 비었거나 그 자체가 '[최대화 N/A …]' 면제선언이면 미발동(과제한 방지 — 요구가 부를 때만 강제)
-            if _std_bind and not re.match(r"^\s*\[\s*최대화\s*(?:N\s*/?\s*A|면제|불필요)", _std_bind):
+            if (_std_bind and not re.match(r"^\s*\[\s*최대화\s*(?:N\s*/?\s*A|면제|불필요)", _std_bind)
+                    and ("standard", flow.current.task_id) not in flow._gate_pass):   # [누적] 이미 통과면 재확인 안 함(오락가락 차단)
                 _res2 = args.get("result") or ""
                 # [구성요소별 분해 강제(2026-06-20 사용자: '잘된 구성인가는 구성요소로 판정 가능')] 바 헤더·한 줄
                 # 회계는 satisfice라 불충분 — 헤더 뒤에 *여러 구성요소* 항목(분해)이 실제로 있어야 통과. 구성적
@@ -2198,6 +2199,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                                "(taste 아님). 미달·누락 요소는 그 도메인 owner에게 개선 위임 후 재검증(이게 깊이의 "
                                "반복 — 0-redo를 깨는 지점). 표준이 통째로 부적용이면 **'[최대성 N/A: <사유>]'**(빈 "
                                "재호출 통과 안 됨 — 사유 필수).")
+                flow._gate_pass.add(("standard", flow.current.task_id))   # [누적·영속] 통과 기록 → 다음 호출엔 standard 건너뜀(acceptance·data_prov와 동일)
+                _ckpt(flow)
             # [협업 — 인터페이스 직접 합의 강제(2026-06-22 사용자: '전문가끼리 서로 대화하는가')] interfaces(도메인
             # 간 계약)를 선언했는데 owner들이 서로 직접 확인(peer↔peer Info)한 적이 없으면 = 계약을 리더만 경유
             # 전달(사일로·중계 병목)했거나 owner가 추측한 것(P-028 API 미스매치). ≥2개 도메인이 실작업했을 때만
@@ -2207,7 +2210,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             _iface_na = bool(re.search(r"\[\s*인터페이스\s*직접\s*합의\s*(?:n\s*/?\s*a|면제|단독|불필요)",
                                        (args.get("result") or ""), re.IGNORECASE))
             if (has_product and _iface_x and not getattr(flow.current, "peer_info_pairs", None)
-                    and not _iface_na and not getattr(flow, "iface_dialogue_checked", False)):
+                    and not _iface_na and not getattr(flow, "iface_dialogue_checked", False)
+                    and ("iface", flow.current.task_id) not in flow._gate_pass):   # [누적] 이미 통과면 재확인 안 함
                 _iwk = [m for m in flow.current.team if m != flow.leader and flow.act_by.get(m, 0) > 0]
                 _idoms = {_norm_job(j) for m in _iwk for j in _jobs_of(flow._info(m) or "")} - {""}
                 if len(_idoms) >= 2:
@@ -2220,6 +2224,9 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                                "포맷·API·이벤트 타이밍을 리더 중계·추측 말고 *당사자끼리*). 정말 단방향/단독이라 "
                                "직접 합의가 불필요하면 result에 **'[인터페이스 직접합의 N/A: <사유>]'**를 적어 "
                                "재호출하세요(사유 필수).")
+            if _iface_x and ("iface", flow.current.task_id) not in flow._gate_pass:   # [누적·영속] iface 통과(peer 합의/N-A) 기록 → 재호출엔 건너뜀
+                flow._gate_pass.add(("iface", flow.current.task_id))
+                _ckpt(flow)
             # [팀 기여 의무 게이트 — RFC-009] 교차 검증(cross_checks)과 **독립**. 검증이 됐어도(검증은
             # 기능 위주라 폴리시 부재를 못 잡음 — RFC-009 §3), 팀에 부른 직군이 이 흐름에서 회의 발언만 하고
             # 실작업·검증 0(act_by==0: Write/Edit/run 한 번도 없음)이면 그 도메인(타격감·그래픽·사운드·디자인·
