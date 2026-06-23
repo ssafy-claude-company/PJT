@@ -493,7 +493,64 @@ class Sys:
         p = self.projects[int(ch)]
         p["open_task"] = (self._task_snapshot(flow, flow.current)
                           if flow.current is not None else None)
+        if getattr(flow, "file_owner", None) is not None:   # [소유 경계 영속] Task 전이마다 같이 저장
+            p["file_owner"] = dict(flow.file_owner or {})
         self._save_projects()
+
+    def _save_file_owner(self, flow) -> None:
+        """[소유 경계 영속(2026-06-23, 사용자)] flow.file_owner를 프로젝트 레지스트리에 써 복구에도 유지한다
+        — act_by·_gate_pass의 인메모리 리셋 결함을 반복하지 않기 위함(소유는 파일 도메인 경계의 ground truth).
+        새 파일이 귀속될 때마다 PostToolUse 훅이 호출(파일 단위라 빈도 제한적)."""
+        ch = getattr(flow, "project_channel", None)
+        if not ch or int(ch) not in self.projects:
+            return
+        try:
+            self.projects[int(ch)]["file_owner"] = dict(getattr(flow, "file_owner", {}) or {})
+            self._save_projects()
+        except Exception:
+            pass
+
+    def _seed_file_owner(self, flow) -> None:
+        """[전환기 시딩 — 프로젝트당 1회] 추적 시작 시점에 *이미 있는* 작업공간 파일의 owner를 audit 이력의
+        *최초 작성자 직군*으로 시딩한다(분류가 아니라 실제 생성 기록 — first-toucher 오귀속 방지). 이후 신규
+        파일은 PostToolUse가 귀속·영속하므로 file_owner가 비었을 때만 1회 돈다. best-effort(실패해도 흐름 무관)."""
+        ws = getattr(flow, "workspace", None)
+        if not ws or not self.projects_path or not os.path.isdir(str(ws)):
+            return
+        apath = os.path.join(os.path.dirname(str(self.projects_path)), "audit.jsonl")
+        if not os.path.isfile(apath):
+            return
+        try:
+            from .guide_tools import _jobs_of, _norm_job
+            ws_real = os.path.realpath(str(ws)) + os.sep
+            owner = {}
+            with open(apath, encoding="utf-8") as f:
+                for ln in f:
+                    if '"tool_use"' not in ln or ('"Write"' not in ln and '"Edit"' not in ln):
+                        continue
+                    try:
+                        d = json.loads(ln)
+                    except Exception:
+                        continue
+                    if d.get("event") != "tool_use" or d.get("tool") not in ("Write", "Edit"):
+                        continue
+                    ti = d.get("tool_input") or {}
+                    fp = ti.get("file_path") or ti.get("path")
+                    if not fp:
+                        continue
+                    rp = os.path.realpath(fp if os.path.isabs(fp) else os.path.join(str(ws), fp))
+                    if rp in owner or not rp.startswith(ws_real):
+                        continue        # 이미 최초작성자 확정됐거나 작업공간 밖
+                    doms = [_norm_job(j) for j in _jobs_of(str(d.get("role") or "")) if j.strip()]
+                    doms = [x for x in doms if x and not x.startswith("예비")]
+                    if doms and os.path.isfile(rp):
+                        owner[rp] = doms[0]      # 최초 작성자의 주 직군 = owner
+            if owner:
+                flow.file_owner = owner
+                self._save_file_owner(flow)
+                self._log("file_owner_seeded", project=getattr(flow, "project_id", None), files=len(owner))
+        except Exception:
+            pass
 
     async def _restore_open_task(self, flow, proj) -> Optional[dict]:
         """프로젝트에 저장된 미완 Task가 있으면 이번 흐름에 그대로 되살린다 — 같은 상태블록·스레드·담당자
@@ -1584,10 +1641,16 @@ class Sys:
         flow.persist_role = self._persist_job   # 채용한 직군을 메모리+디스크(jobs.json)에 영속(재시작에도 유지)
         flow.craft_of = lambda job: (self.role_profiles.get(str(job).strip(), "") or "")   # [RFC-008 P0] 직군 직무기준 → 검증 루브릭 조회
         flow.checkpoint_task = lambda: self._checkpoint_open_task(flow)   # Task 전이마다 크래시-세이프 영속
+        flow.persist_owner = lambda: self._save_file_owner(flow)          # [소유 경계] 새 파일 귀속 시 영속
         body = user_text
         if proj:                                     # 기존 프로젝트 개입 — 맥락 유지(재생성 X)
             flow.project_channel = int(channel_id)   # 기존 채널 재사용 → create_project는 no-op
             flow.workspace = proj["workspace"]
+            # [소유 경계 복원/시딩] 저장된 file_owner를 흐름에 싣고(복구에도 유지), 비어 있으면(추적 첫 시작)
+            # audit 이력의 최초 작성자로 1회 시딩 — 기존 파일도 올바른 직군 소유로(분류 아닌 생성 기록 기반).
+            flow.file_owner = dict(proj.get("file_owner") or {})
+            if not flow.file_owner:
+                self._seed_file_owner(flow)
             flow.project_id, flow.intervention = proj["id"], proj
             flow.project_name = proj.get("name")   # 배포 슬롯 유도(프로젝트별 결정적 서비스명)
             # 미완 Task 되살리기: 저장된 '진행 중' Task가 있으면 같은 블록·스레드·owner로 재부착(flow.current).

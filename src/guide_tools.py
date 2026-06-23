@@ -589,6 +589,12 @@ class Flow:
                                        #   SYS가 호출 밖에서 직렬 완주시키고(블록킹 도구호출 없음 → CLI 75초
                                        #   포기·detach·비동기 churn 차단), 요청자가 활성일 때만 1건(베턴=단일).
         self.write_lease = {}          # 행위자→샌드박스(쓰기 리스, 휴면 인프라): 훅이 리스 밖 Write/Edit 거부
+        # [소유-기반 도메인 경계(2026-06-23, 사용자) — 분류 아닌 *기록*] 파일 절대경로→생성 직군. 봇이
+        # 새 파일을 만들면 그 직군이 owner. 타 직군이 그 파일을 Edit하려 하면 PreToolUse 훅이 막고
+        # '보고/요청'으로 돌린다(키워드 분류 폐기 — 무한 하드코딩 종결). 프로젝트 단위로 projects.json에
+        # 영속(복구 때 리셋 안 되게 — act_by·_gate_pass의 인메모리 결함 반복 차단). persist_owner는 SYS 주입.
+        self.file_owner = {}           # realpath(str) → 직군(normalized). PostToolUse가 기록, PreToolUse가 강제.
+        self.persist_owner = None      # () -> None: file_owner를 proj에 써 영속(SYS가 주입)
         self.fork_kind = {}            # [fork 수집] 행위자→Kind: 프레임 없는 가지에도 선구현 게이트 적용
         self.fork_active = 0           # [fork 동시성 가드] 수집 진행 수 — 수집 중 신규 요청/수집은 [대기]
         self.log = None                # (event, **fields) 콜백 — SYS가 주입(flow.jsonl 영속)

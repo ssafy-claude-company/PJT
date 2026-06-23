@@ -274,7 +274,38 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
         #    도달 가능자만 — 없으면 통과(맡길 사람 없으면 직접). [반-스래싱] 한 번 위임하면(work_delegated_to 진입)
         #    그 동료는 더는 블로커가 아니라 본인이 일 안 해도 진행 가능(기회는 줬다). [하위호환] _info 없거나 팀 빈
         #    흐름·테스트는 건너뜀(도메인 판정 불가).
+        # 9) [소유-기반 도메인 경계(2026-06-23, 사용자) — 키워드 분류 폐기, *기록된 소유*로 강제] 파일 도메인을
+        #    *추측*(키워드/_CAPS/확장자 — 무한 하드코딩·거짓양성)하지 않고, *누가 만들었나*(file_owner)로 막는다.
+        #    이 파일을 *다른 직군*이 만들었으면 그건 그 직군 산출물 → 직접 Edit 금지. 결함은 보고(검증만)하거나
+        #    owner에게 request(Work)로 수정 요청(개선권한). 자기 직군 파일·미소유(새 파일)는 자유. 리더(조율자)는
+        #    면제(자체 흡수 게이트 별도). 소유는 PostToolUse가 경험적으로 기록(아래 'deny 통과 후' 블록).
         if (tool in ("Write", "Edit") and flow is not None and actor is not None
+                and actor != getattr(flow, "leader", None)
+                and getattr(flow, "file_owner", None)
+                and callable(getattr(flow, "_info", None))):
+            _opath = tool_input.get("file_path") or tool_input.get("path")
+            if _opath:
+                _ocwd = data.get("cwd") or os.getcwd()
+                _orp = os.path.realpath(_opath if os.path.isabs(_opath) else os.path.join(_ocwd, _opath))
+                _owner_dom = flow.file_owner.get(_orp)
+                if _owner_dom:
+                    from .guide_tools import _jobs_of, _norm_job
+                    _mydoms = {_norm_job(j) for j in _jobs_of(flow._info(actor) or "") if j.strip()}
+                    if _owner_dom not in _mydoms:
+                        audit.record("tool_denied", actor=actor, role=role, tool=tool,
+                                     reason="타 직군 소유 파일 편집", tool_use_id=tool_use_id)
+                        return _deny(
+                            f"[소유 경계] 이 파일은 **{_owner_dom}** 직군이 만든 산출물입니다 — 당신"
+                            f"({flow._info(actor) or actor})은 직접 수정할 수 없습니다(백엔드가 프론트 못 고치듯, "
+                            f"수정 권한 없는 도메인을 직접 고치면 흡수). 결함을 발견했으면: ① **검증만** 위임받았으면 "
+                            f"그 결함을 **보고**로 올리고, ② **개선 권한**을 받았으면 owner({_owner_dom})에게 "
+                            f"**request(Work)로 수정을 요청**하세요(자기검증 무효 — 만든 사람이 고쳐야 깊이가 납니다). "
+                            f"owner가 지금 대기 중이면 기다리거나 리더가 위임하게 하세요(부재면 리더가 재배정/recruit).")
+
+        # [폐기 — 소유-기반 게이트(위)로 대체(2026-06-23)] 아래 idle-전문가 키워드 흡수 게이트(#9 구버전)는 파일
+        # 도메인을 키워드/_CAPS/_FILE_CAP_KW로 *추측*하던 것(라이브: 프론트 app.js·QA qa_test.js 거짓양성 반복).
+        # 위 소유 게이트가 *기록된 소유*로 대체하므로 비활성화(if False). 데드코드는 후속 정리.
+        if (False and tool in ("Write", "Edit") and flow is not None and actor is not None
                 and getattr(flow, "current", None) is not None
                 and callable(getattr(flow, "_info", None))
                 and (getattr(flow.current, "team", None) or [])):
@@ -438,6 +469,27 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                                 pass
                         if getattr(flow, "role_earned_queue", None) is not None:
                             flow.role_earned_queue.append((actor, _label))
+                # [소유 기록 — 새 파일 생성 직군 귀속(2026-06-23, 사용자)] 모든 deny 통과 후, Write/Edit 대상이
+                # 아직 owner 없으면 이 행위자의 *직군*을 owner로 기록(영속). 타 직군 owner 파일이면 아래 강제
+                # 게이트가 이미 막았으므로, 여기 닿는 건 미소유 또는 내-직군 소유뿐 → 미소유만 신규 귀속.
+                if tool in ("Write", "Edit") and actor is not None \
+                        and getattr(flow, "file_owner", None) is not None \
+                        and callable(getattr(flow, "_info", None)):
+                    _fp = tool_input.get("file_path") or tool_input.get("path")
+                    if _fp:
+                        _cwd2 = data.get("cwd") or os.getcwd()
+                        _rp = os.path.realpath(_fp if os.path.isabs(_fp) else os.path.join(_cwd2, _fp))
+                        if _rp not in flow.file_owner:
+                            from .guide_tools import _jobs_of, _norm_job
+                            _doms = [_norm_job(j) for j in _jobs_of(flow._info(actor) or "") if j.strip()]
+                            _doms = [d for d in _doms if d and not d.startswith("예비")]
+                            if _doms:
+                                flow.file_owner[_rp] = _doms[0]      # 주 직군이 owner
+                                if getattr(flow, "persist_owner", None):
+                                    try:
+                                        flow.persist_owner()
+                                    except Exception:
+                                        pass
             except Exception:
                 pass
 
