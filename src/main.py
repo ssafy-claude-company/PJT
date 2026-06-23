@@ -718,6 +718,13 @@ async def run() -> None:
         점유 장부가 차단; 전체-유휴 조건이면 장기 프로젝트 중 증류가 영영 굶는다). 시도는 주기당
         한 직군만(비용 제어)."""
         period = int(os.environ.get("ORGANT_SLEEP_PERIOD", "600"))
+        # [수면 사이클 비활성 토글(2026-06-23)] period<=0이면 증류 사이클을 아예 돌리지 않는다. 라이브:
+        # 증류 워커가 *작업공간 루트*(cwd=cfg.workspace_dir, 32개 프로젝트·node_modules 누적 507MB)에서
+        # 떠 CLI 시동 시 그 거대한 트리를 스캔→RSS 11GB로 부풀어 머신 전역 OOM(리스너 동반사망 위협)을
+        # 매 주기 반복했다. 근본 교정(증류 워커에 빈 cwd 부여)이 들어가기 전까지는 끄는 게 안전하다.
+        if period <= 0:
+            log.info("수면(증류) 사이클 비활성(ORGANT_SLEEP_PERIOD<=0) — 증류 워커 루트 스캔 OOM 방지")
+            return
         while True:
             await asyncio.sleep(period)
             try:
