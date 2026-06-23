@@ -440,6 +440,10 @@ class Sys:
             "evidence": (getattr(ref, "evidence", "") or "")[:500],
             "cc_held": int(getattr(ref, "cc_held", 0) or 0),
             "leader_writes": int(getattr(ref, "leader_writes", 0) or 0),
+            # peer_info_pairs(owner↔owner 직접 Info 교환 쌍) — iface 게이트가 '계약을 당사자끼리 직접 확인했나'를
+            # 이걸로 본다(리더 중계·추측 차단). '사실'이라 영속(iface 통과 전 죽으면 재협의 강제하던 마지막 갭).
+            "peer_info_pairs": [sorted(int(x) for x in pr)
+                                for pr in (getattr(ref, "peer_info_pairs", None) or ())],
             "deploy_count": int(getattr(flow, "_deploy_count", 0) or 0),
             "last_work_body": getattr(ref, "last_work_body", ""),  # [정밀 복구] owner 위임 원문 — 복구가 재작문 대신 replay
             # [정밀 복구 — 전체 체인] 열린 베턴 프레임 전부(원문 포함)를 영속한다. 끊김 시 owner(레벨1)만이 아니라
@@ -643,6 +647,7 @@ class Sys:
             ref.evidence = snap["evidence"]
         ref.cc_held = int(snap.get("cc_held", 0) or 0)
         ref.leader_writes = int(snap.get("leader_writes", 0) or 0)
+        ref.peer_info_pairs = {frozenset(int(x) for x in pr) for pr in snap.get("peer_info_pairs", [])}
         for _m, _c in (snap.get("act_by") or {}).items():
             flow.act_by[int(_m)] = int(_c)
         flow._deploy_count = int(snap.get("deploy_count", 0) or 0)

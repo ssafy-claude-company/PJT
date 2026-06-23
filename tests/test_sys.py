@@ -4936,6 +4936,7 @@ def test_수렴사실_포괄영속_act_by_contrib_deploy_복구왕복():
     f.current.contrib_checked = True
     f.current.cross_check_offdomain = 2
     f.current.run_count = 4
+    f.current.peer_info_pairs = {frozenset({12, 13})}   # owner끼리 직접 인터페이스 합의함(iface 게이트 입력)
     f.current.verified = True             # 이것만 영속 안 됨(허위완료 백스톱)
     f._deploy_count = 3
     snap = s._task_snapshot(f, f.current)
@@ -4943,6 +4944,7 @@ def test_수렴사실_포괄영속_act_by_contrib_deploy_복구왕복():
     assert snap["act_by"] == {"12": 5, "13": 3}
     assert snap["contrib_checked"] is True and snap["cross_check_offdomain"] == 2
     assert snap["run_count"] == 4 and snap["deploy_count"] == 3
+    assert snap["peer_info_pairs"] == [[12, 13]]
     assert "verified" not in snap         # 의도적 리셋 — 허위완료 백스톱(완료는 fresh run에 묶임)
     # 복원
     f2 = _flow(g, leader=11)
@@ -4952,5 +4954,6 @@ def test_수렴사실_포괄영속_act_by_contrib_deploy_복구왕복():
     assert f2.act_by.get(12) == 5 and f2.act_by.get(13) == 3
     assert f2.current.contrib_checked is True and f2.current.cross_check_offdomain == 2
     assert f2.current.run_count == 4 and f2._deploy_count == 3
+    assert frozenset({12, 13}) in f2.current.peer_info_pairs   # iface 합의 사실 복원(재협의 루프 차단)
     # verified는 복구 후 False(백스톱) — 재개 직후 새 run 증거를 강제해 허위완료를 막는다
     assert f2.current.verified is False
