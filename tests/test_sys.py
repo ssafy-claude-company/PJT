@@ -5000,3 +5000,45 @@ def test_배치A_재위임차단_검증종료_큐_복구왕복(tmp_path):
     s._save_projects()
     s2 = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"}, projects_path=pf)
     assert s2.queue == [(100, 11, "대기요청", 200)]
+
+
+def test_재검증dedup_F1_이미검증한검증자만_차단():
+    """[검증 dedup — 리뷰F1 교정] 이미 이 산출물을 독립검증한 *그 검증자*에게 변경 0 코드를 또 검증시키면
+    차단(무한 '최종 검증' 루프 방지). 단 — 아직 검증 안 한 검증자에게 새 작업·새 검증, 코드 변경 후 재검증은
+    통과(검증자에게 *새 Work*까지 막던 회귀를 차단)."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=500, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드", 13: "QA", 14: "QA2"})   # 13·14가 검증자(QA) → 풀에 포함
+    f.start_root("root")
+    for _a in ("gap_checked", "percept_checked", "acceptance_checked", "decomp_checked",
+               "data_prov_checked", "staffing_exempt", "iface_dialogue_checked",
+               "offdomain_checked", "crossdomain_checked"):
+        setattr(f, _a, True)   # 다른 게이트는 우회(reverify_checked는 *안* 켜 — dedup만 활성 테스트)
+
+    async def wake(to, b, k):
+        return "검증 완료"
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13,14"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13,14"}))
+    f.current.participated.update({12, 13, 14})
+    asyncio.run(t["set_goal"].handler({"goal": "동작"}))
+    f.current.owner_delivered = True              # 검증 대상 산출물 존재
+
+    def _state():   # 13만 이미 독립검증(writes=2 시점), 변경 0
+        f.current.cross_checkers = {13}
+        f.current.last_verify_writes = 2
+        f.writes_by_role = {"x": 2}
+    # ① 이미 검증한 13 + 변경 0 → 차단
+    _state()
+    r1 = asyncio.run(t["request"].handler({"to_id": "13", "kind": "Work", "body": "최종 검증해줘"}))
+    assert "재검증 보류" in r1["content"][0]["text"]
+    # ② 아직 검증 안 한 14(검증자)에게 새 검증/작업 → 통과(회귀 차단의 핵심)
+    _state()
+    r2 = asyncio.run(t["request"].handler({"to_id": "14", "kind": "Work", "body": "독립 검증해줘"}))
+    assert "재검증 보류" not in r2["content"][0]["text"]
+    # ③ 코드 변경(writes↑) 후 13 재검증 → 통과
+    _state()
+    f.writes_by_role = {"x": 9}
+    r3 = asyncio.run(t["request"].handler({"to_id": "13", "kind": "Work", "body": "수정본 재검증"}))
+    assert "재검증 보류" not in r3["content"][0]["text"]

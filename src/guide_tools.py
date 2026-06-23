@@ -500,7 +500,8 @@ class TaskRef:
     collab_notes: str = ""                           # 회의·표결 합의 기록 — Work 위임에 자동 동봉(스펙이 회의에서 증발하던 결함 방지)
     cross_checks: int = 0                            # owner 인도 후 '다른 멤버'의 검증 참여 수(0이면 complete 1회 보류 — 품질 판정 독점 방지)
     cross_check_offdomain: int = 0                   # 그중 owner와 '다른 도메인' 검증 수(독립 검증 — 같은 직군 검증은 같은 맹점 에코)
-    last_verify_writes: int = -1                      # [검증 종료상태(2026-06-23 전수감사)] 마지막 교차검증 시점의 저작수(writes_by_role 합). 독립검증 후 코드 변경 0이면 재검증 요청을 막아 무한 '최종 검증' 루프 차단(고친 뒤·첫 독립검증은 허용).
+    last_verify_writes: int = -1                      # [검증 종료상태(2026-06-23 전수감사)] 마지막 *독립(off-domain)* 검증 시점의 저작수(writes_by_role 합). 독립검증 후 코드 변경 0이면 그 검증자 재요청을 막아 무한 '최종 검증' 루프 차단(고친 뒤·첫 검증·새 검증자는 허용).
+    cross_checkers: set = field(default_factory=set)  # [검증 종료상태 — 리뷰F1] 이 산출물을 독립검증한 검증자 id 집합. 재검증 dedup이 '이미 검증한 그 검증자'에게만 적용되게(검증자에게 *새 작업* 시키는 건 안 막게).
     cc_held: int = 0                                  # 교차검증 게이트가 이 Task에서 보류된 횟수 — 3회+면 '반복 마감(독점·헛돎)' 경보로 에스컬레이트(리더가 혼자 run 반복+재마감하는 스래싱 차단; cross_check 오르면 자연 통과라 교착 없음)
     complete_retry: bool = False                     # (구) 1회 보류 시절 잔재 — 교차 검증 의무 하드화(Rule/Task 6)로 미사용, 호환 위해 유지
     leader_writes: int = 0                           # 리더가 이 Task에서 직접 쓴 파일 수(위임 없이 독식하면 차단)
@@ -843,24 +844,25 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             return _ok("Work 위임 거부: 이 Task의 Goal이 아직 확정되지 않았습니다. 먼저 동료와 request(Info)로 "
                        "목표를 합의하고 set_goal로 확정한 뒤 Work로 맡기세요(목표는 팀 합의의 산물 — 선분배 금지).")
         me_is_leader = (me_id == flow.leader)
-        # [검증 종료상태 — 재검증 dedup(2026-06-23 전수감사, 사용자 '검증 집계')] 이미 독립 교차검증
-        # (cross_check_offdomain≥1)을 받은 산출물의 *코드가 변경되지 않았는데*(writes 불변) 또 검증자에게 Work로
-        # 검증을 맡기려 하면 막는다 — 복구마다·결함 못 고친 채 "최종 검증"을 새 QA에게 반복 요청하던 무한 루프
-        # (라이브 P-031: ~13회 '최종 검증', 1346 run)의 직접 차단. 코드를 *고친 뒤*(writes 증가)나 *첫* 독립검증은
-        # 통과(안전). last_verify_writes는 영속이라 복구 후에도 '이미 검증됨'을 안다.
+        # [검증 종료상태 — 재검증 dedup(2026-06-23 전수감사, 사용자 '검증 집계'; 리뷰F1 교정)] *이미 이 산출물을
+        # 독립검증한 그 검증자*(to in cross_checkers)에게, *코드가 변경되지 않았는데*(writes 불변) 또 검증을 맡기려
+        # 하면 막는다 — 복구마다·결함 못 고친 채 "최종 검증"을 반복 요청하던 무한 루프(P-031 ~13회, 1346 run) 차단.
+        # ※ 리뷰F1: 'to in cross_checkers'로 좁혀 — *아직 검증 안 한* 검증자에게 새 작업·새 검증을 시키는 건 통과
+        # (검증자에게 새 Work 주는 것까지 막던 회귀 차단). 코드를 *고친 뒤*(writes 증가)·*첫* 검증도 통과.
         if (kind == Kind.WORK and flow.current and _is_verifier(flow._info(to) or "")
-                and getattr(flow.current, "cross_check_offdomain", 0) >= 1
+                and int(to) in getattr(flow.current, "cross_checkers", set())
                 and getattr(flow.current, "last_verify_writes", -1) >= 0
                 and sum(int(v) for v in (flow.writes_by_role or {}).values()) == flow.current.last_verify_writes
                 and not getattr(flow, "reverify_checked", False)):
             if flow.log:
                 flow.log("reverify_dedup", to=to, cross=flow.current.cross_checks)
             return _ok(
-                f"재검증 보류(이미 독립 검증 완료 — 코드 변경 0): 이 산출물은 이미 다른 도메인 검증자의 교차검증을 "
-                f"{flow.current.cross_checks}회 받았고, 그 뒤 **코드가 한 줄도 안 바뀌었습니다**(Write/Edit 0). 같은 "
-                f"코드를 새 검증자에게 또 검증시키는 건 무한 '최종 검증' 루프입니다 — 둘 중 하나로 진행하세요: ① 검증이 "
-                f"충분하면 **complete_task로 마감**(교차검증 게이트는 이미 통과). ② 검증에서 나온 결함이 있으면 그 "
-                f"owner에게 Work로 ***고치게* 한 뒤**(코드가 바뀌면) 다시 검증하세요. 변경 없는 재검증은 결과가 같습니다.")
+                f"재검증 보류(이 검증자는 이미 이 코드를 검증함 — 변경 0): {flow._info(to) or to}는 이미 이 산출물을 "
+                f"독립 교차검증했고(팀 교차검증 {flow.current.cross_checks}회), 그 뒤 **코드가 한 줄도 안 바뀌었습니다**"
+                f"(Write/Edit 0). 같은 검증자에게 같은 코드를 또 검증시키는 건 무한 '최종 검증' 루프입니다 — 둘 중 "
+                f"하나로 진행하세요: ① 검증이 충분하면 **complete_task로 마감**(교차검증 게이트는 이미 통과). ② 검증에서 "
+                f"나온 결함이 있으면 그 owner에게 Work로 ***고치게* 한 뒤**(코드가 바뀌면) 다시 검증하세요. (아직 검증 "
+                f"안 한 *다른* 검증자에게 맡기거나, 검증자에게 *새 작업*을 주는 건 막지 않습니다.)")
         # [비-리더 교차도메인 Work 게이트 — 구조적 조율 단일화(2026-06-22, 사용자: '주어진 일과 무관한 일을
         #  다른 도메인에 시키는 이상한 협업'은 구조 문제다)] 비-리더는 *받은 일*을 한다 — 같은 도메인 동료에게
         # 분담(서브태스킹)하거나 검증자(QA)에게 검증을 맡기는 건 자유고, 막히거나 궁금한 건 request(Info)로
@@ -1239,8 +1241,12 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 _vd = {_norm_job(j) for j in _jobs_of(flow._info(to) or "")} - {""}
                 if _od and _vd and not (_od & _vd):
                     flow.current.cross_check_offdomain += 1
-                # [검증 종료상태] 이 검증 시점의 저작수 기록 — 이후 코드 변경 0이면 재검증 요청을 막는 기준
-                flow.current.last_verify_writes = sum(int(v) for v in (flow.writes_by_role or {}).values())
+                    # [검증 종료상태 — 리뷰F2 교정] *독립(off-domain)* 검증 시점의 저작수만 기록한다(same-domain
+                    # 검증엔 갱신 안 함 — 종전엔 same-domain 검증이 마커를 올려 *변경된* 코드의 정당한 off-domain
+                    # 재검증을 막던 staleness). + 이 검증자를 기록(리뷰F1: 재검증 dedup이 '이미 검증한 그 검증자'에게
+                    # 만 적용되게 — 검증자에게 새 작업 시키는 것까지 막던 회귀 차단).
+                    flow.current.last_verify_writes = sum(int(v) for v in (flow.writes_by_role or {}).values())
+                    flow.current.cross_checkers.add(int(to))
                 _ckpt(flow)              # [교차검증 사실 영속] 복구가 교차검증을 다시 요구하지 않게(마감 닫힘)
             flow.req_results[dupkey] = result   # 같은 턴 병렬 중복요청이 재사용할 응답 캐시(동료 재호출 방지)
             return _ok(f"[{to} 응답] {_speech_clip(result, 4000)}{receipt}")

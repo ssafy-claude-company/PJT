@@ -444,6 +444,7 @@ class Sys:
             "contrib_checked": bool(getattr(ref, "contrib_checked", False)),
             "cross_check_offdomain": int(getattr(ref, "cross_check_offdomain", 0) or 0),
             "last_verify_writes": int(getattr(ref, "last_verify_writes", -1)),
+            "cross_checkers": sorted(int(x) for x in (getattr(ref, "cross_checkers", None) or set())),
             "run_count": int(getattr(ref, "run_count", 0) or 0),
             "evidence": (getattr(ref, "evidence", "") or "")[:500],
             "cc_held": int(getattr(ref, "cc_held", 0) or 0),
@@ -662,6 +663,7 @@ class Sys:
         ref.contrib_checked = bool(snap.get("contrib_checked", False))
         ref.cross_check_offdomain = int(snap.get("cross_check_offdomain", 0) or 0)
         ref.last_verify_writes = int(snap.get("last_verify_writes", -1))
+        ref.cross_checkers = {int(x) for x in snap.get("cross_checkers", [])}
         ref.run_count = int(snap.get("run_count", 0) or 0)
         if snap.get("evidence"):
             ref.evidence = snap["evidence"]
@@ -1540,10 +1542,11 @@ class Sys:
         rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")
         from .guide_tools import deploy_service_name
         name = deploy_service_name(flow)   # [멀티 프로젝트] 프로젝트별 결정적 서비스명(env 고정 제거)
-        # [cap 우회 차단(2026-06-23 전수감사)] 배포 런어웨이 cap(5회)이 걸리면 deploy_capped가 서고, 여기서
-        # SYS 강제배포를 *건너뛴다* — 종전엔 cap이 flow.deployed를 안 세팅해 여기가 6번째 배포를 강제하던 결함.
-        # 대신 사용자에게 직접 에스컬레이트(봇 자발 보고에 의존하지 않음).
-        if getattr(flow, "deploy_capped", False):
+        # [cap 우회 차단(2026-06-23 전수감사; 리뷰F3 교정)] 배포 런어웨이 cap(5회)이 걸리면 SYS 강제배포를
+        # *건너뛴다* — 종전엔 cap이 flow.deployed를 안 세팅해 여기가 6번째 배포를 강제하던 결함. deploy_capped는
+        # 인메모리라 재시작 후 풀리지만 _deploy_count(≥5)는 영속되므로, 둘 중 하나라도 서면 막아 *재시작 너머*
+        # cap을 보장한다(리뷰F3: deploy_capped만 보면 복구 후 6번째 배포가 1회 새던 잔여 구멍). 사용자에 에스컬레이트.
+        if getattr(flow, "deploy_capped", False) or getattr(flow, "_deploy_count", 0) >= 5:
             self._log("ensure_deploy_skipped_capped", count=getattr(flow, "_deploy_count", 0))
             try:
                 await self.guide.post(
