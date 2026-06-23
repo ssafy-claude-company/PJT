@@ -347,7 +347,14 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
                         for _n, _need, _cov in _CAPS:
                             if _cov(_alabel):
                                 continue
-                            if _need(_ftext) or any(kw in _ftext for kw in _FILE_CAP_KW.get(_n, ())):
+                            # [구체 파일 신호만 — 자연어 need 제외(2026-06-23, 라이브 규명)] _CAPS need는
+                            # '로그인·회원가입·계정' 등 *사용자대면* 용어를 포함해, 프론트 app.js(로그인 UI)나 QA
+                            # 테스트가 그 단어를 *언급*만 해도 'DB 구현'으로 오판한다(라이브: 프론트가 자기 app.js
+                            # 편집을 반복 차단당함). 파일 분류는 모호한 NL 키워드를 빼고 *명확한 파일 신호*
+                            # (_FILE_CAP_KW: train·.ipynb·schema.sql·dockerfile 등 — 그 도메인 *구현* 파일에만
+                            # 나타나는 것)만 쓴다. AI/데이터의 한국어 신호(딥러닝·머신러닝·공공데이터)는 _FILE_CAP_KW에
+                            # 이미 포함돼 진짜 교차도메인 구현 흡수(P-022 백엔드가 AI 학습코드)는 그대로 잡는다.
+                            if any(kw in _ftext for kw in _FILE_CAP_KW.get(_n, ())):
                                 _file_caps.add(_n)
                         if not _file_caps:
                             idle_specialists = []          # 자기 도메인(교차 신호 0) → 흡수 아님, 통과

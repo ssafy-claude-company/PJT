@@ -388,8 +388,9 @@ def test_흡수차단_테스트파일_면제_그러나_구현파일은_여전히
     # (a) 테스트 파일 — '로그인' 키워드 있어도 면제(종전엔 DB 오판으로 차단됐던 라이브 지점)
     assert _run(hook, "Write", {"file_path": "qa_test.js",
                                 "content": "// 6. 비로그인 POST /api/posts → 401\nrequire('http')"}) == {}
-    # (b) 같은 QA가 *구현* 파일(server.js)에 로그인 로직 — 테스트 아님 → 여전히 흡수 차단
-    out = _run(hook, "Write", {"file_path": "server.js", "content": "app.post('/login') // 로그인 구현"})
+    # (b) 같은 QA가 *AI 구현* 파일(train_model.py — 명확한 학습 신호)을 쓰면 여전히 흡수 차단(테스트 아님·
+    # 자기 도메인 아님). '로그인 *언급*'(app.js·테스트)이 아니라 *명확한 도메인 구현 신호*만 막는다.
+    out = _run(hook, "Write", {"file_path": "train_model.py", "content": "model.fit(X, y)  # 모델 학습"})
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert out["hookSpecificOutput"]["permissionDecisionReason"].startswith("흡수 차단")
 
