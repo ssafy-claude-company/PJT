@@ -4861,3 +4861,28 @@ def test_배포보고_타임아웃후_라이브면_성공_아니면_실패아님
     r2 = deploy._final_deploy_result("https://x.onrender.com", "/tmp/ws", "repo", "building",
                                      check_live=lambda u, tries=1: None, verify=lambda u, w: [], measure=lambda u: "")
     assert "실패 아님" in r2 and "수동 배포하지 마세요" in r2 and "배포 성공" not in r2
+
+
+def test_완료게이트통과_gate_pass_스냅샷복원_왕복():
+    """[_gate_pass 영속(2026-06-23, 사용자)] 완료 게이트 통과(percept·acceptance·data_prov 회계)는 '사실'이라
+    복구 너머 영속해야 마감이 닫힌다 — 인메모리 리셋이 복구마다 회계 *재서술*을 강제해(이 환경은 재시작 잦음)
+    마감이 영영 안 닫히던 결함. 스냅샷이 *현재 Task* 통과만 직렬화(타 Task 제외)하고, _restore가 (게이트명,
+    task_id) 튜플로 되살리는지 왕복 검증(verified·cross_checks는 종전대로 0 리셋 — 영속 안 함)."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드", 13: "프론트엔드"})
+    f = _flow(g, leader=11)
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
+    tid = f.current.task_id
+    f._gate_pass = {("acceptance", tid), ("data_prov", tid), ("percept", "다른Task")}
+    snap = s._task_snapshot(f, f.current)
+    # (1) 직렬화: *현재 Task*의 통과만 — 타 Task(다른Task)는 제외
+    assert sorted(snap["gate_pass"]) == ["acceptance", "data_prov"]
+    # (2) 복원: 새 흐름에 되살리면 (게이트명, task_id) 튜플로 복구 → 그 게이트는 복구 후 재검사 안 됨
+    f2 = _flow(g, leader=11)
+    f2.pool = [11, 12, 13]
+    asyncio.run(s._restore_open_task(f2, {"id": "P-1", "open_task": snap}))
+    assert f2.current is not None and f2.current.task_id == tid
+    assert ("acceptance", tid) in f2._gate_pass and ("data_prov", tid) in f2._gate_pass
+    assert ("percept", "다른Task") not in f2._gate_pass   # 타 Task 통과는 안 옴

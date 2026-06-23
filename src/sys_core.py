@@ -401,6 +401,12 @@ class Sys:
             # 라이브: 동면 5회 흐름에서 리더가 같은 협의 질문을 5회 반복(시간·토큰 낭비의 주범).
             # 협의는 '사실'이라 영속이 옳다(검증 누계와 다름 — 그건 의도적으로 0에서 재시작).
             "participated": sorted(int(x) for x in getattr(ref, "participated", []) or []),
+            # [완료 게이트 통과 영속(2026-06-23, 사용자)] _gate_pass(percept·acceptance·data_prov 회계 통과)는
+            # '사실'(리더가 그 기준을 result에 회계했다)이라 복구 너머 영속한다 — 인메모리 리셋이 복구마다 그
+            # 회계 재서술을 강제해 마감이 영영 안 닫히던 결함(이 환경은 컨테이너 회수·재시작이 잦음). verified·
+            # cross_checks(실검증 누계)는 종전대로 0에서 재시작(재개 시 팀이 자연히 다시 채움 — 회계 재서술과 다름).
+            "gate_pass": sorted(n for (n, tid) in (getattr(flow, "_gate_pass", None) or ())
+                                if str(tid) == str(ref.task_id)),
             "last_work_body": getattr(ref, "last_work_body", ""),  # [정밀 복구] owner 위임 원문 — 복구가 재작문 대신 replay
             # [정밀 복구 — 전체 체인] 열린 베턴 프레임 전부(원문 포함)를 영속한다. 끊김 시 owner(레벨1)만이 아니라
             # *가장 깊은 활성 워커*(체인 끝)를 그 원문으로 재개하기 위함 — 깊은 전문가 협업이 리더로 튀지 않게.
@@ -579,6 +585,11 @@ class Sys:
         if snap.get("interfaces"):
             ref.interfaces = snap["interfaces"]        # [협업] 인터페이스 계약 복원 — 재개 L2 검증 일관
         ref.participated = {int(x) for x in snap.get("participated", [])}   # 협의 명단 복원(재협의 루프 차단)
+        # [완료 게이트 통과 복원(2026-06-23, 사용자)] 영속된 _gate_pass(회계 통과)를 흐름에 되살린다 — 복구마다
+        # acceptance·data_prov·percept 회계를 재서술하던 낭비 차단(마감이 영영 안 닫히던 결함). 검증 누계
+        # (verified·cross_checks)는 종전대로 0에서 재시작하므로, 재개 시 팀의 자연 재검증으로 마감이 완성된다.
+        if snap.get("gate_pass"):
+            flow._gate_pass = {(n, snap["task_id"]) for n in snap.get("gate_pass", [])}
         if snap.get("last_work_body"):
             ref.last_work_body = snap["last_work_body"]   # [정밀 복구] owner 위임 원문 복원 → SYS 이어가기가 replay
         # [정밀 복구 — 완료잠금(구조)] 담당(owner)이 있던 미완 Task를 되살리면, owner가 '이어가기'로 재인도하기
