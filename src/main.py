@@ -560,14 +560,20 @@ async def run() -> None:
             p["recovery_attempted"] = (p.get("open_task") or {}).get("task_id")
             sysm._save_projects()
     if pendings:
+        async def _recover_one(ch, req):
+            log.info("부팅 복구: 미응답 [Request] 재처리 ch=%s: %r", ch, (req.body or '')[:60])
+            audit.record("user_request", to=req.to_id, body=(req.body or '')[:200])
+            try:
+                await sysm.route_channel_request(ch, req)
+            except Exception:
+                log.error("부팅 복구 처리 중 예외 ch=%s:\n%s", ch, traceback.format_exc())
+        # [병렬 복구(2026-06-23, 사용자)] 종전 순차 await는 한 프로젝트 흐름(route_channel_request가
+        # 리더+이어가기 루프를 끝까지 도는, 길 수 있는 작업)이 끝날 때까지 다른 미완 프로젝트의 재개를
+        # 막아, 한 부팅에 한 프로젝트만 살아나고 나머지는 영영 정지했다(라이브 P-030/P-031: 번갈아 정지).
+        # 각 프로젝트를 독립 태스크로 동시에 재개한다 — 정상 다중 프로젝트 운영과 동일(전역 점유 장부가
+        # 봇 충돌을 조율). 한 프로젝트의 긴 흐름이 다른 프로젝트를 굶기지 않는다.
         async def _recover_all():
-            for ch, req in pendings:
-                log.info("부팅 복구: 미응답 [Request] 재처리 ch=%s: %r", ch, (req.body or '')[:60])
-                audit.record("user_request", to=req.to_id, body=(req.body or '')[:200])
-                try:
-                    await sysm.route_channel_request(ch, req)
-                except Exception:
-                    log.error("부팅 복구 처리 중 예외 ch=%s:\n%s", ch, traceback.format_exc())
+            await asyncio.gather(*[_recover_one(ch, req) for ch, req in pendings])
         asyncio.create_task(_recover_all())
 
     # 핫리로드: 실행 중 .env를 주기적으로 다시 읽어 '새로 떨군 토큰'을 자동 연결·합류시킨다(재시작 불필요).

@@ -53,5 +53,10 @@ while true; do
   echo "===== [$(date +%H:%M:%S)] 리스너 시작 ====="
   python -m src.main
   echo "===== [$(date +%H:%M:%S)] 리스너 종료(exit=$?) — 3초 후 재시작 ====="
+  # [고아 워커 정리(2026-06-23, 사용자)] 리스너가 죽으면 SDK가 setsid로 띄운 워커 CLI(_bundled/claude)는
+  # 부모를 잃고 init에 재부모돼 *살아남는다* — 새 리스너와 끊긴 채 작업공간을 계속 편집(통합 안 됨·새
+  # 워커와 경합·고아 누적). 재시작 전 이 venv의 워커만 정리한다(에이전트의 런처 'claude'는 _bundled
+  # 경로가 아니라 안 걸림). 라이브 P-030: 옛 워커 고아가 디스코드와 끊긴 채 파일만 만지던 것 차단.
+  pkill -f "_bundled/claude" 2>/dev/null && echo "  [정리] 끊긴 고아 워커 종료"
   sleep 3
 done
