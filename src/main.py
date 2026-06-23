@@ -136,7 +136,11 @@ def projects_to_resume(projects: dict, already_channels: set, main_channel) -> l
             # 재개하지 않는다 — 상태는 보존(체크포인트)되므로 사용자가 그 채널로 돌아오면 그때 재개된다.
             # 사용자가 그 프로젝트에 활동하면(피드백) recovery_attempted가 해제돼 다시 자동 재개 대상이
             # 된다(능동 반복 작업은 안 막고, 버려진 좀비만 멈춤 — 시간 임계값·우선순위 없음, 활동 신호로만).
-            if p.get("recovery_attempted") == (p.get("open_task") or {}).get("task_id"):
+            # [컨테이너 죽음 보존(2026-06-23, 사용자: P-031 정지)] 가드는 *유휴* 박제 좀비만 멈춘다 —
+            # *진행 중 위임 체인(active_chain depth>0)*이 살아 있으면 컨테이너에 죽은 활성 작업이므로
+            # 가드 무시하고 재개(한 부팅에 한 프로젝트만 깨우고 다른 활성 프로젝트가 정지하던 것 교정).
+            ot = p.get("open_task") or {}
+            if p.get("recovery_attempted") == ot.get("task_id") and not ot.get("active_chain"):
                 continue
             out.append(p)
     return out
@@ -502,8 +506,13 @@ async def run() -> None:
                 # *매 부팅마다 무한 재발사*됐다 — 그 흐름이 베턴/주의를 점유해 사용자의 새 메시지가 묻힌다.
                 # projects_to_resume와 동일하게: ① 이미 자동 1회 재개됐고 사용자 활동이 없으면 재발사 안 함,
                 # ② 처음이면 재발사하고 '자동 1회 재개됨'으로 표시(record_user_feedback이 사용자 활동 시 해제).
-                if ot and grad.get("recovery_attempted") == ot.get("task_id"):
-                    log.info("부팅 복구: 원요청이 %s로 졸업했으나 이미 자동 1회 재개됨 → 재발사 안 함(사용자 활동 시 재무장)",
+                # [컨테이너 죽음 보존(2026-06-23, 사용자: P-031 정지)] '이미 1회 재개됨' 가드는 *유휴*(active_chain
+                # 없는) 박제 좀비만 멈춘다. *진행 중인 위임 체인(depth>0)*이 살아 있으면 — 이건 사용자가 버린 게
+                # 아니라 컨테이너에 죽은 활성 작업이므로 — 가드를 무시하고 재개한다(한 부팅에 한 프로젝트만 깨우고
+                # 다른 활성 프로젝트가 영영 정지하던 라이브 P-030/P-031 핑퐁 교정).
+                if (ot and grad.get("recovery_attempted") == ot.get("task_id")
+                        and not (ot.get("active_chain"))):
+                    log.info("부팅 복구: 원요청이 %s로 졸업했으나 이미 자동 1회 재개됨(유휴) → 재발사 안 함(사용자 활동 시 재무장)",
                              grad.get("id"))
                 elif ot:
                     log.info("부팅 복구: 원요청이 %s로 졸업 + 미완 Task 존재 → 프로젝트 채널 개입으로 이어가기",
