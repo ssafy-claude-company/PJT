@@ -849,6 +849,21 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             return _ok("Work 위임 거부: 이 Task의 Goal이 아직 확정되지 않았습니다. 먼저 동료와 request(Info)로 "
                        "목표를 합의하고 set_goal로 확정한 뒤 Work로 맡기세요(목표는 팀 합의의 산물 — 선분배 금지).")
         me_is_leader = (me_id == flow.leader)
+        # [회로차단기 정지(2026-06-23 S1a 보강) — 경보는 '멈추게'도 해야 한다] loop_escalated가 켜졌는데도
+        # 검증 cross-check Work가 또 들어오면(=사람이 아직 판정 안 함) 새 검증 워커를 띄우지 않는다. 종전
+        # 회로차단기는 경보만 1회 띄우고 흐름은 그대로 루프→사람 부재 시 밤새 토큰을 태웠다(라이브 P-031: 경보
+        # 후에도 검증 계속). 검증 위임을 *보류*하고 '① complete_task 마감 / ② 사용자 방향 제시'를 기다린다.
+        # owner 수정 Work·complete_task는 안 막으므로 데드락이 아니다(리더가 언제든 마감으로 빠져나갈 수 있음).
+        # 정상 e2e는 12회 전에 수렴하므로 이 블록에 닿지 않는다(병리적 루프에서만 작동).
+        if (kind == Kind.WORK and flow.current and getattr(flow.current, "loop_escalated", False)
+                and _is_verifier(flow._info(to) or "") and int(to) != (flow.current.owner or -1)):
+            if flow.log:
+                flow.log("loop_escalated_block", to=to, cross=flow.current.cross_checks)
+            return _ok(
+                f"[수렴 경보 — 검증 보류] 이 Task는 교차검증 {flow.current.cross_checks}회로 *사람 판정 대기 중*입니다 "
+                f"(이미 사용자에게 에스컬레이트됨). 추가 검증을 띄우지 마세요 — 같은 문제를 반복 검증하는 루프입니다. "
+                f"**① 검증이 충분하면 complete_task로 마감**하거나, **② 사용자가 방향을 제시할 때까지 기다리세요**. "
+                f"(코드를 *고친* 뒤의 재검증·다른 작업은 사용자 개입으로 경보가 해제된 뒤 가능합니다.)")
         # [검증 종료상태 — 재검증 dedup(2026-06-23 전수감사, 사용자 '검증 집계'; 리뷰F1 교정)] *이미 이 산출물을
         # 독립검증한 그 검증자*(to in cross_checkers)에게, *코드가 변경되지 않았는데*(writes 불변) 또 검증을 맡기려
         # 하면 막는다 — 복구마다·결함 못 고친 채 "최종 검증"을 반복 요청하던 무한 루프(P-031 ~13회, 1346 run) 차단.

@@ -1791,7 +1791,27 @@ class Sys:
                 resumed = await self._restore_open_task(flow, proj)
             except Exception:
                 resumed = None   # 복원 실패는 흐름 자체를 막지 않는다(스코프 유령화 방지)
+            # [회로차단기 해제 — 사람이 방향을 줬을 때만(2026-06-23 S1a)] 수렴 경보로 검증이 멈춘(loop_escalated)
+            # Task에 *사람의 새 개입*이 오면 그게 곧 '② 방향 제시'다 — 경보를 풀어 검증을 재개한다. 단 *부팅 복구
+            # 자동 이어가기*([부팅 복구/[SYS 마커)는 사람 판정이 아니므로 풀지 않는다(리클레임마다 풀려 다시 밤새
+            # 태우는 것 방지 — 경보는 사람이 답할 때까지 영속).
+            _unescalated_by_user = False
+            if (resumed and flow.current is not None
+                    and getattr(flow.current, "loop_escalated", False)
+                    and not (user_text or "").lstrip().startswith(("[부팅 복구", "[SYS"))):
+                flow.current.loop_escalated = False
+                _unescalated_by_user = True
+                self._log("loop_escalated_cleared_by_user", project=proj.get("id"),
+                          task=getattr(flow.current, "task_id", "?"))
+                try:
+                    self._checkpoint_open_task(flow)
+                except Exception:
+                    pass
             resume_note = ""
+            if _unescalated_by_user:
+                resume_note += ("[수렴 경보 해제 — 사용자가 방향을 제시함] 이전에 교차검증 루프로 '사람 판정 대기'였던 "
+                                "이 Task에 방금 사용자 개입이 왔습니다. 경보를 풀었으니 이 지시를 새 방향으로 삼아 "
+                                "진행하세요(검증 재개 가능). 같은 루프로 되돌아가지 말고 이 지시에 맞춰 고치세요.\n\n")
             if resumed:
                 resume_note = (
                     f"[진행 중이던 Task 복원됨 — '더 진행해'의 대상일 가능성이 큼] 이 프로젝트엔 아직 끝나지 않은 "

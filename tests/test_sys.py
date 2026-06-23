@@ -5042,3 +5042,40 @@ def test_재검증dedup_F1_이미검증한검증자만_차단():
     f.writes_by_role = {"x": 9}
     r3 = asyncio.run(t["request"].handler({"to_id": "13", "kind": "Work", "body": "수정본 재검증"}))
     assert "재검증 보류" not in r3["content"][0]["text"]
+
+
+def test_회로차단기_경보후_검증보류_S1a():
+    """[회로차단기 S1a 보강] loop_escalated(수렴 경보)가 켜지면 검증자(비-owner)에게 가는 Work cross-check를
+    *보류*해 새 검증 워커 스폰을 막는다(사람 부재 시 밤새 토큰 태우는 루프 정지). owner 수정 Work·비검증자
+    위임은 안 막아 데드락이 아니다(리더가 마감·수정으로 빠져나갈 길 유지). 경보 OFF면 정상 통과."""
+    g = FakeGuide()
+    f = Flow(g, channel_id=510, guild_id=1, leader_id=11,
+             bot_info={11: "L", 12: "백엔드", 13: "QA", 14: "QA2"})
+    f.start_root("root")
+    for _a in ("gap_checked", "percept_checked", "acceptance_checked", "decomp_checked",
+               "data_prov_checked", "staffing_exempt", "iface_dialogue_checked",
+               "offdomain_checked", "crossdomain_checked", "reverify_checked"):
+        setattr(f, _a, True)   # 다른 게이트·재검증dedup 모두 우회 — 회로차단기 블록만 활성 테스트
+
+    async def wake(to, b, k):
+        return "검증 완료"
+    f.wake = wake
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13,14"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13,14"}))
+    f.current.participated.update({12, 13, 14})
+    asyncio.run(t["set_goal"].handler({"goal": "동작"}))
+    f.current.owner = 12
+    f.current.owner_delivered = True
+    UNIQ = "수렴 경보 — 검증 보류"   # '재검증 보류'와 겹치지 않게 회로차단기 고유 문구로 단언
+    # ① 경보 OFF → 검증자(13)에게 검증 Work 정상 통과
+    f.current.loop_escalated = False
+    r0 = asyncio.run(t["request"].handler({"to_id": "13", "kind": "Work", "body": "검증해줘"}))
+    assert UNIQ not in r0["content"][0]["text"]
+    # ② 경보 ON → 검증자(13, 비-owner)에게 가는 검증 Work는 보류(새 검증 워커 스폰 차단)
+    f.current.loop_escalated = True
+    r1 = asyncio.run(t["request"].handler({"to_id": "13", "kind": "Work", "body": "또 검증해줘"}))
+    assert UNIQ in r1["content"][0]["text"]
+    # ③ 경보 ON이어도 owner(12, 비검증자) 수정 Work는 안 막음 — 고치는 길은 열려 있어야(데드락 방지)
+    r2 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "고쳐줘"}))
+    assert UNIQ not in r2["content"][0]["text"]
