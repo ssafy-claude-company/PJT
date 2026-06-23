@@ -4888,10 +4888,11 @@ def test_완료게이트통과_gate_pass_스냅샷복원_왕복():
     assert ("percept", "다른Task") not in f2._gate_pass   # 타 Task 통과는 안 옴
 
 
-def test_위임사실_영속_및_검증자owner_리셋():
-    """[work_delegated 영속 + 검증자 owner 차단(2026-06-23, 사용자)] (1) '리더가 위임했다'는 사실이 복구 너머
-    유지돼야 SYS 자동위임('위임 0회 헛돈다')이 오발동 안 함. (2) 복구의 깊은-워커 덮어쓰기가 검증자(QA)를
-    구현 owner로 박던 것 — 복원 시 검증자 owner는 0으로 리셋(마감이 'QA 인도' 기다리다 안 닫히던 결함)."""
+def test_완료검증사실_영속_owner_delivered_cross_checks_work_delegated():
+    """[완료 검증 사실 영속(2026-06-23, 사용자 — 마감 안 닫히던 진짜 원인)] owner 인도(owner_delivered)·
+    교차검증(cross_checks)·위임 사실(work_delegated)은 복구 너머 영속해야 마감이 닫힌다. 종전엔 0/False
+    리셋이 복구마다 인도·교차검증 핸드셰이크를 다시 요구해(이 환경은 재시작 잦음) 마감이 영영 안 됐다.
+    owner 정체는 그대로 유지(QA도 정당한 owner — '첫 수신자=소유' 모델은 옳음). verified만 종전대로 0."""
     g = FakeGuide()
     s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드", 13: "QA"})
     f = _flow(g, leader=11)
@@ -4900,17 +4901,18 @@ def test_위임사실_영속_및_검증자owner_리셋():
     asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
     f.current.work_delegated = 2
     f.current.work_delegated_to = {12}
-    f.current.owner = 13                     # QA(13)가 owner로 박힘(복구 깊은-워커 덮어쓰기 시뮬)
-    f.current.status.owner = "QA"
+    f.current.owner = 12
+    f.current.owner_delivered = True      # owner가 검증된 산출물을 인도함
+    f.current.cross_checks = 1            # 다른 멤버가 교차검증함
     snap = s._task_snapshot(f, f.current)
-    # (1) 위임 사실 직렬화
-    assert snap["work_delegated"] == 2 and snap["work_delegated_to"] == [12]
+    # 직렬화: 인도·교차검증·위임 사실
+    assert snap["owner_delivered"] is True and snap["cross_checks"] == 1 and snap["work_delegated"] == 2
     # 복원
     f2 = _flow(g, leader=11)
     f2.pool = [11, 12, 13]
-    f2._info = lambda i: {11: "L", 12: "백엔드", 13: "QA"}.get(i, "")   # 복원이 owner 직군을 알아야 검증자 판정
     asyncio.run(s._restore_open_task(f2, {"id": "P-1", "open_task": snap}))
-    # (1) 위임 사실 복원 → SYS 자동위임 오발동 방지
+    # 인도·교차검증·위임 사실 복원 → 복구 후 마감 핸드셰이크 반복 안 함
+    assert f2.current.owner_delivered is True and f2.current.cross_checks == 1
     assert f2.current.work_delegated == 2 and 12 in f2.current.work_delegated_to
-    # (2) 검증자 owner(QA)는 0으로 리셋 — QA가 구현 owner로 안 박힘
-    assert f2.current.owner == 0 and f2.current.status.owner == ""
+    # owner가 인도했으니 복구가 미완(owner_incomplete)으로 안 잡음 → 리더가 마감 가능
+    assert f2.current.owner_incomplete is False

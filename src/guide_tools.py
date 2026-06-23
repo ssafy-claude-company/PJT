@@ -1107,6 +1107,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 flow.current.owner_incomplete = True
             if is_owner_work and owner_acted and _is_substantive(result):
                 flow.current.owner_delivered = True   # 이 owner가 실작업+응답을 냈다 → complete_task 허용 근거
+                _ckpt(flow)              # [인도 사실 영속] 복구가 인도 핸드셰이크를 다시 요구하지 않게(마감 닫힘)
             try:
                 await g.send_response(thread_id, to, req, result)
                 await _react(g, thread_id, req, "⚠️" if failed else "✅")  # 상태=이모지(해소/실패)
@@ -1214,6 +1215,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 _vd = {_norm_job(j) for j in _jobs_of(flow._info(to) or "")} - {""}
                 if _od and _vd and not (_od & _vd):
                     flow.current.cross_check_offdomain += 1
+                _ckpt(flow)              # [교차검증 사실 영속] 복구가 교차검증을 다시 요구하지 않게(마감 닫힘)
             flow.req_results[dupkey] = result   # 같은 턴 병렬 중복요청이 재사용할 응답 캐시(동료 재호출 방지)
             return _ok(f"[{to} 응답] {_speech_clip(result, 4000)}{receipt}")
 
