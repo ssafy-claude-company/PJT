@@ -852,10 +852,15 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 and not getattr(flow, "crossdomain_checked", False)):
             my_jobs = {_norm_job(j) for j in _jobs_of(flow._info(me_id) or "")} - {""}
             to_jobs = {_norm_job(j) for j in _jobs_of(flow._info(to) or "")} - {""}
-            same_domain = bool(my_jobs & to_jobs)
             to_verifier = _is_verifier(flow._info(to) or "")
             cap_hit = _offdomain_capability_hit(flow, to, body)   # 같은 도메인이라도 내 도메인 밖 능력 요구면 hit
-            if (not same_domain or cap_hit) and not to_verifier:
+            # [회귀 교정(2026-06-23, 사용자: '대화가 난장판') — 'not same_domain' 블랭킷 차단 제거] 단지 도메인이
+            # 다르다는 이유만으로 정상 교차도메인 협업(적임자에게 위임)까지 막아 리더 조율 큐로 보냈고, 그게
+            # '[SYS 조율 — 막혀 배정]'·'[직군초과]' 난장판의 뿌리였다(라이브: crossdomain_blocked 140건 중 다수가
+            # caps=[] = 능력 미스매치 없는 false-positive — 프론트엔드→데이터엔지니어 정상 협업까지 차단). 설계
+            # 의도는 '의미없는 교차도메인 위임만 차단'인데 구현이 *모든* 교차도메인 Work를 막았다. 진짜 능력
+            # 미스매치(cap_hit — 그 능력을 가진 다른 전문가가 있는데 못 가진 이에게 맡김)일 때만 리더로 돌린다.
+            if cap_hit and not to_verifier:
                 if flow.log:
                     flow.log("work_crossdomain_blocked", frm=me_id, to=to, my=sorted(my_jobs),
                              to_jobs=sorted(to_jobs), caps=list(cap_hit.keys()), seg=flow.leader_segment)
