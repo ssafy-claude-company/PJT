@@ -325,3 +325,25 @@ class CommunicationManager:
             self.alive = self.origin
         self.history.append(("report_up", int(reporter_id), int(owner_id), len(sub_chain), reason))
         return sub_chain
+
+    def restore_chain(self, frames: list) -> int:
+        """[정밀 복구 — 내부 상태 복원(2026-06-23, 사용자)] 끊긴 위임 체인(A→B→C)을 *채팅 재발행 없이*
+        comm 스택으로 그대로 재구성한다. frames=[{from,to,kind,body}, ...] (위→아래 순 = active_chain).
+
+        스택을 원래대로 쌓고 alive=가장 깊은 워커(체인 끝)로 둔다 — 그 워커부터 재개하면 끝났을 때
+        respond가 C→B→A로 자연 unwind돼 **각자 범위가 보존**된다: C는 C 일, B는 B의 통합(C 산출물),
+        A는 A의 통합(B 산출물). 종전 평탄화(리더→C 직접 1요청)는 B를 빼먹어 C/리더가 B 일까지 떠안았다
+        (사용자: '범용적 잘못된 구현'). 이건 A→B→C를 채팅으로 다시 치는 게 아니라 **상태 복원**이다 —
+        끊긴 C에서 바로 재개. 반환=가장 깊은 워커(재개 대상)."""
+        if self.done:
+            raise CommError("이미 종료된 흐름은 체인 복원 불가")
+        self._stack = [
+            Frame(int(f.get("from")), int(f.get("to")), str(f.get("request_id") or "recover"),
+                  str(f.get("kind") or "work"), body=(f.get("body") or ""))
+            for f in (frames or [])
+        ]
+        if self._stack:
+            self.alive = self._stack[-1].to_id    # 가장 깊은 워커(체인 끝)부터 재개
+            self.done = False
+        self.history.append(("restore_chain", len(self._stack), self.alive))
+        return self.alive

@@ -115,3 +115,35 @@ def test_상류보고_활성아닌_보고자_거부():
     m.request(B, C, "r2")            # alive=C
     with pytest.raises(CommError):
         m.report_up_to(B, A)        # 활성은 C인데 B가 보고 시도
+
+
+# ── 정밀 복구: 체인 내부 복원(restore_chain) — 평탄화 없이 가장 깊은 워커부터 재개 ──────────
+# 끊긴 A→B→C를 채팅 재발행 없이 스택으로 복원 → 가장 깊은 C부터 재개 → 끝나면 C→B→A 자연 unwind.
+
+def test_정밀복구_체인내부복원_가장깊은워커재개_자연unwind():
+    """[정밀 복구 — 내부 상태 복원] active_chain(A→B→C→D)을 채팅 재발행 없이 스택으로 복원하고 가장
+    깊은 D부터 재개. 끝나면 respond가 D→C→B→A로 자연 unwind — 각자 범위 보존(평탄화로 중간 안 빼먹음)."""
+    D = 4
+    m = CommunicationManager(A)
+    frames = [                                      # 위→아래 순(active_chain 형태)
+        {"from": A, "to": B, "kind": "work", "body": "A→B 원문"},
+        {"from": B, "to": C, "kind": "work", "body": "B→C 원문"},
+        {"from": C, "to": D, "kind": "work", "body": "C→D 원문"},
+    ]
+    deepest = m.restore_chain(frames)
+    assert deepest == D and m.is_alive(D)           # 가장 깊은 워커부터 재개(리더→C 평탄화 아님)
+    assert len(m.open_requests) == 3 and not m.done  # 체인 그대로 복원
+    assert m.open_requests[-1].body == "C→D 원문"    # 끊긴 그 깊이의 원문 보존
+    # 끝났을 때 자연 unwind — 각자 범위 보존
+    m.respond(D); assert m.is_alive(C) and not m.done   # D 완료 → C가 통합(C 범위)
+    m.respond(C); assert m.is_alive(B) and not m.done   # C 완료 → B가 통합(B 범위)
+    m.respond(B); assert m.is_alive(A) and m.done       # B 완료 → A 복귀·종료
+
+
+def test_정밀복구_체인내부복원_종료흐름은거부():
+    """종료된 흐름엔 체인 복원 불가(유령 복원 차단)."""
+    m = CommunicationManager(A)
+    m.request(A, B, "r1"); m.respond(B)
+    assert m.done
+    with pytest.raises(CommError):
+        m.restore_chain([{"from": A, "to": B, "kind": "work", "body": "x"}])
