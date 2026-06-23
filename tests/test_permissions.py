@@ -354,13 +354,22 @@ def test_소유경계_미소유_새파일_허용_및_생성직군_귀속():
     assert persisted                                                    # 영속 콜백 호출
 
 
-def test_소유경계_리더는_면제():
-    """리더(조율자)는 소유 경계 면제 — 어느 파일이든 편집 가능(리더 자체 흡수 게이트는 별도)."""
+def test_소유경계_리더도_타도메인_차단_S2():
+    """[S2 협업재설계 — 리더 대리구현 차단(게이트4)] 리더도 *타 도메인 owner 파일*은 편집 차단(owner에게 위임).
+    단 자기 도메인·미소유(통합) 파일은 자유 — '팀장만 구현·팀원 기여 0'을 구조로 막아 팀원이 기여하게."""
     flow = _FakeFlow2(_comm_with((0, 11, Kind.WORK)), current=_FakeTask(owner=0), leader=11)
-    flow._info = lambda i: {11: "프로젝트 매니저"}.get(i, "")
-    flow.file_owner = {os.path.realpath("/ws/server.js"): "백엔드"}
-    assert _run(make_pre_tool_use_hook(FakeAudit(), ALLOWED, actor=11, flow=flow),
-                "Edit", {"file_path": "server.js"}) == {}
+    flow._info = lambda i: {11: "게임 기획자"}.get(i, "")   # 리더 = 게임 기획자 도메인
+    flow.persist_owner = lambda: None
+    flow.file_owner = {os.path.realpath("/ws/server.js"): "백엔드",
+                       os.path.realpath("/ws/game.js"): "게임 기획자"}
+    pre = make_pre_tool_use_hook(FakeAudit(), ALLOWED, actor=11, flow=flow)
+    # ① 타 도메인(백엔드) 파일 → 리더도 차단
+    out = _run(pre, "Edit", {"file_path": "server.js"})
+    assert out != {} and "소유 경계" in str(out)
+    # ② 자기 도메인(게임 기획자) 파일 → 허용(자기 직군은 직접)
+    assert _run(pre, "Edit", {"file_path": "game.js"}) == {}
+    # ③ 미소유(새) 파일 → 허용(통합 산출물 등)
+    assert _run(pre, "Write", {"file_path": "integration.js"}) == {}
 
 
 def test_흡수차단_같은도메인_idle은_차단안함_그리고_도달불가_통과():

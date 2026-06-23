@@ -277,10 +277,12 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
         # 9) [소유-기반 도메인 경계(2026-06-23, 사용자) — 키워드 분류 폐기, *기록된 소유*로 강제] 파일 도메인을
         #    *추측*(키워드/_CAPS/확장자 — 무한 하드코딩·거짓양성)하지 않고, *누가 만들었나*(file_owner)로 막는다.
         #    이 파일을 *다른 직군*이 만들었으면 그건 그 직군 산출물 → 직접 Edit 금지. 결함은 보고(검증만)하거나
-        #    owner에게 request(Work)로 수정 요청(개선권한). 자기 직군 파일·미소유(새 파일)는 자유. 리더(조율자)는
-        #    면제(자체 흡수 게이트 별도). 소유는 PostToolUse가 경험적으로 기록(아래 'deny 통과 후' 블록).
+        #    owner에게 request(Work)로 수정 요청(개선권한). 자기 직군 파일·미소유(새 파일)는 자유.
+        #    [S2 협업재설계 2026-06-23 — 리더 대리구현 차단(게이트4 복원)] 종전엔 리더를 면제했으나, 리더가
+        #    *타 도메인 owner 산출물*까지 직접 고쳐 "팀장만 구현·팀원 기여 0"이 됐다(사용자 핵심 우려). 리더도
+        #    동일 적용 — *자기 직군·통합 산출물*(자기 도메인=_mydoms 또는 미소유)은 자유지만, owner 있는 *타 도메인*
+        #    파일은 차단해 owner에게 위임하게 한다("Work보다 Leading", Task.md). 자체 흡수 게이트는 별도 유지(중첩).
         if (tool in ("Write", "Edit") and flow is not None and actor is not None
-                and actor != getattr(flow, "leader", None)
                 and getattr(flow, "file_owner", None)
                 and callable(getattr(flow, "_info", None))):
             _opath = tool_input.get("file_path") or tool_input.get("path")
