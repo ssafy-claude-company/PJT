@@ -141,6 +141,11 @@ def projects_to_resume(projects: dict, already_channels: set, main_channel) -> l
             # *진행 중 위임 체인(active_chain depth>0)*이 살아 있으면 컨테이너에 죽은 활성 작업이므로
             # 가드 무시하고 재개(한 부팅에 한 프로젝트만 깨우고 다른 활성 프로젝트가 정지하던 것 교정).
             ot = p.get("open_task") or {}
+            # [수렴 경보 = 파킹(2026-06-23 S1a)] 사람 판정 대기(loop_escalated) Task는 자동 재개 안 함 —
+            # 진행 중 체인(active_chain)이 있어도 무시하고 파킹(라이브 P-031: 워커가 15GB로 머신 전역 OOM →
+            # 자동 재개가 스택 전체 위협). 사람이 채널에 글 쓰면(개입) 경보가 풀리고 정상 재개된다.
+            if ot.get("loop_escalated"):
+                continue
             if p.get("recovery_attempted") == ot.get("task_id") and not ot.get("active_chain"):
                 continue
             out.append(p)
@@ -590,6 +595,25 @@ async def run() -> None:
             # 안 함(버려진 좀비가 공유 전문가를 영구 점유해 활성 요청을 굶기는 것 차단). 활동 시 해제.
             p["recovery_attempted"] = (p.get("open_task") or {}).get("task_id")
             sysm._save_projects()
+    # [수렴 경보 = 파킹 — 자동 재개 금지(2026-06-23 S1a)] 사람 판정 대기(loop_escalated) Task는 컨테이너
+    # 리클레임마다 워커를 다시 띄우지 않는다 — 사람이 ①수용/②방향제시할 때까지 영속 파킹한다. 라이브 P-031:
+    # 워커가 15GB로 부풀어 머신을 전역 OOM(OOM킬러가 리스너·이웃 프로세스까지 위협)시키는 메모리폭탄이라,
+    # 자동 재개가 곧 스택 전체 위협이었다(컨테이너죽음 보존 경로가 active_chain 핑계로 매 부팅 재발사). 모든
+    # 복구 경로가 프로젝트 채널을 pendings에 싣으므로 여기 단일 지점에서 거른다. 사람이 채널에 글을 쓰면
+    # (개입) handle_user_input이 경보를 풀고 정상 재개한다(자동 부팅복구만 막고 사람 개입은 막지 않는다).
+    def _proj_of(_c):
+        pj = sysm.projects
+        return (pj.get(_c) or pj.get(str(_c))
+                or (pj.get(int(_c)) if str(_c).lstrip("-").isdigit() else None))
+    if pendings:
+        _kept = []
+        for _ch, _req in pendings:
+            _p = _proj_of(_ch)
+            if _p and (_p.get("open_task") or {}).get("loop_escalated"):
+                log.info("부팅 복구 건너뜀(수렴 경보 파킹) ch=%s — 사람 판정 대기 Task는 자동 재개 안 함(사용자 개입 시 재개)", _ch)
+                continue
+            _kept.append((_ch, _req))
+        pendings = _kept
     if pendings:
         async def _recover_one(ch, req):
             log.info("부팅 복구: 미응답 [Request] 재처리 ch=%s: %r", ch, (req.body or '')[:60])
