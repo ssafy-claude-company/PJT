@@ -1676,7 +1676,27 @@ class Sys:
                             f"구성원이 아닙니다(필요하면 recruit로 합류부터).\n\n")
                     except Exception:
                         team_note = ""   # 사실 주입은 best-effort — 형식이 다른 Task여도 이어가기는 진행
-                result = await self.run_turn(flow, lead, _CONTINUE_BODY + team_note + drained,
+                # [리더 조율 강제(2026-06-23, 사용자)] 게이트가 막아 리더에게 올린 교차도메인 조율 큐를
+                # 'SYS가 확인한 사실'로 주입한다 — 워커가 막혔다고 보고한 걸 리더가 '핑계'로 묵살하고 같은
+                # 워커에게 일만 재발사하던 루프(라이브 P-030 backend2↔PM 핑퐁)를 끊는다. 리더가 *직접* 해당
+                # 도메인 전문가에게 위임하게 한다(이게 리더의 조율 책임 — '단순 분배'가 아니라).
+                coord_note = ""
+                coord = getattr(flow, "pending_coordination", None) or []
+                if coord:
+                    try:
+                        lines = "\n".join(
+                            f"  · {c.get('req_role')}(이/가) **{c.get('to_role')}** 도메인 작업이 필요해 막혔습니다 "
+                            f"→ 당신이 그 도메인 팀원에게 request(Work)로 **직접 위임**하세요: {(c.get('body') or '')[:140]}"
+                            for c in coord)
+                        coord_note = (
+                            "[조율 필요 — SYS가 확인한 사실(워커 핑계 아님)] 아래 교차도메인 작업이 게이트에 막혀 "
+                            "**당신에게 이관**됐습니다. 워커에게 '그냥 하라'고 되돌리지 말고, **당신이 직접 해당 "
+                            "도메인 전문가에게 request(Work)로 위임**해 조율하세요(이게 리더의 일입니다 — 단순 분배가 "
+                            "아니라 누가 무엇을 해야 하는지 판단·배정):\n" + lines + "\n\n")
+                    except Exception:
+                        coord_note = ""
+                    flow.pending_coordination = []   # 주입했으니 소비(다음 턴에 중복 주입 방지)
+                result = await self.run_turn(flow, lead, _CONTINUE_BODY + coord_note + team_note + drained,
                                              Kind.WORK, "leader")
             # 이어가기 한도 소진/마감 후에도 완주 중인 위임이 있으면 그 결과까지 받아 보고에 붙인다
             # (작업 유실 방지 — 마지막 위임이 마감 직전에 끝나는 경우).

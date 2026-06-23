@@ -2475,13 +2475,21 @@ def test_비리더_교차도메인_Work_게이트():
             f.comm.request(11, 12, "r1", Kind.WORK)                # 베턴 → 12(비-리더)
         return g, f
 
-    # ① 교차도메인 새 Work(백엔드 12 → 프론트엔드 15, 비-QA) → 차단·리더 리다이렉트 + 구조 로그
+    # ① 교차도메인 새 Work(백엔드 12 → 프론트엔드 15, 비-QA) → 보류·리더 조율 큐 이관 + 구조 로그
     g, f = primed(); logged = []; f.log = lambda ev, **kw: logged.append((ev, kw))
     r = asyncio.run(_tools(f, 12, "member")["request"].handler(
         {"to_id": "15", "kind": "Work", "body": "로그인 화면 만들어"}))
     txt = r["content"][0]["text"]
-    assert "교차도메인" in txt and "리더" in txt and "보고" in txt and "자문" in txt
+    assert "교차도메인" in txt and "리더" in txt and "이관" in txt    # 리더 조율 큐로 이관
     assert any(ev == "work_crossdomain_blocked" for ev, _ in logged)
+    # [리더 조율 강제(2026-06-23)] 막힌 교차도메인 Work가 리더 조율 큐에 적재됐는지 — 리더가 다음 턴에
+    # 'SYS 확인 사실'로 받아 직접 그 도메인에 위임하게(워커 핑계 묵살 루프 차단).
+    assert len(f.pending_coordination) == 1
+    assert f.pending_coordination[0]["requester"] == 12 and f.pending_coordination[0]["to"] == 15
+    # 중복 적재 방지: 같은 (요청자→대상) 재시도해도 큐는 1건 유지
+    asyncio.run(_tools(f, 12, "member")["request"].handler(
+        {"to_id": "15", "kind": "Work", "body": "로그인 화면 또 만들어"}))
+    assert len(f.pending_coordination) == 1
 
     # ② 같은 도메인 분담(백엔드 12 → 백엔드 13) → 허용(차단 문구 없음)
     g, f = primed()

@@ -554,6 +554,10 @@ class Flow:
         self._deploy_count = 0         # [런어웨이 차단] 흐름당 실배포 횟수 — 상한 넘으면 차단+사용자 보고로
                                        #   에스컬레이트(라이브 P-028: 깨진 배포를 코드 바꿔가며 23회 재배포한 루프 방지)
         self.pending_clarify = None    # 위임자에게 되묻기(확인요청 반환) 임시 보관
+        self.pending_coordination = [] # [리더 조율 강제(2026-06-23)] 게이트가 막은 비-리더 교차도메인 Work를
+                                       #   리더 다음 턴에 'SYS 확인 사실'로 주입할 큐 — 워커가 핑계로 보고하고
+                                       #   리더가 묵살·재발사하던 루프(P-030 backend2↔PM 핑퐁) 차단. 리더가
+                                       #   직접 그 도메인 전문가에게 위임하게 한다(sys_core continue 루프에서 소비).
         self.leader_segment = 0        # 리더 턴 세그먼트 번호(시작=1, continue마다 +1) — 관측용
         self.req_results = {}          # (seg,from,to,kind,body)->응답: 같은 턴 병렬 중복요청 합치기용 캐시
         self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로
@@ -846,13 +850,25 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 if flow.log:
                     flow.log("work_crossdomain_blocked", frm=me_id, to=to, my=sorted(my_jobs),
                              to_jobs=sorted(to_jobs), caps=list(cap_hit.keys()), seg=flow.leader_segment)
-                _dbg(f"{tag} ✗거부:비리더 교차도메인")
+                _dbg(f"{tag} ✗보류→리더조율큐:비리더 교차도메인")
+                # [리더 조율 강제(2026-06-23, 사용자)] 막힌 교차도메인 Work를 그냥 거부하지 않고 '리더 조율
+                # 큐'에 적재한다 — 워커가 이를 '핑계'로 보고하고 리더가 묵살·재발사하던 라이브 루프(P-030
+                # backend2↔PM 핑퐁)를 끊기 위함. sys_core continue 루프가 이 큐를 리더 다음 턴에 'SYS 확인
+                # 사실'로 주입해 리더가 *직접* 그 도메인 전문가에게 위임하게 한다. 같은 (요청자→대상)은 중복 적재 X.
+                try:
+                    if not any(c.get("requester") == me_id and c.get("to") == to
+                               for c in flow.pending_coordination):
+                        flow.pending_coordination.append({
+                            "requester": me_id, "req_role": flow._info(me_id) or str(me_id),
+                            "to": to, "to_role": flow._info(to) or str(to),
+                            "to_jobs": sorted(to_jobs), "body": (body or "")[:500]})
+                except Exception:
+                    pass
                 return _ok(
-                    f"위임 거부(교차도메인 새 Work — 리더 조율 사안): 당신({flow._info(me_id)})은 다른 도메인의 "
-                    f"새 작업을 직접 맡길 수 없습니다 — 분담은 같은 도메인 동료, 검증은 QA로 하세요. 이 일이 "
-                    f"필요하면 **리더에게 보고**해 리더가 전체를 보고 적임 전문가에게 배정하게 하세요. 막히거나 "
-                    f"궁금하면 request(Info)로 그 전문가에게 **자문**하세요(자문·검증은 언제든 자유·권장). "
-                    f"같은 도메인 분담과 QA 검증 요청은 그대로 가능합니다.")
+                    f"위임 보류(교차도메인 — **리더 조율 큐로 이관됨**): 당신({flow._info(me_id)})은 다른 도메인의 "
+                    f"새 작업을 직접 맡길 수 없어, 이 요청을 **리더에게 조율 사안으로 올렸습니다** — 리더가 그 도메인 "
+                    f"전문가에게 직접 배정합니다. 지금 이 턴은 **당신 도메인의 일을 계속**하세요(막힌 그 부분은 리더가 "
+                    f"처리하니 기다리거나 다른 동료에게 떠넘기지 마세요). 질문·QA 검증은 그대로 자유입니다.")
         # [직군밖 사전 차단 — 리더 라우팅] 능력표로 *위임 전에* 능력 미스매치를 잡아 그 전문가에게 리다이렉트
         # (흡수의 씨앗 차단). 리더는 조율 권한이 있어 직접 적임자에게 보낸다(비-리더는 위 교차도메인 게이트가
         # 이미 리더로 돌렸다). 상세·근거는 _offdomain_capability_hit 참고. offdomain_checked는 테스트 우회 플래그.
