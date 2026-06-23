@@ -61,6 +61,25 @@ _TOOL_REDIRECT = {
 }
 
 
+# [파일 도메인 신호 — 흡수 게이트 file-aware(2026-06-23)] 공유 _CAPS의 need는 자연어 본문(한국어)용이라
+# 코드 파일 경로/내용(영어·확장자)에선 도메인이 새어(예: model/train.js → AI인데 한국어 키워드 0). 그래서
+# _CAPS 능력명별로 *파일 지향* 신호를 더해 교차도메인 Write를 식별한다. 키워드는 *구체적*으로만 — 'model'·
+# 'recommend' 같은 일반어는 프론트의 ORM 인터페이스·추천 UI를 오판(false-positive)하므로 제외, 명확한 ML/
+# 파이프라인/DevOps 신호만 넣는다(자기 도메인 Write를 막던 종전 마비를 되살리지 않기 위함).
+_FILE_CAP_KW = {
+    "AI/ML(모델 학습·예측)": (
+        "train", "predict", "inference", "neural", "tensorflow", "pytorch",
+        "torch", "sklearn", "scikit", "keras", ".ipynb", "model.fit", "model.predict",
+        "딥러닝", "머신러닝", "신경망"),
+    "실데이터 수집·파이프라인": (
+        "pipeline", "etl", "crawl", "scrape", "ingest", "공공데이터", "fetch_data"),
+    "데이터 영속·DB": (
+        "schema.sql", "migration", "alembic", "create table", "createtable"),
+    "배포·인프라(DevOps)": (
+        "dockerfile", "docker-compose", "kubernetes", "terraform", "helm", "ci/cd", "cicd"),
+}
+
+
 def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
     """허용 도구만 통과시키고, 파일 쓰기는 작업공간 안으로 제한하는 PreToolUse 훅.
 
@@ -301,6 +320,34 @@ def make_pre_tool_use_hook(audit, allowed, actor=None, role=None, flow=None):
 
                 idle_specialists = [m for m in (getattr(flow.current, "team", None) or [])
                                     if _idle_distinct_reach(m)]
+                # [file-domain 인지 — 자기 도메인 Write는 통과(2026-06-23, 사용자: '전문가는 자기 도메인
+                #  야심껏')] 종전 게이트는 *쓰는 파일을 안 보고* idle 전문가가 하나라도 있으면 행위자의
+                #  *자기 도메인* Write까지 막았다(라이브 규명: SYS가 배정한 프론트 전문가가 idle 동료 10명
+                #  때문에 21분간 0파일 — 협업 마비). 흡수란 '*다른* 도메인 일을 대신함'이므로, 쓰는 *파일*이
+                #  요구하는 능력(_CAPS) 중 행위자 직군이 못 덮고 idle 전문가가 덮는 게 있을 때만 흡수로 보고
+                #  막는다. 자기 도메인 파일(교차 능력 신호 0)은 자유 — owner는 받은 일을 야심껏 구현한다.
+                if idle_specialists:
+                    try:
+                        from .guide_tools import _CAPS
+                        _ftext = " ".join(str(tool_input.get(_k) or "") for _k
+                                          in ("file_path", "path", "content", "new_string")).lower()
+                        _alabel = str(flow._info(actor) or "").lower()
+                        # 파일이 요구하는 능력 중 *행위자 직군이 못 덮는* 것(= 교차도메인 신호). _CAPS need(자연어)
+                        # 와 _FILE_CAP_KW(파일 지향 신호)를 함께 본다. 행위자가 덮는 능력은 자기 도메인 → 스킵.
+                        _file_caps = set()
+                        for _n, _need, _cov in _CAPS:
+                            if _cov(_alabel):
+                                continue
+                            if _need(_ftext) or any(kw in _ftext for kw in _FILE_CAP_KW.get(_n, ())):
+                                _file_caps.add(_n)
+                        if not _file_caps:
+                            idle_specialists = []          # 자기 도메인(교차 신호 0) → 흡수 아님, 통과
+                        else:                              # 파일이 idle 전문가 능력 요구 → 그 전문가만 남김
+                            idle_specialists = [m for m in idle_specialists
+                                                if any(_cov(str(flow._info(m) or "").lower())
+                                                       for _n, _need, _cov in _CAPS if _n in _file_caps)]
+                    except Exception:
+                        pass                               # 능력 판정 불가 시 종전 동작 보존(best-effort)
                 if idle_specialists:
                     _nm = ", ".join(str(flow._info(m) or m) for m in idle_specialists)
                     audit.record("tool_denied", actor=actor, role=role, tool=tool,
