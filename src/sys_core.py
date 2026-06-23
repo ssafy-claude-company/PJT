@@ -120,6 +120,9 @@ class Sys:
             data = json.load(open(path, encoding="utf-8"))
             self.projects = {int(k): v for k, v in data.get("projects", {}).items()}
             self._proj_n = data.get("n", len(self.projects))
+            if not seeded:   # [큐 영속 복원] 시드(커밋 시점 과거)의 큐는 복원 안 함 — 실제 logs 저장분만
+                self.queue = [tuple(item) for item in data.get("queue", [])
+                              if isinstance(item, (list, tuple)) and len(item) >= 3]
             if seeded:
                 for p in self.projects.values():
                     p["seeded"] = True
@@ -132,8 +135,12 @@ class Sys:
         if not self.projects_path:
             return
         try:
+            # [큐 영속(2026-06-23 전수감사)] 대기열도 함께 저장 — 종전 인메모리라 컨테이너 킬에 유실돼
+            # '접수됨, 다시 안 보내도 됨' 약속이 거짓이 됐다(대기 요청 증발). SIGTERM flush가 _save_projects를
+            # 부르므로 죽기 직전 대기열이 디스크에 남고, 부팅 때 _load_projects가 되살린다.
             data = {"n": self._proj_n,
-                    "projects": {str(k): v for k, v in self.projects.items()}}
+                    "projects": {str(k): v for k, v in self.projects.items()},
+                    "queue": [list(item) for item in self.queue]}
             # 원자적 저장: 임시파일에 다 쓰고 flush+fsync 후 교체 → 쓰는 도중 프로세스가 죽어도
             # 원본 projects.json이 '반쪽(깨진 JSON)'으로 남지 않는다(개입 레지스트리 유실 방지).
             tmp = f"{self.projects_path}.tmp-{time.monotonic_ns()}"   # 병렬 흐름 동시 저장 경합 방지
@@ -436,6 +443,7 @@ class Sys:
                        for m in ref.team if int((flow.act_by or {}).get(m, 0) or 0) > 0},
             "contrib_checked": bool(getattr(ref, "contrib_checked", False)),
             "cross_check_offdomain": int(getattr(ref, "cross_check_offdomain", 0) or 0),
+            "last_verify_writes": int(getattr(ref, "last_verify_writes", -1)),
             "run_count": int(getattr(ref, "run_count", 0) or 0),
             "evidence": (getattr(ref, "evidence", "") or "")[:500],
             "cc_held": int(getattr(ref, "cc_held", 0) or 0),
@@ -451,6 +459,11 @@ class Sys:
             "deploy_writes": int(getattr(flow, "_deploy_writes", -1)),
             "writes_by_role": {str(k): int(v) for k, v in (getattr(flow, "writes_by_role", None) or {}).items()},
             "consec_fail": int(getattr(flow, "consec_fail", 0) or 0),
+            # [재위임 런어웨이 차단] 완료된 (위임자→owner) 쌍·redo 카운트를 영속 — 복구가 이미 끝난 일을 Redo로
+            # 인식해 재발사하지 않게(종전 reset_task_tracking 삭제로 churn). comm 레벨 사실.
+            "delivered_pairs": [[int(a), int(b)] for (a, b) in (getattr(flow.comm, "_delivered", None) or ())],
+            "redo_counts": {f"{a},{b}": int(c)
+                            for (a, b), c in (getattr(flow.comm, "_redo_counts", None) or {}).items()},
             "last_work_body": getattr(ref, "last_work_body", ""),  # [정밀 복구] owner 위임 원문 — 복구가 재작문 대신 replay
             # [정밀 복구 — 전체 체인] 열린 베턴 프레임 전부(원문 포함)를 영속한다. 끊김 시 owner(레벨1)만이 아니라
             # *가장 깊은 활성 워커*(체인 끝)를 그 원문으로 재개하기 위함 — 깊은 전문가 협업이 리더로 튀지 않게.
@@ -648,6 +661,7 @@ class Sys:
         # 누적돼 에스컬레이션이 작동하게. verified만 0 유지(허위완료 백스톱 — 재개 직후 새 run 증거 강제).
         ref.contrib_checked = bool(snap.get("contrib_checked", False))
         ref.cross_check_offdomain = int(snap.get("cross_check_offdomain", 0) or 0)
+        ref.last_verify_writes = int(snap.get("last_verify_writes", -1))
         ref.run_count = int(snap.get("run_count", 0) or 0)
         if snap.get("evidence"):
             ref.evidence = snap["evidence"]
@@ -711,7 +725,18 @@ class Sys:
         for x in [flow.leader] + team:
             if x not in flow.project_team:
                 flow.project_team.append(x)
-        flow.comm.reset_task_tracking()
+        # [재위임 런어웨이 차단(2026-06-23 전수감사)] 종전엔 복구마다 reset_task_tracking()으로 _delivered(완료
+        # (위임자→owner) 쌍)·_redo_counts를 *삭제* → 리더가 이미 끝난 일을 '새 위임'(Redo 아님)으로 재발사,
+        # redo_limit 백스톱이 안 걸려 같은 일을 풀로 재작업하던 churn(1346 run의 동력)이었다. 삭제 대신 *복원* —
+        # 완료 사실은 영속이라 복구가 이미 끝난 쌍을 재위임하면 Redo로 인식돼 한도가 작동한다(reset은 새 Task 때만).
+        flow.comm._delivered = {(int(a), int(b)) for a, b in (snap.get("delivered_pairs") or [])}
+        flow.comm._redo_counts = {}
+        for _k, _c in (snap.get("redo_counts") or {}).items():
+            try:
+                _a, _b = _k.split(",")
+                flow.comm._redo_counts[(int(_a), int(_b))] = int(_c)
+            except Exception:
+                pass
         try:
             await flow.refresh(ref)   # 상태블록을 '진행'으로 재활성(블록이 남아 있으면)
         except Exception:
@@ -1642,6 +1667,7 @@ class Sys:
                 or (self.max_flows > 0 and len(live) >= self.max_flows)
                 or self.engaged.busy_elsewhere(prospective_lead, scope_key)):
             self.queue.append((channel_id, leader_id, user_text, root_id))
+            self._save_projects()   # [큐 영속] 적재 즉시 디스크 — 죽어도 대기 요청 유실 안 되게
             self._log("queued", text=user_text[:80], depth=len(self.queue), scope=scope_key,
                       lead_busy=bool(self.engaged.busy_elsewhere(prospective_lead, scope_key)))
             # [Rule/Status — 침묵하는 큐 금지] 접수 사실을 즉시 보이게 한다(라이브: 큐에 든 요청이
@@ -2108,6 +2134,7 @@ class Sys:
                     and (self.max_flows <= 0 or len(live) < self.max_flows)
                     and not self.engaged.busy_elsewhere(lead_q, k)):
                 self.queue.pop(i)
+                self._save_projects()   # [큐 영속] 소비 즉시 디스크 — 재시작 시 같은 요청 중복 처리 방지
                 return item
         return None
 
