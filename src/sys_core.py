@@ -407,6 +407,11 @@ class Sys:
             # cross_checks(실검증 누계)는 종전대로 0에서 재시작(재개 시 팀이 자연히 다시 채움 — 회계 재서술과 다름).
             "gate_pass": sorted(n for (n, tid) in (getattr(flow, "_gate_pass", None) or ())
                                 if str(tid) == str(ref.task_id)),
+            # [위임 사실 영속(2026-06-23, 사용자)] '리더가 이 Task에서 Work를 위임했다'는 *사실*이라 복구 너머
+            # 영속한다 — 인메모리 리셋(work_delegated→0)이 복구마다 '리더가 위임 0회 헛돈다'로 오판해 SYS 자동
+            # 위임을 반복 발동시키던 결함(특히 owner가 검증자로 잡힌 경우 QA에게 구현을 떠넘기는 상류 경로).
+            "work_delegated": int(getattr(ref, "work_delegated", 0) or 0),
+            "work_delegated_to": sorted(int(x) for x in getattr(ref, "work_delegated_to", []) or []),
             "last_work_body": getattr(ref, "last_work_body", ""),  # [정밀 복구] owner 위임 원문 — 복구가 재작문 대신 replay
             # [정밀 복구 — 전체 체인] 열린 베턴 프레임 전부(원문 포함)를 영속한다. 끊김 시 owner(레벨1)만이 아니라
             # *가장 깊은 활성 워커*(체인 끝)를 그 원문으로 재개하기 위함 — 깊은 전문가 협업이 리더로 튀지 않게.
@@ -590,6 +595,10 @@ class Sys:
         # (verified·cross_checks)는 종전대로 0에서 재시작하므로, 재개 시 팀의 자연 재검증으로 마감이 완성된다.
         if snap.get("gate_pass"):
             flow._gate_pass = {(n, snap["task_id"]) for n in snap.get("gate_pass", [])}
+        # [위임 사실 복원(2026-06-23, 사용자)] 복구마다 work_delegated가 0으로 리셋돼 SYS 자동위임이 '리더가
+        # 위임 0회 헛돈다'로 오발동하던 것 차단 — 위임 사실을 되살린다(active_chain이 보여주듯 위임은 일어났음).
+        ref.work_delegated = int(snap.get("work_delegated", 0) or 0)
+        ref.work_delegated_to = {int(x) for x in snap.get("work_delegated_to", [])}
         if snap.get("last_work_body"):
             ref.last_work_body = snap["last_work_body"]   # [정밀 복구] owner 위임 원문 복원 → SYS 이어가기가 replay
         # [정밀 복구 — 완료잠금(구조)] 담당(owner)이 있던 미완 Task를 되살리면, owner가 '이어가기'로 재인도하기
@@ -608,7 +617,9 @@ class Sys:
             wk = int(deepest.get("to") or 0)
             # 가장 깊은 프레임이 *진짜 더 깊은 워커*일 때만 덮어쓴다 — 리더/origin 프레임이거나 원문이 비면
             # (동기 완주로 깊은 위임이 이미 닫힘) 레벨1 owner 로직(#3)을 그대로 둔다(오발동 방지).
-            if (wk and wk in flow.pool and wk != flow.leader and (deepest.get("body") or "").strip()):
+            from .guide_tools import _is_verifier as _isv
+            if (wk and wk in flow.pool and wk != flow.leader and (deepest.get("body") or "").strip()
+                    and not _isv(flow._info(wk) or "")):   # 검증자(QA)는 깊은 owner로 안 잡음(검증≠소유 — QA가 구현 owner로 박히던 결함)
                 ref.owner = wk
                 ref.status.owner = flow._info(wk) or f"<@{wk}>"
                 path = " → ".join(f"{flow._info(c.get('from'))}→{flow._info(c.get('to'))}" for c in chain)
@@ -629,6 +640,17 @@ class Sys:
                 # (리더→C 직접)로 B가 빠지던 것 교정. 미설정이면 종전 _auto_continue_owner(평탄화)가 폴백.
                 ref.precise_chain_frames = list(chain)
                 self._log("deep_chain_restored", depth=len(chain), deepest=wk, task=ref.task_id)
+        # [검증자 owner 차단(2026-06-23, 사용자)] 영속된 owner가 검증자(QA)면 — 복구의 깊은-워커 덮어쓰기로
+        # QA가 구현 owner로 박힌 것 — 0으로 리셋한다. QA를 owner로 두면 (1) complete가 'owner 인도'를 기다리다
+        # 영영 못 닫히고(QA는 구현을 인도하지 않음) (2) SYS 자동위임이 QA에게 구현을 떠넘긴다. 0이면 리더가
+        # 적임 구현자에게 재위임하거나 자기 도메인으로 처리(검증은 QA에게 *요청*으로). owner 변경의 핵심 교정.
+        if ref.owner:
+            from .guide_tools import _is_verifier as _isv2
+            if _isv2(flow._info(ref.owner) or ""):
+                ref.owner = 0
+                ref.status.owner = ""
+                ref.owner_incomplete = False
+                self._log("verifier_owner_reset", task=ref.task_id, was=int(snap.get("owner") or 0))
         flow.tasks.append(ref)
         flow.current = ref
         # 되살린 Task 멤버를 프로젝트 팀에 **합친다(union)** — 덮어쓰면 그 Task에 낀 일부 멤버로

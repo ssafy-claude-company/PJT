@@ -4886,3 +4886,31 @@ def test_완료게이트통과_gate_pass_스냅샷복원_왕복():
     assert f2.current is not None and f2.current.task_id == tid
     assert ("acceptance", tid) in f2._gate_pass and ("data_prov", tid) in f2._gate_pass
     assert ("percept", "다른Task") not in f2._gate_pass   # 타 Task 통과는 안 옴
+
+
+def test_위임사실_영속_및_검증자owner_리셋():
+    """[work_delegated 영속 + 검증자 owner 차단(2026-06-23, 사용자)] (1) '리더가 위임했다'는 사실이 복구 너머
+    유지돼야 SYS 자동위임('위임 0회 헛돈다')이 오발동 안 함. (2) 복구의 깊은-워커 덮어쓰기가 검증자(QA)를
+    구현 owner로 박던 것 — 복원 시 검증자 owner는 0으로 리셋(마감이 'QA 인도' 기다리다 안 닫히던 결함)."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드", 13: "QA"})
+    f = _flow(g, leader=11)
+    t = {x.name: x for x in make_guide_tools(f, 11, "leader")}
+    asyncio.run(t["create_project"].handler({"name": "p", "team": "12,13"}))
+    asyncio.run(t["create_task"].handler({"purpose": "서버", "members": "12,13"}))
+    f.current.work_delegated = 2
+    f.current.work_delegated_to = {12}
+    f.current.owner = 13                     # QA(13)가 owner로 박힘(복구 깊은-워커 덮어쓰기 시뮬)
+    f.current.status.owner = "QA"
+    snap = s._task_snapshot(f, f.current)
+    # (1) 위임 사실 직렬화
+    assert snap["work_delegated"] == 2 and snap["work_delegated_to"] == [12]
+    # 복원
+    f2 = _flow(g, leader=11)
+    f2.pool = [11, 12, 13]
+    f2._info = lambda i: {11: "L", 12: "백엔드", 13: "QA"}.get(i, "")   # 복원이 owner 직군을 알아야 검증자 판정
+    asyncio.run(s._restore_open_task(f2, {"id": "P-1", "open_task": snap}))
+    # (1) 위임 사실 복원 → SYS 자동위임 오발동 방지
+    assert f2.current.work_delegated == 2 and 12 in f2.current.work_delegated_to
+    # (2) 검증자 owner(QA)는 0으로 리셋 — QA가 구현 owner로 안 박힘
+    assert f2.current.owner == 0 and f2.current.status.owner == ""
