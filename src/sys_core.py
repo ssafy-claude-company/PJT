@@ -445,6 +445,7 @@ class Sys:
             "cross_check_offdomain": int(getattr(ref, "cross_check_offdomain", 0) or 0),
             "last_verify_writes": int(getattr(ref, "last_verify_writes", -1)),
             "cross_checkers": sorted(int(x) for x in (getattr(ref, "cross_checkers", None) or set())),
+            "loop_escalated": bool(getattr(ref, "loop_escalated", False)),
             "run_count": int(getattr(ref, "run_count", 0) or 0),
             "evidence": (getattr(ref, "evidence", "") or "")[:500],
             "cc_held": int(getattr(ref, "cc_held", 0) or 0),
@@ -664,6 +665,7 @@ class Sys:
         ref.cross_check_offdomain = int(snap.get("cross_check_offdomain", 0) or 0)
         ref.last_verify_writes = int(snap.get("last_verify_writes", -1))
         ref.cross_checkers = {int(x) for x in snap.get("cross_checkers", [])}
+        ref.loop_escalated = bool(snap.get("loop_escalated", False))
         ref.run_count = int(snap.get("run_count", 0) or 0)
         if snap.get("evidence"):
             ref.evidence = snap["evidence"]

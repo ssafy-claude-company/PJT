@@ -213,6 +213,10 @@ def _synthesizes_data(workspace):
 # (부분·기술 검증은 도메인 동료도 가능 — QA는 전체·최종에 우대). 직군 '선택'을 박는 게 아니라 '검증 기능'을 알아본다.
 _VERIFIER_HINTS = ("qa", "검증", "품질", "테스트", "테스터", "quality", "tester", "verif", "정합성")
 
+# [회로차단기 임계(2026-06-23 협업재설계 S1)] 교차검증 N회+ 미수렴 = 루프 → 사용자 1회 에스컬레이트(advisory).
+# 봇은 '해결 불가'(플랫폼 한계 등)를 스스로 판정 못 해 무한 검증하므로, 시스템이 메타인지를 대신해 사람에게 넘긴다.
+_LOOP_ESCALATE_CROSS = int(os.environ.get("ORGANT_LOOP_CROSS", "12"))
+
 
 def _is_verifier(label) -> bool:
     """역할 라벨이 '검증/품질(QA) 기능'인가 — 전체·사용자관점 최종 인수의 자연 담당."""
@@ -502,6 +506,7 @@ class TaskRef:
     cross_check_offdomain: int = 0                   # 그중 owner와 '다른 도메인' 검증 수(독립 검증 — 같은 직군 검증은 같은 맹점 에코)
     last_verify_writes: int = -1                      # [검증 종료상태(2026-06-23 전수감사)] 마지막 *독립(off-domain)* 검증 시점의 저작수(writes_by_role 합). 독립검증 후 코드 변경 0이면 그 검증자 재요청을 막아 무한 '최종 검증' 루프 차단(고친 뒤·첫 검증·새 검증자는 허용).
     cross_checkers: set = field(default_factory=set)  # [검증 종료상태 — 리뷰F1] 이 산출물을 독립검증한 검증자 id 집합. 재검증 dedup이 '이미 검증한 그 검증자'에게만 적용되게(검증자에게 *새 작업* 시키는 건 안 막게).
+    loop_escalated: bool = False                      # [회로차단기 S1] 교차검증 임계 초과 미수렴으로 사용자에게 이미 에스컬레이트했나(1회만 — 영속).
     cc_held: int = 0                                  # 교차검증 게이트가 이 Task에서 보류된 횟수 — 3회+면 '반복 마감(독점·헛돎)' 경보로 에스컬레이트(리더가 혼자 run 반복+재마감하는 스래싱 차단; cross_check 오르면 자연 통과라 교착 없음)
     complete_retry: bool = False                     # (구) 1회 보류 시절 잔재 — 교차 검증 의무 하드화(Rule/Task 6)로 미사용, 호환 위해 유지
     leader_writes: int = 0                           # 리더가 이 Task에서 직접 쓴 파일 수(위임 없이 독식하면 차단)
@@ -1248,6 +1253,24 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     flow.current.last_verify_writes = sum(int(v) for v in (flow.writes_by_role or {}).values())
                     flow.current.cross_checkers.add(int(to))
                 _ckpt(flow)              # [교차검증 사실 영속] 복구가 교차검증을 다시 요구하지 않게(마감 닫힘)
+                # [회로차단기 — 수렴 경보(2026-06-23 협업재설계 S1)] 교차검증이 임계를 넘는데 안 닫히면 = 수렴이
+                # 아니라 *루프*다. 봇은 '해결 불가'(플랫폼 한계 등)를 스스로 판정 못 해 무한 검증한다(라이브 P-031
+                # 콜드스타트 41회). 봇에게 없는 메타인지를 시스템이 대신 — 사용자에게 *1회* 에스컬레이트해 판정을 넘긴다.
+                if (flow.current.cross_checks >= _LOOP_ESCALATE_CROSS
+                        and not getattr(flow.current, "loop_escalated", False)):
+                    flow.current.loop_escalated = True
+                    if flow.log:
+                        flow.log("loop_circuit_breaker", task=flow.current.task_id, cross=flow.current.cross_checks)
+                    try:
+                        await flow.guide.post(
+                            flow.user_channel, 0,
+                            f"[수렴 경보 — 사람 판정 필요] 이 Task가 교차검증을 {flow.current.cross_checks}회 했는데도 "
+                            f"아직 안 닫힙니다. 봇들이 *같은 문제를 반복해 잡고* 있는데, 흔히 코드로 못 고치는 *한계*"
+                            f"(플랫폼 제약 등)입니다 — 봇은 '해결 불가'를 스스로 판정 못 해 무한 검증합니다. 결정해주세요: "
+                            f"**① 현 상태 수용·마감** / **② 다른 방향 제시**.")
+                    except Exception:
+                        pass
+                    _ckpt(flow)
             flow.req_results[dupkey] = result   # 같은 턴 병렬 중복요청이 재사용할 응답 캐시(동료 재호출 방지)
             return _ok(f"[{to} 응답] {_speech_clip(result, 4000)}{receipt}")
 
