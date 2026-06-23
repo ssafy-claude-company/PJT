@@ -445,6 +445,12 @@ class Sys:
             "peer_info_pairs": [sorted(int(x) for x in pr)
                                 for pr in (getattr(ref, "peer_info_pairs", None) or ())],
             "deploy_count": int(getattr(flow, "_deploy_count", 0) or 0),
+            # 배포 anti-thrash 상태(전수감사): _deployed_once·_deploy_writes·writes_by_role가 리셋되면 '코드
+            # 변경 없는 재배포' 가드가 복구마다 무력화돼 재배포 런어웨이가 되살아난다 → 함께 영속.
+            "deployed_once": bool(getattr(flow, "_deployed_once", False)),
+            "deploy_writes": int(getattr(flow, "_deploy_writes", -1)),
+            "writes_by_role": {str(k): int(v) for k, v in (getattr(flow, "writes_by_role", None) or {}).items()},
+            "consec_fail": int(getattr(flow, "consec_fail", 0) or 0),
             "last_work_body": getattr(ref, "last_work_body", ""),  # [정밀 복구] owner 위임 원문 — 복구가 재작문 대신 replay
             # [정밀 복구 — 전체 체인] 열린 베턴 프레임 전부(원문 포함)를 영속한다. 끊김 시 owner(레벨1)만이 아니라
             # *가장 깊은 활성 워커*(체인 끝)를 그 원문으로 재개하기 위함 — 깊은 전문가 협업이 리더로 튀지 않게.
@@ -651,6 +657,11 @@ class Sys:
         for _m, _c in (snap.get("act_by") or {}).items():
             flow.act_by[int(_m)] = int(_c)
         flow._deploy_count = int(snap.get("deploy_count", 0) or 0)
+        flow._deployed_once = bool(snap.get("deployed_once", False))
+        flow._deploy_writes = int(snap.get("deploy_writes", -1))
+        for _r, _w in (snap.get("writes_by_role") or {}).items():
+            flow.writes_by_role[_r] = int(_w)
+        flow.consec_fail = int(snap.get("consec_fail", 0) or 0)
         if snap.get("last_work_body"):
             ref.last_work_body = snap["last_work_body"]   # [정밀 복구] owner 위임 원문 복원 → SYS 이어가기가 replay
         # [정밀 복구 — 완료잠금(구조)] 담당(owner)이 있던 미완 Task를 되살리면, owner가 '이어가기'로 재인도하기
