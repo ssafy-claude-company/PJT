@@ -1306,6 +1306,33 @@ def test_정밀복구_깊은체인_가장깊은워커_재개():
     assert snap.get("deep_chain_inflight") == "디자이너"
 
 
+def test_정밀복구_정밀재개_각자깊이한번씩_unwind():
+    """[정밀 복구 재개(2026-06-23, 사용자)] 복원된 깊은 체인(origin→리더11→12→13)을 *가장 깊은 13부터*
+    재개하고 13→12로 unwind — 각 워커가 자기 깊이에서 *한 번씩* 깨워지고(평탄화면 13만 깨움 = B 빠짐),
+    베턴이 리더(11)로 복귀(이후 리더 턴이 통합·판정). flow.wake 모킹으로 깨움 순서·unwind 검증."""
+    import tempfile
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "PM", 12: "백엔드", 13: "AI"},
+            session_dir=tempfile.mkdtemp(), projects_path=tempfile.mktemp())
+    f = _flow(g, leader=11); f.bot_info = {11: "PM", 12: "백엔드", 13: "AI"}
+    woken = []
+
+    async def wake(to, body, kind):
+        woken.append(int(to)); return f"{to} 완료"
+    f.wake = wake
+    # active_chain 형태(위→아래): origin(0)→리더11, 11→12, 12→13(가장 깊음)
+    frames = [
+        {"from": 0, "to": 11, "kind": "work", "body": "리더 일"},
+        {"from": 11, "to": 12, "kind": "work", "body": "12 일"},
+        {"from": 12, "to": 13, "kind": "work", "body": "13 일(가장 깊음)"},
+    ]
+    out = asyncio.run(s._resume_precise_chain(f, frames))
+    assert woken == [13, 12]              # ★ 가장 깊은 13부터, 12는 통합 — 각자 한 번씩(평탄화 아님)
+    assert f.comm.is_alive(11)            # 베턴이 리더로 복귀(0→11 프레임 남아 흐름 안 끝남 → 리더가 판정)
+    assert not f.comm.done
+    assert "13 완료" in out and "12 완료" in out
+
+
 def test_프로젝트_리더_봇부재시_자동재배정_프로젝트유지(tmp_path):
     """[프로젝트↔봇 결합 해제 2026-06-15] 프로젝트 리더 봇이 로스터에서 빠지면(해고·예비환원·미연결)
     _valid_leader가 가용 봇으로 자동 재배정 → 봇을 자유롭게 빼도 기존 프로젝트가 안 깨진다. 유효한

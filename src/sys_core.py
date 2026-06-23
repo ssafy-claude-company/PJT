@@ -556,6 +556,10 @@ class Sys:
                 # 버리는 것(라이브 P-031: 황시윤 응답 없이 리더가 이서연에게 새 request)을 막는다. 리더
                 # 개입 노트에 'SYS가 이 워커를 재개하니 새로 위임 말고 보고를 기다리라'를 실어 보호한다.
                 snap["deep_chain_inflight"] = flow._info(wk) or str(wk)
+                # [정밀 복구(2026-06-23, 사용자)] 전체 체인을 저장 → 호출부(route_channel_request)가 restore_chain
+                # 으로 comm 스택을 그대로 세우고 가장 깊은 워커부터 재개(C→B→A unwind, 각자 범위 보존). 평탄화
+                # (리더→C 직접)로 B가 빠지던 것 교정. 미설정이면 종전 _auto_continue_owner(평탄화)가 폴백.
+                ref.precise_chain_frames = list(chain)
                 self._log("deep_chain_restored", depth=len(chain), deepest=wk, task=ref.task_id)
         flow.tasks.append(ref)
         flow.current = ref
@@ -1131,6 +1135,63 @@ class Sys:
                     + "\n".join(out))
         return ""
 
+    async def _resume_precise_chain(self, flow, frames) -> str:
+        """[정밀 복구 재개(2026-06-23, 사용자)] 끊긴 깊은 위임 체인을 *채팅 재발행/평탄화 없이* 복원·재개한다.
+
+        restore_chain으로 comm 스택을 원래대로 세우고(alive=가장 깊은 워커), 그 워커부터 깨운 뒤 응답으로
+        베턴이 올라올 때마다 부모를 *통합*으로 깨운다(재위임 아님) → C→B→A 자연 unwind, **각자 범위 보존**
+        (C는 C 일, B는 B의 통합, A는 A의 통합). 종전 평탄화(리더→C 직접 1요청)가 B를 빼먹어 C/리더가 B 일까지
+        떠안던 '범용적 잘못된 구현'(사용자) 교정. 끊긴 C에서 바로 재개 — A→B→C를 채팅으로 다시 치지 않는다.
+
+        튼튼함(평탄화 폴백에 안 기댐 — 사용자 경고 반영): ① 워커가 재개 턴 중 *재위임*하면 drain_inflight로
+        완주 대기 후 베턴 복귀, ② 워커가 *실패*해도 그 결과를 부모가 받아 자기 범위에서 처리(평탄화 아님),
+        ③ 무진행/엣지는 guard로 끊고 베턴을 리더로 복구해 호출부의 리더 턴이 최종 판정하게 한다."""
+        from .guide_tools import _speech_clip as _sc
+        flow.comm.restore_chain(frames)          # 스택 내부 복원 — alive=가장 깊은 워커
+        out, guard = [], 0
+        while flow.comm.alive != flow.leader and not flow.comm.done and guard < 32:
+            worker = flow.comm.alive
+            top = flow.comm.open_requests[-1] if flow.comm.open_requests else None
+            own = (getattr(top, "body", "") or "")
+            if guard == 0:
+                wbody = ("[SYS 정밀 복구 — 이어가기, 처음부터 다시/새 위임 하지 말 것] 직전에 이 작업으로 "
+                         "위임받아 진행 중 끊겼습니다(원문 그대로):\n" + own +
+                         "\n작업공간에 이미 된 부분은 그대로 두고 남은 부분만 마저 끝내 보고하세요.")
+            else:
+                wbody = ("[SYS 정밀 복구 — 당신 위임의 하위 작업이 끝나 돌아왔습니다] 당신이 맡았던 일(원문):\n"
+                         + own + "\n\n그 일부를 맡긴 하위 작업의 결과:\n" + str(out[-1])[:1500] +
+                         "\n\n이 하위 결과를 당신 일에 *통합·검증*하고 보고하세요(처음부터 다시/새 위임 말 것).")
+            guard += 1
+            acts_before = flow.act_count
+            self._log("precise_resume_wake", worker=worker, level=guard, stack=len(flow.comm.open_requests))
+            try:
+                res = await flow.wake(worker, wbody, Kind.WORK)
+            except Exception as e:
+                res = f"(워커 {worker} 재개 실패: {e})"
+            _d = await self._drain_inflight(flow)    # 재개 턴 중 재위임 → 완주 대기(베턴 복귀)
+            if _d:
+                res = (res or "") + "\n" + _d
+            out.append(_sc(res or "", 4000))
+            if flow.comm.alive == worker and not flow.comm.done:
+                try:
+                    flow.comm.respond(worker, "accept", res or "")   # 부모에 올림(C→B→A 자연 unwind)
+                except CommError:
+                    break
+            elif flow.comm.alive != worker and not flow.comm.done:
+                break                                # 비정상 베턴 — 아래 안전망이 리더로 복구
+            if flow.comm.alive == worker and flow.act_count == acts_before and guard > 1:
+                break                                # 무진행 안전망(같은 워커·작업 0)
+        # 안전망: 베턴이 리더에 못 닿았으면 리더로 복구(드문 엣지 — 정밀이 대부분 처리, 평탄화 *기본* 아님)
+        g2 = 0
+        while flow.comm.alive != flow.leader and not flow.comm.done and len(flow.comm.open_requests) > 0 and g2 < 32:
+            try:
+                flow.comm.escalate("정밀 복구 마무리 — 리더로 베턴 복구")
+            except CommError:
+                break
+            g2 += 1
+        self._log("precise_resume_done", levels=len(out), alive=flow.comm.alive, done=flow.comm.done)
+        return "\n\n".join(x for x in out if x.strip())
+
     async def _auto_delegate_owner(self, flow, lead) -> str:
         """[헛돎 발생 차단 — 구조적 위임(2026-06-15)] 리더가 현재 Task의 designated owner(스냅샷 복원
         등으로 지정됨)에게 **위임을 0건** 하고 솔로 run만 반복해 독식 차단(leader_runs>3)에 막힌 정체면,
@@ -1631,7 +1692,26 @@ class Sys:
         async def _run_leader():
             flow.leader_segment = 1
             acts_seg = flow.act_count          # 세그먼트 실작업 기준점(활동 기반 예산 — 첫 턴 포함)
-            result = await self.run_turn(flow, lead, body, Kind.WORK, "leader")
+            # [정밀 복구 재개(2026-06-23, 사용자)] 끊긴 깊은 위임 체인이 복원됐으면, 채팅 재발행/평탄화 없이
+            # 가장 깊은 워커부터 재개하고 C→B→A로 unwind(각자 범위 보존)한 뒤 그 통합 결과를 리더에 넘긴다 —
+            # 리더는 판정·마감만. 평탄화(리더→C 직접, B 빠짐)로 C/리더가 B 일까지 떠안던 것 교정. 정밀 경로가
+            # 처리하면 _auto_continue_owner(평탄화)는 owner_incomplete 해제로 중복 안 돈다. 예외 시 로그만(평탄화
+            # *기본* 폴백 아님 — 정밀 재개 내부가 워커 실패/재위임을 부모 통합·drain으로 튼튼히 처리).
+            _body = body
+            _pf = getattr(flow.current, "precise_chain_frames", None) if flow.current else None
+            if _pf:
+                flow.current.precise_chain_frames = []
+                try:
+                    _po = await self._resume_precise_chain(flow, _pf)
+                    if flow.current:
+                        flow.current.owner_incomplete = False
+                    if _po:
+                        _body = body + ("\n\n[정밀 복구 — 끊겼던 깊은 위임 체인을 워커들이 *각자 범위에서* 이어 "
+                                        "완성한 결과입니다. 당신은 이걸 통합·판정·검증하고 마감만 하세요 — 이미 된 "
+                                        "일을 다시 위임하지 마세요]\n" + _po)
+                except Exception as _e:
+                    self._log("precise_resume_failed", err=str(_e)[:150])
+            result = await self.run_turn(flow, lead, _body, Kind.WORK, "leader")
             # 구조적 연속 실행: 턴 한도로 작업이 끊겼으면(진행 중 Task가 남았거나 '턴 한도' 표시)
             # 같은 세션으로 이어서 완료까지 재호출한다 — '턴 한도 = 무조건 中断' 결함 해소.
             cont = 0
