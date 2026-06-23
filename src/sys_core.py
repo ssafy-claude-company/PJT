@@ -551,6 +551,11 @@ class Sys:
                 ref.owner_incomplete = True
                 if wk not in ref.team:
                     ref.team.append(wk)
+                # [복구 인플라이트 보존(2026-06-23, 사용자)] 죽기 전 진행 중이던 깊은 위임(→wk)을 복원했으니,
+                # 리더가 이 일을 *다른 사람에게 새로 위임*(fresh)으로 덮어써 인플라이트 워커의 작업·보고를
+                # 버리는 것(라이브 P-031: 황시윤 응답 없이 리더가 이서연에게 새 request)을 막는다. 리더
+                # 개입 노트에 'SYS가 이 워커를 재개하니 새로 위임 말고 보고를 기다리라'를 실어 보호한다.
+                snap["deep_chain_inflight"] = flow._info(wk) or str(wk)
                 self._log("deep_chain_restored", depth=len(chain), deepest=wk, task=ref.task_id)
         flow.tasks.append(ref)
         flow.current = ref
@@ -1496,6 +1501,17 @@ class Sys:
                     f"끝내세요: 남은 부분을 owner에게 request(Work)로 맡기고(이미 정해진 팀·owner 존중 — 가로채 혼자 "
                     f"마무리 금지), run으로 검증한 뒤 complete_task로 **이 블록**을 마감하세요. 만약 사용자가 **명백히 "
                     f"다른 새 작업**을 원한 거면, 이 Task를 먼저 적절히 마무리(complete_task)한 뒤 새 Task를 여세요(당신 판단).\n\n")
+                if resumed.get("deep_chain_inflight"):
+                    # [복구 인플라이트 보존(2026-06-23, 사용자)] 죽기 전 진행 중이던 깊은 위임을 SYS가 그 워커로
+                    # 재개한다 — 리더가 같은 일을 *다른 사람에게 새로 위임*(fresh)으로 덮어써 그 워커의 작업·보고를
+                    # 버리지 않게 강하게 못박는다(라이브: 황시윤 응답 없이 리더가 이서연에게 새 request).
+                    resume_note += (
+                        f"[★인플라이트 보존 — 절대 새로 위임하지 말 것] 죽기 직전 **진행 중이던 위임(→ "
+                        f"{resumed.get('deep_chain_inflight')})**이 복원됐고, **SYS가 그 워커를 이어서 재개**합니다. "
+                        f"그 워커의 작업·보고가 아직 살아 있으니 — **이 일을 다른 사람에게 새로 request(Work)로 "
+                        f"넘기지 마세요**(그러면 그 워커의 진행분과 보고가 버려집니다). 그 워커가 이어서 끝내 보고를 "
+                        f"올릴 때까지 **기다렸다가**, 받은 보고로 판정·통합·검증만 하세요. 정말 그 워커가 부적합하다고 "
+                        f"판단되면 새로 맡기기 전에 먼저 그 사정을 보고에 남기세요.\n\n")
             # [Project.Context 주입 — docs Project.md "Organts는 Context를 숙지한다"] ① 프로젝트 목표
             # (사용자 원문 — 존재 이유)와 ② 직전 흐름의 마감 요약을 리더에게 준다. 목표가 없으면
             # '마지막 미완 Task 마감 = 프로젝트 끝'으로 시야가 좁아진다(라이브 관측: 아트 Task만 닫고

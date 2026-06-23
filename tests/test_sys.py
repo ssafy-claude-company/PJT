@@ -1299,6 +1299,11 @@ def test_정밀복구_깊은체인_가장깊은워커_재개():
     assert "CSS" in f2.current.last_work_body                        # 그 깊이의 원문 replay
     assert "→" in f2.current.last_work_body                          # 체인 경로 맥락 동봉(리더 통합용)
     assert f2.current.owner_incomplete is True                       # 완료잠금(조기완료 차단)
+    # [복구 인플라이트 보존(2026-06-23, 사용자)] 깊은 인플라이트 워커 복원 시 리더 보호 플래그가 실려야 한다
+    # — 리더가 이 일을 다른 사람에게 새로 위임(fresh)으로 덮어써 인플라이트 워커의 진행분·보고를 버리는 것
+    # (라이브 P-031: 황시윤 응답 없이 리더가 이서연에게 새 request)을 막기 위함. resume_note가 이 플래그로
+    # '절대 새로 위임 말고 보고 기다려' 보호 문구를 리더에게 주입한다.
+    assert snap.get("deep_chain_inflight") == "디자이너"
 
 
 def test_프로젝트_리더_봇부재시_자동재배정_프로젝트유지(tmp_path):
