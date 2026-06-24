@@ -31,6 +31,17 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
     def events(self, request, bot_id=None):
         return Response(EventSerializer(self.get_object().events.all()[:60], many=True).data)
 
+    @action(detail=True, methods=["patch"])
+    def edit(self, request, bot_id=None):
+        """봇 편집(관리 기능) — 이름·인격·아바타·직군 수정. PATCH /api/agents/{bot_id}/edit/"""
+        a = self.get_object()
+        for f in ("name", "persona", "avatar", "role"):
+            if f in request.data:
+                v = request.data[f]
+                setattr(a, f, (str(v)[:8] if f == "avatar" else str(v)[:200] if f == "persona" else str(v)[:60]))
+        a.save()
+        return Response(AgentSerializer(a).data)
+
 
 class RoleProfileViewSet(viewsets.ReadOnlyModelViewSet):
     """직군별 증류된 직무기준(에이전트 성장). /api/profiles/"""
@@ -215,6 +226,36 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                                    author_name=(request.data.get("author") or "사람")[:60])
         return Response({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),
                          "author": c.author_name, "body": c.body}, status=201)
+
+    @action(detail=True, methods=["patch"])
+    def rename(self, request, pid=None):
+        """채널 이름 변경(관리 기능). PATCH /api/projects/{pid}/rename/"""
+        proj = self.get_object()
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return Response({"detail": "이름은 필수입니다."}, status=400)
+        proj.name = name[:200]
+        proj.save(update_fields=["name"])
+        return Response({"pid": proj.pid, "name": proj.name})
+
+    @action(detail=True, methods=["post"])
+    def archive(self, request, pid=None):
+        """채널 보관/복원 토글(status). POST /api/projects/{pid}/archive/"""
+        proj = self.get_object()
+        proj.status = "" if proj.status == "archived" else "archived"
+        proj.save(update_fields=["status"])
+        return Response({"pid": proj.pid, "status": proj.status, "archived": proj.status == "archived"})
+
+    @action(detail=True, methods=["delete"])
+    def remove(self, request, pid=None):
+        """채널 삭제 — SNS-네이티브(U-/S-)만(디스코드 쇼케이스 데이터 보호). DELETE /api/projects/{pid}/remove/"""
+        proj = self.get_object()
+        if proj.pid.startswith("P-"):
+            return Response({"detail": "디스코드 투영 채널은 삭제할 수 없습니다(쇼케이스 데이터)."}, status=403)
+        GuideMessage.objects.filter(channel_id=proj.id).delete()
+        pid_ = proj.pid
+        proj.delete()
+        return Response({"deleted": pid_}, status=200)
 
 
 class EventViewSet(viewsets.ReadOnlyModelViewSet):

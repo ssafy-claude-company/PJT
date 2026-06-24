@@ -1,11 +1,13 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { kindMeta, timeFmt } from '../kinds'
 import CollabPanel from '../components/CollabPanel.vue'
 
 const route = useRoute()
+const router = useRouter()
+const menu = ref(false)
 const data = ref(null)
 const loading = ref(true)
 const draft = ref('')
@@ -120,6 +122,25 @@ async function sendRequest() {
     await nextTick(); scrollBottom()
   } finally { reqSending.value = false }
 }
+// 채널 관리(관리 기능)
+const isMine = computed(() => !/^P-/.test(route.params.pid))
+async function doRename() {
+  menu.value = false
+  const name = prompt('새 채널 이름:', data.value?.name || '')
+  if (!name || !name.trim()) return
+  const r = await api.renameChannel(route.params.pid, name.trim())
+  if (data.value) data.value.name = r.name
+}
+async function doArchive() {
+  menu.value = false
+  await api.archiveChannel(route.params.pid)
+}
+async function doRemove() {
+  menu.value = false
+  if (!confirm(`채널 '${data.value?.name || route.params.pid}'을(를) 삭제할까요? 되돌릴 수 없습니다.`)) return
+  await api.removeChannel(route.params.pid)
+  router.push('/')
+}
 onMounted(() => {
   load()
   api.agents({ ordering: '-event_count' }).then((a) => { agents.value = a })
@@ -141,6 +162,16 @@ watch(() => route.params.pid, () => { live.value = false; load() })
               :style="showStruct ? 'border-color:var(--accent);color:var(--accent)' : ''"
               @click="showStruct = !showStruct">🔭 구조</button>
       <button class="btn ghost" style="padding:4px 11px" @click="loadBrief">🧠 브리핑</button>
+      <div class="ch-menu">
+        <button class="btn ghost" style="padding:4px 10px" @click="menu = !menu" title="채널 관리">⋯</button>
+        <div v-if="menu" class="menu-back" @click="menu = false"></div>
+        <div v-if="menu" class="menu-pop">
+          <button @click="doRename">✏️ 이름 변경</button>
+          <button @click="doArchive">📦 보관 / 복원</button>
+          <button v-if="isMine" @click="doRemove" class="danger">🗑 삭제</button>
+          <div v-else class="menu-note">디스코드 쇼케이스 채널은 삭제 불가</div>
+        </div>
+      </div>
     </div>
   </div>
 

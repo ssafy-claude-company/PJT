@@ -26,7 +26,9 @@ async function load() {
     // SNS-네이티브 채널(U-/S-)은 활동 0이어도 항상 보인다(사용자가 만든 것). P-(디스코드)는 활동 있을 때만.
     const vis = p.filter((c) => c.event_count > 0 || c.message_count > 0 || !/^P-/.test(c.pid))
     const isMine = (c) => !/^P-/.test(c.pid)
-    channels.value = vis.sort((a, b) => (isMine(b) - isMine(a)) || (b.event_count - a.event_count))
+    const arch = (c) => (c.status === 'archived' ? 1 : 0)
+    // 보관된 채널은 맨 아래, 그 다음 내가 만든 채널 우선, 활동 순.
+    channels.value = vis.sort((a, b) => (arch(a) - arch(b)) || (isMine(b) - isMine(a)) || (b.event_count - a.event_count))
     stats.value = s
   } catch (e) { /* keep last */ }
 }
@@ -74,10 +76,11 @@ const isLive = computed(() => stats.value?.baton?.role)
         </div>
         <input v-if="channels.length > 6" v-model="q" class="sb-search" placeholder="채널 검색…" />
         <router-link v-for="c in shown" :key="c.pid" :to="`/channels/${c.pid}`"
-                     class="sb-item" :class="{ active: activePid === c.pid }">
+                     class="sb-item" :class="{ active: activePid === c.pid, archived: c.status === 'archived' }">
           <span class="hash">#</span>
           <span class="nm">{{ c.name || c.pid }}</span>
-          <span v-if="stats && stats.baton && stats.baton.project === c.pid" class="dot" title="지금 활동 중"></span>
+          <span v-if="c.status === 'archived'" class="arch-tag" title="보관됨">📦</span>
+          <span v-else-if="stats && stats.baton && stats.baton.project === c.pid" class="dot" title="지금 활동 중"></span>
         </router-link>
         <div v-if="!channels.length" class="muted" style="padding:8px 10px;font-size:12px">불러오는 중…</div>
         <div v-else-if="!shown.length" class="muted" style="padding:8px 10px;font-size:12px">검색 결과 없음</div>

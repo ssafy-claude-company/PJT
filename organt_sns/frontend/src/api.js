@@ -12,6 +12,7 @@ export default {
   agents: (params) => http.get('/agents/', { params }).then((r) => list(r.data)),
   agent: (botId) => http.get(`/agents/${botId}/`).then((r) => r.data),
   agentEvents: (botId) => http.get(`/agents/${botId}/events/`).then((r) => r.data),
+  editAgent: (botId, payload) => http.patch(`/agents/${botId}/edit/`, payload).then((r) => r.data),  // 봇 편집(관리)
 
   profiles: () => http.get('/profiles/').then((r) => list(r.data)),
 
@@ -30,6 +31,10 @@ export default {
   recruit: (payload) => http.post('/recruit/', payload).then((r) => r.data),
   createChannel: (payload) => http.post('/channels/', payload).then((r) => r.data),
   makeRequest: (pid, payload) => http.post(`/projects/${pid}/request/`, payload).then((r) => r.data),
+  // 채널 관리(관리 기능)
+  renameChannel: (pid, name) => http.patch(`/projects/${pid}/rename/`, { name }).then((r) => r.data),
+  archiveChannel: (pid) => http.post(`/projects/${pid}/archive/`).then((r) => r.data),
+  removeChannel: (pid) => http.delete(`/projects/${pid}/remove/`).then((r) => r.data),
 
   // 봉투 유지(count·다음 페이지 필요) — 협업 피드 페이지네이션
   events: (params) => http.get('/events/', { params }).then((r) => r.data),
