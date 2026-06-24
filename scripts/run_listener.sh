@@ -30,10 +30,11 @@ export ORGANT_CANARY_PERIOD="${ORGANT_CANARY_PERIOD:-120}"
 # 무제한이고, 연속 N회 헛돌 때만 정체로 종결한다. 총량 한도 시절 '큰 작업이 마감 직전 절단'
 # 사고 2회(기본 6 시절 P-002 / 12 시절 P-010) — 의미 교정으로 재발 불가.
 export ORGANT_MAX_CONTINUE="${ORGANT_MAX_CONTINUE:-12}"
-# [수면 사이클 비활성(2026-06-23) — 루트 스캔 OOM 방지] 증류 워커가 작업공간 루트(32개 프로젝트·
-# node_modules 누적 507MB)에서 떠 CLI 시동 시 그 트리를 스캔→RSS 11GB로 부풀어 머신 전역 OOM(리스너
-# 동반사망)을 매 10분 반복했다(라이브 야간). 근본 교정(증류에 빈 cwd 부여)이 들어가면 600으로 복원할 것.
-export ORGANT_SLEEP_PERIOD="${ORGANT_SLEEP_PERIOD:-0}"
+# [수면 사이클 복원(2026-06-24) — 진짜 OOM 원인이 CLI였음이 밝혀져 재활성화] 어젯밤 증류 워커 11GB
+# 폭주는 '루트 스캔'이 아니라 *번들 CLI 2.1.170 + CCR 프록시 버그*(모든 워커 공통, 소켓 4.2GB read로
+# 확정)였다. organt.build_options가 워커 CLI를 2.1.187로 교정한 뒤로는 증류 워커도 안 죽으므로(빈 v2
+# cwd + 호환 CLI + 9GB OOM가드 백스톱) 수면=학습 루프를 600초로 되살린다.
+export ORGANT_SLEEP_PERIOD="${ORGANT_SLEEP_PERIOD:-600}"
 # [작업공간 베이스 = 깨끗한 새 디렉터리(2026-06-23) — 루트 스캔 OOM 방지] 기존 organt_workspace는 32개
 # 프로젝트·node_modules 2만 파일이 누적돼, *미스코프 워커*(create_project 전의 새 프로젝트 첫 리더 워커,
 # Flow 기본 workspace=루트)가 CLI 시동 때 그 트리를 스캔→RSS 11GB로 부풀어 머신 전역 OOM을 일으킨다.
