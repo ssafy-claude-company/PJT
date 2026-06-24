@@ -23,11 +23,17 @@ urlpatterns = [
     path("guide/pending/", guide_bridge.pending, name="guide-pending"),
     path("guide/pick/", guide_bridge.pick, name="guide-pick"),
     path("guide/thread/", guide_bridge.thread, name="guide-thread"),
-    # 소셜(멀티유저) — 정체성·친구·채널 멤버
+    # 인증(회원가입/로그인) — 핸들+비밀번호, 토큰 발급
+    path("auth/register/", social.register, name="register"),
+    path("auth/login/", social.login, name="login"),
+    path("auth/guest/", social.guest, name="guest"),
+    path("auth/logout/", social.logout, name="logout"),
+    # 소셜(멀티유저) — 정체성·친구·채널 멤버·워크스페이스
     path("me/", social.me, name="me"),
     path("people/", social.people, name="people"),
     path("friends/", social.friends, name="friends"),
     path("friends/<str:handle>/", social.unfriend, name="unfriend"),
     path("projects/<str:pid>/members/", social.members, name="members"),
+    path("workspace/", social.workspace, name="workspace"),
     path("", include(router.urls)),
 ]

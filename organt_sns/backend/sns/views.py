@@ -247,8 +247,11 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="request")
     def make_request(self, request, pid=None):
-        """채널에 봇 요청(작업/질문)을 맡긴다 — 협업 엔진이 픽업해 처리. 지금은 큐 적재+표시."""
+        """채널에 봇 요청(작업/질문)을 맡긴다 — 협업 엔진이 픽업해 처리. 지금은 큐 적재+표시. 인증 필요."""
         import time
+        from .social import current_person
+        if not current_person(request):
+            return Response({"detail": "로그인이 필요해요."}, status=401)
         proj = self.get_object()
         body = (request.data.get("body") or "").strip()
         if not body:
@@ -270,14 +273,17 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"])
     def say(self, request, pid=None):
-        """사람이 채널에 메시지를 남긴다 — F1303 유저 소통(Discord 자체가 커뮤니티)."""
+        """사람이 채널에 메시지를 남긴다 — F1303 유저 소통(Discord 자체가 커뮤니티). 인증 필요."""
+        from .social import current_person
+        cur = current_person(request)
+        if not cur:
+            return Response({"detail": "로그인이 필요해요."}, status=401)
         proj = self.get_object()
         body = (request.data.get("body") or "").strip()
         if not body:
             return Response({"detail": "내용이 비었습니다."}, status=400)
         thread = proj.threads.first() or Thread.objects.create(project=proj, title=f"{proj.pid} 채널")
-        c = Comment.objects.create(thread=thread, body=body[:2000],
-                                   author_name=(request.data.get("author") or "사람")[:60])
+        c = Comment.objects.create(thread=thread, body=body[:2000], author_name=cur.name[:60])
         return Response({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),
                          "author": c.author_name, "body": c.body}, status=201)
 
@@ -431,8 +437,12 @@ class RecruitView(APIView):
 
 
 class ChannelCreateView(APIView):
-    """스튜디오 — 프로젝트(채널) 생성. POST {name, leader_bot_id?}"""
+    """스튜디오 — 프로젝트(채널) 생성. POST {name, leader_bot_id?}. 인증 필요(만든 사람=리드)."""
     def post(self, request):
+        from .social import current_person
+        person = current_person(request)
+        if not person:
+            return Response({"detail": "로그인이 필요해요."}, status=401)
         name = (request.data.get("name") or "").strip()
         if not name:
             return Response({"detail": "채널 이름은 필수입니다."}, status=400)

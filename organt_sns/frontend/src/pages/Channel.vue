@@ -7,7 +7,7 @@ import CollabPanel from '../components/CollabPanel.vue'
 import Icon from '../components/Icon.vue'
 import { monogram, avatarColor, avatarBg } from '../avatar'
 import { askPrompt, askConfirm } from '../dialog'
-import { isGuest } from '../user'
+import { me } from '../user'
 
 const route = useRoute()
 const router = useRouter()
@@ -217,7 +217,7 @@ async function loadMembers() {
 }
 async function toggleMembers() {
   showMembers.value = !showMembers.value
-  if (showMembers.value && !isGuest()) {
+  if (showMembers.value && !me.is_guest) {
     try { myFriends.value = await api.friends() } catch (e) { myFriends.value = [] }
   }
 }
@@ -286,7 +286,7 @@ watch(() => route.params.pid, () => {
               </div>
               <div v-if="!members.length" class="mp-empty">아직 멤버가 없어요. 친구를 초대해 함께 만들어보세요.</div>
             </div>
-            <template v-if="!isGuest()">
+            <template v-if="!me.is_guest">
               <div class="mp-sec">친구 초대</div>
               <div class="mp-list">
                 <div v-for="f in invitable" :key="f.handle" class="mp-row">
@@ -405,8 +405,8 @@ watch(() => route.params.pid, () => {
     </div>
 
     <template v-else>
-      <div class="flex" style="gap:8px;margin-bottom:8px;align-items:stretch">
-        <div class="picker" style="flex:1">
+      <div class="req-tools">
+        <div class="picker">
           <button class="trigger" @click="pickerOpen = !pickerOpen">
             <template v-if="reqToBot">
               <span class="bot-av sm" :style="{ background: avatarBg(reqToBot) }">{{ monogram(reqToBot.name, reqToBot.role) }}</span>

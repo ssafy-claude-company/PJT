@@ -175,11 +175,14 @@ class GuideMessage(models.Model):
 
 # ── 소셜(멀티유저) — 사람 유저·친구·채널 멤버 ──────────────────────────
 class Person(models.Model):
-    """사람 유저 — AI 직원(Agent)과 구분되는 실제 사용자. 데모용 핸들 기반 정체성(비번 없음)."""
+    """사람 유저 — AI 직원(Agent)과 구분되는 실제 사용자. 핸들+비밀번호로 가입·로그인."""
     handle = models.CharField(max_length=30, unique=True, db_index=True, help_text="@핸들(로그인 식별)")
     name = models.CharField(max_length=60)
     color = models.CharField(max_length=8, blank=True, help_text="아바타 색(hex)")
     bio = models.CharField(max_length=160, blank=True)
+    password = models.CharField(max_length=128, blank=True, help_text="Django 해시(set_password)")
+    token = models.CharField(max_length=48, blank=True, db_index=True, help_text="인증 토큰(Authorization)")
+    is_guest = models.BooleanField(default=False, help_text="둘러보기 체험 계정")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import api from '../api'
-import { me, isGuest } from '../user'
+import { me } from '../user'
 import { avatarColor } from '../avatar'
 
 const friends = ref([])
@@ -30,7 +30,7 @@ onMounted(load)
     <div class="page-title">친구</div>
     <div class="page-sub">친구를 맺으면 서로의 채널에 초대해 함께 프로젝트를 만들 수 있어요. 각자 데려온 AI 직원들이 한 팀처럼 협업합니다.</div>
 
-    <div v-if="isGuest()" class="empty">먼저 좌측 상단에서 프로필을 만들어 주세요.</div>
+    <div v-if="me.is_guest" class="empty">체험 계정은 친구를 맺을 수 없어요. 회원가입하면 친구를 추가하고 채널에 초대할 수 있어요.</div>
     <template v-else>
       <div class="panel" style="margin-bottom:20px">
         <h2>친구 추가</h2>

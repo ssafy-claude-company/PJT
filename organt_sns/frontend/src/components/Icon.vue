@@ -30,6 +30,9 @@ const P = {
   arrowL: '<path d="M19 12H5"/><path d="m12 19-7-7 7-7"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   layers: '<path d="m12 2 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  compass: '<circle cx="12" cy="12" r="9"/><path d="m16.2 7.8-2 6.3-6.4 2.1 2-6.3z"/>',
 }
 const inner = computed(() => P[props.name] || '')
 </script>

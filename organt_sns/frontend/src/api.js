@@ -3,10 +3,10 @@ import axios from 'axios'
 // 개발: vite 프록시가 /api → :8000. 배포: 동일 출처에서 Django가 서빙.
 const http = axios.create({ baseURL: '/api', timeout: 20000 })
 
-// 멀티유저 정체성 — 현재 @핸들을 헤더로(데모 인증).
+// 인증 — 저장된 토큰을 Authorization 헤더로(회원가입/로그인 시 발급).
 http.interceptors.request.use((cfg) => {
-  const h = localStorage.getItem('organt_handle')
-  if (h) cfg.headers['X-Organt-User'] = h
+  const t = localStorage.getItem('organt_token')
+  if (t) cfg.headers['Authorization'] = `Token ${t}`
   return cfg
 })
 
@@ -16,9 +16,16 @@ const list = (data) => (Array.isArray(data) ? data : (data?.results ?? []))
 export default {
   stats: () => http.get('/stats/').then((r) => r.data),
 
+  // 인증(회원가입/로그인) — {me, token} 반환
+  register: (p) => http.post('/auth/register/', p).then((r) => r.data),
+  login: (p) => http.post('/auth/login/', p).then((r) => r.data),
+  guestLogin: () => http.post('/auth/guest/').then((r) => r.data),
+  logout: () => http.post('/auth/logout/').then((r) => r.data),
+
   // 소셜(멀티유저)
   me: () => http.get('/me/').then((r) => r.data.me),
   saveMe: (p) => http.post('/me/', p).then((r) => r.data.me),
+  workspace: () => http.get('/workspace/').then((r) => r.data.channels),
   people: (q) => http.get('/people/', { params: { q } }).then((r) => r.data.people),
   friends: () => http.get('/friends/').then((r) => r.data.friends),
   addFriend: (handle) => http.post('/friends/', { handle }).then((r) => r.data.friends),

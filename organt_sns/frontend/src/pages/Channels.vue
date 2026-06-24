@@ -11,6 +11,7 @@ const channels = ref([])
 const stats = ref(null)
 const loading = ref(true)
 const creating = ref('')
+const mine = ref(new Set())     // 내 워크스페이스 pid(멤버십 기준)
 
 const TEMPLATES = [
   { key: 'web', label: '웹 앱', desc: '풀스택 · 인증 · 배포', name: '새 웹 앱',
@@ -42,8 +43,11 @@ async function createFromTemplate(t) {
 
 onMounted(async () => {
   try {
-    const [p, s] = await Promise.all([api.projects({ ordering: '-event_count' }), api.stats()])
-    channels.value = p.filter((c) => c.event_count > 0 || c.message_count > 0 || !/^P-/.test(c.pid))
+    const [p, s, ws] = await Promise.all([
+      api.projects({ ordering: '-event_count' }), api.stats(), api.workspace().catch(() => []),
+    ])
+    mine.value = new Set(ws.map((c) => c.pid))
+    channels.value = p.filter((c) => c.event_count > 0 || c.message_count > 0 || mine.value.has(c.pid))
     stats.value = s
   } finally { loading.value = false }
 })
@@ -104,7 +108,7 @@ onMounted(async () => {
         <router-link v-for="c in channels" :key="c.pid" class="chan-row" :to="`/channels/${c.pid}`">
           <span class="hash-av" :class="{ active: stats?.baton?.project === c.pid }"><Icon name="hash" :size="16" /></span>
           <div class="chan-meta">
-            <div class="chan-name">{{ c.name || c.pid }}<span v-if="!/^P-/.test(c.pid)" class="mine-tag">내 채널</span></div>
+            <div class="chan-name">{{ c.name || c.pid }}<span v-if="mine.has(c.pid)" class="mine-tag">내 채널</span></div>
             <div class="chan-sub">{{ c.pid }}<template v-if="c.leader_role"> · 리더 {{ c.leader_role }}</template></div>
           </div>
           <div class="chan-right">

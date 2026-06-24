@@ -42,23 +42,36 @@ h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.02em}
 .sb-item.archived{opacity:.45}.sb-item .arch-tag{color:var(--text3);font-size:14px;flex:none}
 .sb-add{margin-left:auto;color:var(--text3);cursor:pointer;display:inline-flex;padding:2px;border-radius:5px;border:0;background:none;font:inherit}
 .sb-add:hover{color:var(--text);background:var(--surface)}
-/* 내 프로필(사이드바 하단 고정) — 멀티유저 정체성 */
-.sb-me{display:flex;align-items:center;gap:10px;padding:10px 12px;margin:0;border:0;border-top:1px solid var(--line);
-  background:#070709;color:var(--text);cursor:pointer;font:inherit;text-align:left;width:100%;transition:background .12s}
+/* 내 프로필 + 로그아웃(사이드바 하단 고정) */
+.sb-me-row{display:flex;align-items:stretch;border-top:1px solid var(--line);background:#070709}
+.sb-me{flex:1;min-width:0;display:flex;align-items:center;gap:10px;padding:10px 12px;border:0;
+  background:none;color:var(--text);cursor:pointer;font:inherit;text-align:left;transition:background .12s}
 .sb-me:hover{background:var(--surface)}
 .sb-me .me-av{width:34px;height:34px;border-radius:11px;flex:none;display:flex;align-items:center;justify-content:center;
   color:#fff;font-weight:650;font-size:14px;text-transform:uppercase}
 .sb-me .me-meta{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
-.sb-me .me-n{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-me .me-n{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
+.me-guest{font-size:9px;font-weight:700;color:var(--warn);background:rgba(217,164,74,.13);border-radius:4px;padding:1px 5px;flex:none}
 .sb-me .me-h{font-size:11.5px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sb-me .me-edit{color:var(--text3);flex:none}
 .sb-me:hover .me-edit{color:var(--text2)}
+.sb-out{flex:none;border:0;border-left:1px solid var(--line);background:none;color:var(--text3);cursor:pointer;padding:0 13px;transition:.12s}
+.sb-out:hover{color:var(--danger);background:var(--danger-soft)}
+/* 워크스페이스 섹션·힌트·리드 뱃지 */
+.sb-sec.between span{display:inline-flex;align-items:center;gap:6px}
+.sb-sec .icon{color:var(--text3)}
+.role-pill{font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--accent2);background:var(--accent-soft);
+  border-radius:4px;padding:1px 5px;flex:none}
+.sb-hint{display:flex;align-items:flex-start;gap:7px;color:var(--text3);font-size:11.5px;line-height:1.5;
+  padding:8px 10px;margin:2px 4px 6px;background:var(--surface);border:1px dashed var(--line);border-radius:var(--r-sm)}
+.sb-hint .icon{flex:none;margin-top:2px;color:var(--text3)}
 .main{flex:1;display:flex;flex-direction:column;min-width:0;
   background:radial-gradient(125% 70% at 100% -8%,rgba(123,120,240,.06),transparent 52%),var(--bg)}
 
 /* ── 채널 헤더 ─────────────────────────────────── */
 .chan-head{display:flex;align-items:center;gap:11px;padding:14px 20px;border-bottom:1px solid var(--line);flex:none}
-.chan-head .h{font-weight:650;font-size:15.5px;letter-spacing:-.02em}
+.chan-head .h{font-weight:650;font-size:15.5px;letter-spacing:-.02em;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chan-head .baton{flex:none}
 .chan-head .cid{color:var(--text3);font-size:12px}
 .chan-head .baton{margin-left:auto;display:flex;align-items:center;gap:7px}
 .live-baton{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--ok);
@@ -142,6 +155,8 @@ a.cmsg-name:hover{text-decoration:underline}
   padding:11px 15px;font:inherit;transition:border-color .12s}
 .field:focus{outline:none;border-color:var(--accent-line)}
 .composer .hint{color:var(--text3);font-size:11.5px;margin-top:8px}
+.req-tools{display:flex;gap:8px;margin-bottom:8px;align-items:stretch}
+.req-tools .picker{flex:1;min-width:0}
 .pending-bar{margin:12px 20px 0;padding:10px 14px;border:1px solid rgba(217,164,74,.28);background:rgba(217,164,74,.08);
   border-radius:var(--r);color:#e0b366;font-size:12.5px;line-height:1.5}
 .recs{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:8px}
@@ -256,14 +271,34 @@ textarea{resize:vertical;line-height:1.55}
 .sb-search{margin:4px 8px 8px;padding:8px 12px;font-size:12.5px;width:calc(100% - 16px)}
 @media(max-width:760px){
   .shell{flex-direction:column}
-  .topbar{display:flex;align-items:center;gap:12px;height:54px;flex:none;padding:0 14px;background:#070709;border-bottom:1px solid var(--line)}
+  .topbar{display:flex;align-items:center;gap:12px;height:54px;flex:none;padding:0 14px;background:#070709;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:40}
   .topbar .burger{background:none;border:0;color:var(--text);cursor:pointer;padding:6px;display:inline-flex;font-size:20px}
   .topbar .tb-brand{font-weight:750;font-size:16px;letter-spacing:-.03em}
   .topbar .live-tag{margin-left:auto}
-  .sidebar{position:fixed;top:0;left:0;bottom:0;z-index:60;width:268px;transform:translateX(-100%);transition:transform .24s cubic-bezier(.4,0,.2,1)}
+  .sidebar{position:fixed;top:0;left:0;bottom:0;z-index:60;width:min(284px,86vw);transform:translateX(-100%);transition:transform .24s cubic-bezier(.4,0,.2,1)}
   .sidebar.open{transform:translateX(0);box-shadow:var(--shadow-lg)}
   .scrim{display:block;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:55;backdrop-filter:blur(1px)}
+  .main{min-height:0}
   .container{padding:18px 16px}
-  .chan-head{padding:12px 15px}.msgs{padding:12px 14px 8px}.composer{padding:12px 15px 16px}
-  .pending-bar{margin:10px 15px 0}.msg.human .bubble{max-width:84%}
+  /* 채널 헤더 — 좁은 화면에서 컨트롤이 안 잘리게 */
+  .chan-head{padding:11px 14px;gap:8px}
+  .chan-head .cid{display:none}
+  .chan-head .baton{gap:3px}
+  .chan-head .live-baton{padding:3px 9px;font-size:11px}
+  .iconbtn{padding:7px 6px}
+  /* 멤버 팝오버 — 화면 밖으로 안 나가게 */
+  .members-pop{width:min(290px,calc(100vw - 22px))}
+  .members-btn .mstack{display:none}        /* 좁은 화면: 아바타 스택 대신 아이콘+숫자만 */
+  /* 채팅 */
+  .msgs{padding:12px 13px 8px}
+  .cmsg{gap:11px;padding:5px 7px}
+  .cmsg-av{width:36px;height:36px;border-radius:11px}
+  /* 컴포저 — 요청 도구 줄바꿈(봇 선택이 한 줄 차지) */
+  .composer{padding:12px 14px 16px}
+  .req-tools{flex-wrap:wrap}
+  .req-tools .picker{flex:1 1 100%;order:-1}
+  .composer .row .btn{padding:10px 13px}
+  /* 카드·그리드 안전 스택 */
+  .grid.cards{grid-template-columns:1fr}
+  .pending-bar{margin:10px 14px 0}.msg.human .bubble{max-width:86%}
 }
