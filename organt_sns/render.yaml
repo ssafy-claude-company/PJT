@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: organt-sns
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: bash build.sh
+    startCommand: gunicorn config.wsgi:application --chdir backend --bind 0.0.0.0:$PORT
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "0"
+      - key: PYTHON_VERSION
+        value: "3.11.9"
