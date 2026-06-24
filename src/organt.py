@@ -108,6 +108,14 @@ def build_options(config: Config, **overrides) -> ClaudeAgentOptions:
         permission_mode="acceptEdits",            # 파일 편집 자동 승인(권한 훅은 Step2)
         max_turns=16,                             # 작업당 턴 상한(폭주 방지)
     )
+    # [워커 CLI 버전 교정(2026-06-24) — CCR 프록시 호환] SDK 번들 CLI(2.1.170)는 CCR-v2 egress 프록시를
+    # 통과할 때 모델 API 응답 스트림을 끝없이 버퍼링→RSS 10GB로 폭주해 OOM(라이브: 모든 워커가 어떤 모델
+    # 이든 시동 직후 죽음, 소켓 read 4.2GB 관측). 시스템에 설치된 새 CLI(2.1.187 — 메인 세션이 쓰는 그
+    # 버전)는 같은 프록시로 정상 작동(즉시 응답·폭주 없음). README의 "upgrade it" 처방대로, 프록시를 끄지
+    # 않고(금지) 워커가 호환 CLI를 쓰게 cli_path를 명시한다. 그 바이너리가 없으면 번들로 안전 폴백.
+    _wcli = os.environ.get("ORGANT_WORKER_CLI") or "/opt/node22/bin/claude"
+    if os.path.exists(_wcli):
+        opts["cli_path"] = _wcli
     opts.update(overrides)
     return ClaudeAgentOptions(**opts)
 
