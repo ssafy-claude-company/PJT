@@ -62,11 +62,10 @@ const groups = computed(() => {
   let cur = null, work = null
   const flushWork = () => { if (work) { out.push(work); work = null } }
   for (const m of (data.value?.messages || [])) {
-    if (!isConv(m)) {                                   // 도구 작업 — 한 줄로 조용히 접는다
+    if (!isConv(m)) {                                   // 도구 작업 — 누가 했든 한 줄로 조용히 접는다
       cur = null
-      const who = m.actor_name || m.actor_role || '직원'
-      if (work && work.who === who) work.n++
-      else { flushWork(); work = { type: 'work', key: 'w' + out.length, who, n: 1 } }
+      if (work) work.n++
+      else work = { type: 'work', key: 'w' + out.length, n: 1 }
       continue
     }
     flushWork()
@@ -248,7 +247,7 @@ watch(() => route.params.pid, () => {
     <template v-else>
       <template v-for="g in groups" :key="g.key">
         <!-- 도구 작업: 조용한 한 줄 -->
-        <div v-if="g.type === 'work'" class="work-line"><span class="dotmark"></span>{{ g.who }} 작업 중 · {{ g.n }}건</div>
+        <div v-if="g.type === 'work'" class="work-line"><span class="dotmark"></span>작업 중 · {{ g.n }}건</div>
         <!-- 메시지 묶음: 사람·직원 동일 레이아웃 -->
         <div v-else class="cmsg">
           <router-link v-if="g.actorId" :to="`/agents/${g.actorId}`" class="cmsg-av" :style="{ background: g.isHuman ? 'var(--accent)' : avatarColor(g.seed) }">{{ monogram(g.author) }}</router-link>
