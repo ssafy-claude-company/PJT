@@ -438,7 +438,9 @@ class StatsView(APIView):
         if last:
             baton = {"actor_id": str(last.actor.bot_id) if last.actor else None,
                      "role": last.actor.role if last.actor else None,
+                     "name": last.actor.name if last.actor else None,
                      "project": last.project.pid if last.project else None,
+                     "project_name": last.project.name if last.project else None,
                      "summary": last.summary, "ts": last.ts}
         return Response({
             "events": Event.objects.count(),
