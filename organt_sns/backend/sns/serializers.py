@@ -1,0 +1,89 @@
+"""DRF 직렬화 — Organt SNS 리소스를 JSON으로(F1304 RESTful)."""
+from rest_framework import serializers
+
+from .models import Agent, RoleProfile, Project, CollabTask, Event, Thread, Comment, Like
+
+
+class AgentSerializer(serializers.ModelSerializer):
+    event_count = serializers.IntegerField(read_only=True, required=False)
+    distill_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Agent
+        fields = ["id", "bot_id", "name", "role", "is_leader", "event_count", "distill_count"]
+
+    def get_distill_count(self, obj):
+        rp = RoleProfile.objects.filter(role=obj.role).first()
+        return rp.distill_count if rp else 0
+
+
+class RoleProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RoleProfile
+        fields = ["id", "role", "criteria", "experience_count", "distill_count", "updated_at"]
+
+
+class EventSerializer(serializers.ModelSerializer):
+    project_pid = serializers.CharField(source="project.pid", default=None, read_only=True)
+    project_name = serializers.CharField(source="project.name", default=None, read_only=True)
+    actor_role = serializers.CharField(source="actor.role", default=None, read_only=True)
+    actor_id = serializers.IntegerField(source="actor.bot_id", default=None, read_only=True)
+    target_id = serializers.IntegerField(source="target.bot_id", default=None, read_only=True)
+
+    class Meta:
+        model = Event
+        fields = ["seq", "ts", "kind", "project_pid", "project_name",
+                  "actor_id", "actor_role", "target_id", "summary"]
+
+
+class CollabTaskSerializer(serializers.ModelSerializer):
+    owner_role = serializers.CharField(source="owner.role", default=None, read_only=True)
+
+    class Meta:
+        model = CollabTask
+        fields = ["id", "task_id", "purpose", "goal", "owner", "owner_role",
+                  "cross_checks", "deploy_count", "status"]
+
+
+class ProjectSerializer(serializers.ModelSerializer):
+    leader_role = serializers.CharField(source="leader.role", default=None, read_only=True)
+    event_count = serializers.IntegerField(read_only=True, required=False)
+    task_count = serializers.IntegerField(read_only=True, required=False)
+
+    class Meta:
+        model = Project
+        fields = ["id", "pid", "name", "leader", "leader_role", "status",
+                  "event_count", "task_count"]
+
+
+class ProjectDetailSerializer(ProjectSerializer):
+    tasks = CollabTaskSerializer(many=True, read_only=True)
+
+    class Meta(ProjectSerializer.Meta):
+        fields = ProjectSerializer.Meta.fields + ["tasks"]
+
+
+class CommentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Comment
+        fields = ["id", "thread", "author_name", "body", "created_at"]
+        read_only_fields = ["created_at"]
+
+
+class ThreadSerializer(serializers.ModelSerializer):
+    project_pid = serializers.CharField(source="project.pid", default=None, read_only=True)
+    comment_count = serializers.IntegerField(source="comments.count", read_only=True)
+    like_count = serializers.IntegerField(source="likes.count", read_only=True)
+
+    class Meta:
+        model = Thread
+        fields = ["id", "project", "project_pid", "title", "body",
+                  "created_at", "comment_count", "like_count"]
+        read_only_fields = ["created_at"]
+
+
+class ThreadDetailSerializer(ThreadSerializer):
+    comments = CommentSerializer(many=True, read_only=True)
+
+    class Meta(ThreadSerializer.Meta):
+        fields = ThreadSerializer.Meta.fields + ["comments"]
