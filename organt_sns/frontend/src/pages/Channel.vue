@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { kindMeta, timeFmt } from '../kinds'
 import CollabPanel from '../components/CollabPanel.vue'
+import Icon from '../components/Icon.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -27,6 +28,10 @@ const reqSending = ref(false)
 // 적임자 추천(F1301) — 요청 작성 중 누구에게 맡길지 제안
 const recs = ref([])
 const recLoading = ref(false)
+// 봇 선택(커스텀 드롭다운)
+const pickerOpen = ref(false)
+const reqToBot = computed(() => agents.value.find((b) => String(b.bot_id) === String(reqTo.value)))
+function choose(b) { reqTo.value = b ? b.bot_id : ''; pickerOpen.value = false }
 
 // 대화(conversation) 종류 — 버블로. 그 외(work/raw/experience)는 활동 줄로 접는다.
 const CONV = new Set(['delegation', 'consultation', 'goal_set', 'meeting', 'verification',
@@ -153,22 +158,21 @@ watch(() => route.params.pid, () => { live.value = false; load() })
 
 <template>
   <div class="chan-head">
-    <span class="h"># {{ data?.name || route.params.pid }}</span>
-    <span class="muted mono" style="font-size:12px">{{ route.params.pid }}</span>
+    <span class="h">{{ data?.name || route.params.pid }}</span>
+    <span class="cid">{{ route.params.pid }}</span>
     <span v-if="batonHere" class="live-baton"><i class="pulse"></i>{{ batonHere }} 작업 중</span>
     <span v-else-if="live" class="live-tag" title="라이브 — 자동 갱신 중"><i></i>LIVE</span>
     <div class="baton">
-      <button class="btn ghost" style="padding:4px 11px"
-              :style="showStruct ? 'border-color:var(--accent);color:var(--accent)' : ''"
-              @click="showStruct = !showStruct">🔭 구조</button>
-      <button class="btn ghost" style="padding:4px 11px" @click="loadBrief">🧠 브리핑</button>
+      <button class="iconbtn" :class="{ on: showStruct }" title="협업 구조" @click="showStruct = !showStruct"><Icon name="network" /></button>
+      <button class="iconbtn" :class="{ on: showBrief }" title="AI 브리핑" @click="loadBrief"><Icon name="spark" /></button>
       <div class="ch-menu">
-        <button class="btn ghost" style="padding:4px 10px" @click="menu = !menu" title="채널 관리">⋯</button>
+        <button class="iconbtn" title="채널 관리" @click="menu = !menu"><Icon name="more" /></button>
         <div v-if="menu" class="menu-back" @click="menu = false"></div>
         <div v-if="menu" class="menu-pop">
-          <button @click="doRename">✏️ 이름 변경</button>
-          <button @click="doArchive">📦 보관 / 복원</button>
-          <button v-if="isMine" @click="doRemove" class="danger">🗑 삭제</button>
+          <button @click="doRename"><Icon class="ic" name="edit" :size="15" />이름 변경</button>
+          <button @click="doArchive"><Icon class="ic" name="archive" :size="15" />보관 / 복원</button>
+          <template v-if="isMine"><div class="menu-sep"></div>
+            <button @click="doRemove" class="danger"><Icon class="ic" name="trash" :size="15" />삭제</button></template>
           <div v-else class="menu-note">디스코드 쇼케이스 채널은 삭제 불가</div>
         </div>
       </div>
@@ -178,14 +182,14 @@ watch(() => route.params.pid, () => { live.value = false; load() })
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />
 
   <div v-if="data && data.pending_count" class="pending-bar">
-    ⏳ 대기 중인 봇 요청 <b>{{ data.pending_count }}건</b> — 요청은 정상 접수됐습니다. 실제 협업은 <b>라이브 러너가 켜져 있을 때</b> 처리됩니다(현재 데모는 러너 대기).
+    대기 중인 봇 요청 <b>{{ data.pending_count }}건</b> — 요청은 정상 접수됐습니다. 실제 협업은 <b>라이브 러너가 켜져 있을 때</b> 처리됩니다.
   </div>
 
-  <div v-if="showBrief && briefing" class="panel" style="margin:10px 18px 0">
-    <h2>🧠 생성형 AI 협업 브리핑</h2>
-    <div style="padding:12px 14px">
+  <div v-if="showBrief && briefing" class="panel" style="margin:12px 20px 0">
+    <h2>생성형 AI 협업 브리핑</h2>
+    <div style="padding:14px 16px">
       <div class="pre">{{ briefing.text }}</div>
-      <div class="muted" style="font-size:11px;margin-top:6px">
+      <div class="muted" style="font-size:11px;margin-top:8px">
         {{ briefing.generated ? '생성형 AI' : '규칙기반' }} · 교차검증 {{ briefing.stats.cross_checks }}회 · 배포 {{ briefing.stats.deploy_count }}회
       </div>
     </div>
@@ -197,10 +201,10 @@ watch(() => route.params.pid, () => { live.value = false; load() })
       <div class="day-sep">채널 시작 — 봇들의 협업 대화</div>
       <template v-for="m in rendered" :key="m.key">
         <div v-if="m.type === 'activity'" class="activity">
-          <span class="ic">🔧</span> {{ m.role || '직원' }} — 작업 {{ m.n }}건 (Read·run·Edit…)
+          <span class="dotmark"></span>{{ m.role || '직원' }} — 작업 {{ m.n }}건 (Read · run · Edit)
         </div>
         <div v-else-if="m.type === 'human'" class="msg human">
-          <div class="av" style="background:#1f6feb;color:#fff">나</div>
+          <div class="av" style="background:var(--accent)">나</div>
           <div class="bd">
             <div class="who"><span class="nm">{{ m.author }}</span><span class="t">{{ timeFmt(m.ts) }}</span></div>
             <div class="bubble">{{ m.body }}</div>
@@ -226,42 +230,59 @@ watch(() => route.params.pid, () => { live.value = false; load() })
   </div>
 
   <div class="composer">
-    <div class="flex" style="gap:6px;margin-bottom:8px">
-      <button class="btn ghost" style="padding:4px 12px;font-size:12px"
-              :style="mode === 'msg' ? 'border-color:var(--accent);color:var(--accent)' : ''" @click="mode = 'msg'">💬 메시지</button>
-      <button class="btn ghost" style="padding:4px 12px;font-size:12px"
-              :style="mode === 'req' ? 'border-color:var(--accent);color:var(--accent)' : ''" @click="mode = 'req'">📨 요청(봇에게)</button>
+    <div class="seg" style="margin-bottom:10px">
+      <button :class="{ on: mode === 'msg' }" @click="mode = 'msg'"><Icon name="message" :size="15" />메시지</button>
+      <button :class="{ on: mode === 'req' }" @click="mode = 'req'"><Icon name="send" :size="15" />봇에게 요청</button>
     </div>
 
     <div v-if="mode === 'msg'" class="row">
-      <input v-model="draft" placeholder="이 채널에 메시지 남기기…" @keyup.enter="send" :disabled="sending" />
-      <button class="btn" @click="send" :disabled="sending || !draft.trim()">{{ sending ? '…' : '보내기' }}</button>
+      <input class="field" v-model="draft" placeholder="이 채널에 메시지 남기기" @keyup.enter="send" :disabled="sending" />
+      <button class="btn" @click="send" :disabled="sending || !draft.trim()"><Icon name="send" :size="15" />보내기</button>
     </div>
 
     <template v-else>
-      <div class="flex" style="gap:8px;margin-bottom:6px">
-        <select v-model="reqTo" style="flex:1">
-          <option value="">담당 봇 (비우면 리더)</option>
-          <option v-for="b in agents" :key="b.bot_id" :value="b.bot_id">{{ b.avatar || '🤖' }} {{ b.role }}{{ b.name ? (' · ' + b.name) : '' }}</option>
-        </select>
-        <button class="btn ghost" style="padding:7px 12px" :style="reqKind === 'W' ? 'border-color:var(--accent);color:var(--accent)' : ''" @click="reqKind = 'W'">작업</button>
-        <button class="btn ghost" style="padding:7px 12px" :style="reqKind === 'I' ? 'border-color:var(--accent);color:var(--accent)' : ''" @click="reqKind = 'I'">질문</button>
-        <button class="btn ghost" style="padding:7px 12px" :disabled="recLoading || !reqBody.trim()" @click="suggest"
-                title="이 일에 적합한 봇 추천(F1301)">{{ recLoading ? '…' : '✨ 적임자' }}</button>
+      <div class="flex" style="gap:8px;margin-bottom:8px;align-items:stretch">
+        <div class="picker" style="flex:1">
+          <button class="trigger" @click="pickerOpen = !pickerOpen">
+            <template v-if="reqToBot">
+              <span class="bot-av sm" :style="{ background: avatarColor(reqToBot.role) }">{{ reqToBot.avatar || initials(reqToBot.role) }}</span>
+              <span>{{ reqToBot.role }}<span v-if="reqToBot.name" class="muted"> · {{ reqToBot.name }}</span></span>
+            </template>
+            <span v-else class="ph">담당 봇 선택 (비우면 리더)</span>
+            <Icon class="chev" name="chevron" :size="15" />
+          </button>
+          <template v-if="pickerOpen">
+            <div class="menu-back" @click="pickerOpen = false"></div>
+            <div class="picker-pop">
+              <div class="picker-opt" :class="{ sel: !reqTo }" @click="choose(null)"><span class="ph muted">리더에게 (자동)</span></div>
+              <div v-for="b in agents" :key="b.bot_id" class="picker-opt" :class="{ sel: String(b.bot_id) === String(reqTo) }" @click="choose(b)">
+                <span class="bot-av sm" :style="{ background: avatarColor(b.role) }">{{ b.avatar || initials(b.role) }}</span>
+                <span>{{ b.role }}<span v-if="b.name" class="muted"> · {{ b.name }}</span></span>
+                <span class="role">활동 {{ b.event_count }}</span>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="seg">
+          <button :class="{ on: reqKind === 'W' }" @click="reqKind = 'W'">작업</button>
+          <button :class="{ on: reqKind === 'I' }" @click="reqKind = 'I'">질문</button>
+        </div>
+        <button class="btn ghost sm" :disabled="recLoading || !reqBody.trim()" @click="suggest" title="이 일에 적합한 봇 추천">
+          <Icon name="target" :size="15" />{{ recLoading ? '…' : '적임자' }}
+        </button>
       </div>
       <div v-if="recs.length" class="recs">
-        <span class="muted" style="font-size:11px;margin-right:2px">추천:</span>
-        <button v-for="b in recs" :key="b.bot_id" class="recchip" @click="pickRec(b)"
-                :title="`활동 ${b.event_count} · ${recWhy(b)}`">
-          <b>{{ b.role }}</b><span v-if="b.name" class="muted"> {{ b.name }}</span>
-          <span class="why" v-if="recWhy(b)">{{ recWhy(b) }}</span>
+        <span class="muted" style="font-size:11.5px">추천</span>
+        <button v-for="b in recs" :key="b.bot_id" class="recchip" @click="pickRec(b)" :title="`활동 ${b.event_count}`">
+          <span class="bot-av sm" :style="{ background: avatarColor(b.role) }">{{ b.avatar || initials(b.role) }}</span>
+          <b>{{ b.role }}</b><span class="why" v-if="recWhy(b)">{{ recWhy(b) }}</span>
         </button>
       </div>
       <div class="row">
-        <input v-model="reqBody" :placeholder="reqKind === 'W' ? '무엇을 만들/할지…' : '무엇을 물어볼지…'" @keyup.enter="sendRequest" :disabled="reqSending" />
-        <button class="btn" @click="sendRequest" :disabled="reqSending || !reqBody.trim()">{{ reqSending ? '…' : '요청' }}</button>
+        <input class="field" v-model="reqBody" :placeholder="reqKind === 'W' ? '무엇을 만들지 / 할지' : '무엇을 물어볼지'" @keyup.enter="sendRequest" :disabled="reqSending" />
+        <button class="btn" @click="sendRequest" :disabled="reqSending || !reqBody.trim()"><Icon name="send" :size="15" />{{ reqSending ? '…' : '요청' }}</button>
       </div>
     </template>
-    <div class="hint">메시지 = 사람 소통(F1303) · 요청 = 봇에게 Work/Info 1급 투입 → SYS가 처리(러너 연결 시 라이브 협업).</div>
+    <div class="hint">메시지는 사람 소통, 요청은 봇에게 작업·질문을 1급으로 투입합니다 — 러너 연결 시 라이브 협업.</div>
   </div>
 </template>

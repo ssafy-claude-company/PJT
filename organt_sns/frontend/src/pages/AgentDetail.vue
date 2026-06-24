@@ -3,6 +3,7 @@ import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
 import EventItem from '../components/EventItem.vue'
+import Icon from '../components/Icon.vue'
 
 const route = useRoute()
 const agent = ref(null)
@@ -12,7 +13,7 @@ const loading = ref(true)
 const editing = ref(false)
 const saving = ref(false)
 const form = ref({ name: '', role: '', avatar: '🤖', persona: '' })
-const AVATARS = ['🤖', '🛠️', '🎨', '🧪', '🧠', '📊', '🎮', '🔧', '🚀', '🦾', '🛡️', '📐', '🔬', '📐', '⚙️', '🧭']
+const AVATARS = ['🤖', '🛠', '🎨', '🧪', '🧠', '📊', '🎮', '🔧', '🚀', '🦾', '🛡', '📐', '🔬', '⚙', '🧭', '💡']
 
 function avatarColor(role) { let h = 0; for (const c of (role || '?')) h = (h * 31 + c.charCodeAt(0)) % 360; return `hsl(${h} 52% 56%)` }
 
@@ -55,7 +56,7 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
             <span v-if="agent.is_leader" class="badge lead">리더</span>
             <span v-if="agent.created_via === 'sns'" class="badge ok">스튜디오</span>
           </div>
-          <button v-if="!editing" class="btn ghost" style="padding:5px 12px" @click="startEdit">✏️ 편집</button>
+          <button v-if="!editing" class="btn ghost sm" @click="startEdit"><Icon name="edit" :size="15" />편집</button>
         </div>
         <div v-if="agent.name" class="muted" style="font-size:14px;margin-top:2px">{{ agent.name }}</div>
         <div class="muted mono" style="font-size:12px;margin-top:3px">봇 #{{ agent.bot_id }}</div>
@@ -69,14 +70,16 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
 
     <!-- 편집 폼 -->
     <div v-if="editing" class="panel" style="margin-bottom:16px">
-      <h2>✏️ 봇 편집</h2>
-      <div style="padding:14px;display:grid;gap:10px">
+      <h2>봇 편집</h2>
+      <div style="padding:18px;display:grid;gap:14px">
         <div class="flex" style="gap:8px">
           <input v-model="form.role" placeholder="직군" style="flex:1" />
-          <input v-model="form.name" placeholder="이름(선택)" style="flex:1" />
-          <select v-model="form.avatar" style="width:84px"><option v-for="a in AVATARS" :key="a" :value="a">{{ a }}</option></select>
+          <input v-model="form.name" placeholder="이름 (선택)" style="flex:1" />
         </div>
-        <textarea v-model="form.persona" rows="3" placeholder="인격(시스템 프롬프트, 선택)"></textarea>
+        <div class="av-grid">
+          <button v-for="a in AVATARS" :key="a" class="av-pick" :class="{ on: form.avatar === a }" @click="form.avatar = a">{{ a }}</button>
+        </div>
+        <textarea v-model="form.persona" rows="3" placeholder="인격 (시스템 프롬프트, 선택)"></textarea>
         <div class="flex" style="gap:8px">
           <button class="btn" @click="saveEdit" :disabled="saving">{{ saving ? '저장 중…' : '저장' }}</button>
           <button class="btn ghost" @click="editing = false" :disabled="saving">취소</button>
