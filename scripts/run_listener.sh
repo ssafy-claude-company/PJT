@@ -65,10 +65,12 @@ while true; do
   echo "===== [$(date +%H:%M:%S)] 리스너 시작 ====="
   python -m src.main
   echo "===== [$(date +%H:%M:%S)] 리스너 종료(exit=$?) — 3초 후 재시작 ====="
-  # [고아 워커 정리(2026-06-23, 사용자)] 리스너가 죽으면 SDK가 setsid로 띄운 워커 CLI(_bundled/claude)는
-  # 부모를 잃고 init에 재부모돼 *살아남는다* — 새 리스너와 끊긴 채 작업공간을 계속 편집(통합 안 됨·새
-  # 워커와 경합·고아 누적). 재시작 전 이 venv의 워커만 정리한다(에이전트의 런처 'claude'는 _bundled
-  # 경로가 아니라 안 걸림). 라이브 P-030: 옛 워커 고아가 디스코드와 끊긴 채 파일만 만지던 것 차단.
-  pkill -f "_bundled/claude" 2>/dev/null && echo "  [정리] 끊긴 고아 워커 종료"
+  # [고아 워커 정리(2026-06-23, 사용자; 2026-06-24 node22 추가)] 리스너가 죽으면 SDK가 띄운 워커 CLI는
+  # 부모를 잃고 살아남아(고아) 새 리스너와 끊긴 채 작업공간·디스코드를 계속 만진다 — 새 워커와 경합해
+  # 회의 1R/2R가 섞이는 '난리'의 원인(라이브 2026-06-24). 재시작 전 정리한다. 워커는 이제 cli_path로
+  # /opt/node22/bin/claude(2.1.187, full path)로 뜨고 — 에이전트 메인 세션 런처는 argv[0]='claude'(PATH
+  # 해석, full path 아님)라 안 걸린다(확인: 세션 cmdline에 'node22/bin/claude' 0건). 옛 _bundled도 함께.
+  pkill -f "/opt/node22/bin/claude" 2>/dev/null && echo "  [정리] 끊긴 고아 워커 종료(node22)"
+  pkill -f "_bundled/claude" 2>/dev/null && echo "  [정리] 끊긴 고아 워커 종료(번들)"
   sleep 3
 done
