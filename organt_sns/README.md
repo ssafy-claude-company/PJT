@@ -260,5 +260,19 @@ organt_sns/
 
 ## 12. 배포
 
-단일 출처 구성(Django가 Vue `dist/` 정적 산출물과 `/api`를 함께 서빙)을 목표로 합니다.
-> *공개 배포 URL: 작성 예정.*
+**단일 출처(single-origin)** 구성 — Django가 빌드된 Vue `dist/`와 `/api`를 한 포트에서 함께 서빙합니다
+(`config/urls.py`의 catch-all + `settings.SPA_DIST`). HTML5 history 모드 딥링크(`/agents/123` 등)도
+`index.html`로 폴백되어 새로고침에도 동작합니다.
+
+```bash
+cd frontend && npm run build                      # dist/ 생성
+cd ../backend && python manage.py runserver 0.0.0.0:8000
+# → http://localhost:8000 에서 SPA + API가 한 번에 동작
+```
+
+데모용 시드 데이터(약 9,900 이벤트)는 fixture로 제공되어 라이브 두뇌 없이도 재현됩니다:
+```bash
+python manage.py migrate && python manage.py loaddata seed
+```
+
+> 공개 배포 URL: *작성 예정* (자체 서버 호스팅 예정).

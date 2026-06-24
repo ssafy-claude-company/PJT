@@ -87,6 +87,9 @@ USE_TZ = True
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# 빌드된 Vue SPA(dist) 경로 — 단일 출처 배포(F1305): Django가 /api 와 SPA를 함께 서빙.
+SPA_DIST = os.environ.get("SPA_DIST") or str(BASE_DIR.parent / "frontend" / "dist")
+
 # ── DRF (F1304 RESTful) ──────────────────────────────────────────────
 REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
