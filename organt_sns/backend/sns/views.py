@@ -57,6 +57,41 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         AI 키 설정 시 LLM 요약, 미설정 시 규칙기반 폴백(generated=false)."""
         return Response(project_briefing(self.get_object()))
 
+    @action(detail=True)
+    def messages(self, request, pid=None):
+        """채널(=프로젝트) 메시지 타임라인 — 봇 협업 이벤트 + 사람 코멘트를 시간순 병합(상위 Discord 코어)."""
+        proj = self.get_object()
+        limit = min(int(request.query_params.get("limit") or 160), 400)
+        evs = list(proj.events.select_related("actor", "target").order_by("-seq")[:limit])
+        evs.reverse()
+        msgs = [{
+            "type": "agent", "key": f"e{e.seq}", "ts": e.ts, "kind": e.kind,
+            "actor_role": e.actor.role if e.actor else None,
+            "actor_id": str(e.actor.bot_id) if e.actor else None,
+            "target_role": e.target.role if e.target else None,
+            "summary": e.summary,
+        } for e in evs]
+        thread = proj.threads.first()
+        if thread:
+            for c in thread.comments.all():
+                msgs.append({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),
+                             "author": c.author_name, "body": c.body})
+        msgs.sort(key=lambda m: m["ts"])
+        return Response({"pid": proj.pid, "name": proj.name, "messages": msgs})
+
+    @action(detail=True, methods=["post"])
+    def say(self, request, pid=None):
+        """사람이 채널에 메시지를 남긴다 — F1303 유저 소통(Discord 자체가 커뮤니티)."""
+        proj = self.get_object()
+        body = (request.data.get("body") or "").strip()
+        if not body:
+            return Response({"detail": "내용이 비었습니다."}, status=400)
+        thread = proj.threads.first() or Thread.objects.create(project=proj, title=f"{proj.pid} 채널")
+        c = Comment.objects.create(thread=thread, body=body[:2000],
+                                   author_name=(request.data.get("author") or "사람")[:60])
+        return Response({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),
+                         "author": c.author_name, "body": c.body}, status=201)
+
 
 class EventViewSet(viewsets.ReadOnlyModelViewSet):
     """협업 이벤트 피드. /api/events/?kind=delegation&project=P-032"""
@@ -122,7 +157,7 @@ class RecommendView(APIView):
         for a in agents:
             p = profiles.get(a.role)
             candidates.append({
-                "bot_id": a.bot_id, "name": a.name, "role": a.role,
+                "bot_id": str(a.bot_id), "name": a.name, "role": a.role,
                 "is_leader": a.is_leader, "event_count": a.event_count,
                 "distill_count": p.distill_count if p else 0,
                 "experience_count": p.experience_count if p else 0,
@@ -148,7 +183,7 @@ class StatsView(APIView):
                 .select_related("actor", "project").first())
         baton = None
         if last:
-            baton = {"actor_id": last.actor.bot_id if last.actor else None,
+            baton = {"actor_id": str(last.actor.bot_id) if last.actor else None,
                      "role": last.actor.role if last.actor else None,
                      "project": last.project.pid if last.project else None,
                      "summary": last.summary, "ts": last.ts}

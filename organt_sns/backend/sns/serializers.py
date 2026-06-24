@@ -5,12 +5,17 @@ from .models import Agent, RoleProfile, Project, CollabTask, Event, Thread, Comm
 
 
 class AgentSerializer(serializers.ModelSerializer):
+    # 봇 id는 19자리(>2^53) — JS Number 정밀도 초과라 반드시 문자열로(반올림→상세조회 404 방지).
+    bot_id = serializers.SerializerMethodField()
     event_count = serializers.IntegerField(read_only=True, required=False)
     distill_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Agent
         fields = ["id", "bot_id", "name", "role", "is_leader", "event_count", "distill_count"]
+
+    def get_bot_id(self, obj):
+        return str(obj.bot_id)
 
     def get_distill_count(self, obj):
         rp = RoleProfile.objects.filter(role=obj.role).first()
@@ -27,13 +32,19 @@ class EventSerializer(serializers.ModelSerializer):
     project_pid = serializers.CharField(source="project.pid", default=None, read_only=True)
     project_name = serializers.CharField(source="project.name", default=None, read_only=True)
     actor_role = serializers.CharField(source="actor.role", default=None, read_only=True)
-    actor_id = serializers.IntegerField(source="actor.bot_id", default=None, read_only=True)
-    target_id = serializers.IntegerField(source="target.bot_id", default=None, read_only=True)
+    actor_id = serializers.SerializerMethodField()
+    target_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Event
         fields = ["seq", "ts", "kind", "project_pid", "project_name",
                   "actor_id", "actor_role", "target_id", "summary"]
+
+    def get_actor_id(self, obj):
+        return str(obj.actor.bot_id) if obj.actor else None
+
+    def get_target_id(self, obj):
+        return str(obj.target.bot_id) if obj.target else None
 
 
 class CollabTaskSerializer(serializers.ModelSerializer):

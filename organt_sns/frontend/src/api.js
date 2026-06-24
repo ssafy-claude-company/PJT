@@ -20,6 +20,11 @@ export default {
   projectEvents: (pid) => http.get(`/projects/${pid}/events/`).then((r) => r.data),
   briefing: (pid) => http.get(`/projects/${pid}/briefing/`).then((r) => r.data),
 
+  // 상위 Discord — 채널(프로젝트) 메시지 타임라인 + 사람 메시지 전송
+  channelMessages: (pid, limit = 200) =>
+    http.get(`/projects/${pid}/messages/`, { params: { limit } }).then((r) => r.data),
+  say: (pid, payload) => http.post(`/projects/${pid}/say/`, payload).then((r) => r.data),
+
   // 봉투 유지(count·다음 페이지 필요) — 협업 피드 페이지네이션
   events: (params) => http.get('/events/', { params }).then((r) => r.data),
 
