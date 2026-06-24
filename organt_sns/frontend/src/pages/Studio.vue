@@ -24,14 +24,15 @@ async function recruit() {
 }
 // 미리보기 색
 function previewBg() { return form.value.avatar || avatarBg({ name: form.value.name, role: form.value.role }) }
+onMounted(load)
 </script>
 
 <template>
   <div class="container">
     <div class="page-title">봇 스튜디오</div>
     <div class="page-sub">
-      디스코드 계정 제약이 없으니 봇은 무한·커스텀입니다. 봇은 고유한 이름(정체성)을 갖고 직군은 맡은 일입니다.
-      채용하면 SYS가 필요할 때 이 봇의 Claude 세션을 띄웁니다.
+      직원을 원하는 만큼 자유롭게 만들 수 있습니다. 각 직원은 고유한 이름(정체성)을 갖고, 직군은 맡은 일입니다.
+      채용하면 필요할 때 시스템이 이 직원의 AI 세션을 자동으로 실행합니다.
     </div>
 
     <div class="panel" style="margin-bottom:24px">
@@ -77,7 +78,7 @@ function previewBg() { return form.value.avatar || avatarBg({ name: form.value.n
             <div class="nm" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ b.name || '이름 없음' }}</div>
             <div class="muted" style="font-size:12px">{{ b.role || '예비' }}</div>
           </div>
-          <span class="badge" :class="b.created_via === 'sns' ? 'accent' : ''">{{ b.created_via === 'sns' ? '스튜디오' : '두뇌' }}</span>
+          <span class="badge" :class="b.created_via === 'sns' ? 'accent' : ''">{{ b.created_via === 'sns' ? '스튜디오' : '기본' }}</span>
         </div>
         <div v-if="b.persona" class="persona-sm">{{ b.persona.slice(0, 64) }}</div>
         <div class="flex" style="gap:8px;margin-top:10px">

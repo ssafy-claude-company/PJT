@@ -6,24 +6,26 @@ import { monogram, avatarColor } from '../avatar'
 const q = ref('')
 const result = ref(null)
 const loading = ref(false)
+const error = ref(false)
 const examples = [
   '실시간 멀티플레이 협동 웹게임 서버 동기화',
   'Vue 반응형 화면 UI 렌더링',
   '테스트 품질 검증 버그 엣지케이스',
   '게임 레벨 밸런스 기획',
 ]
-// 추천 근거 4축(가중치 합 1.0) — 색·라벨
+// 추천 근거 4축(가중치 합 1.0) — 디자인 토큰 색 + Channel과 동일 라벨
 const SEG = {
-  role_match: { c: '#58a6ff', l: '역할적합' },
-  keyword_overlap: { c: '#3fb950', l: '직무기준중복' },
-  expertise: { c: '#bc8cff', l: '증류역량' },
-  track_record: { c: '#d29922', l: '활동실적' },
+  role_match: { c: '#8f8cf5', l: '직군 적합' },
+  keyword_overlap: { c: '#52b788', l: '키워드 일치' },
+  expertise: { c: '#b88cf0', l: '전문성' },
+  track_record: { c: '#d9a44a', l: '실적' },
 }
 
 async function run() {
   if (!q.value.trim()) return
-  loading.value = true
+  loading.value = true; error.value = false
   try { result.value = await api.recommend(q.value.trim(), 6) }
+  catch (e) { error.value = true }
   finally { loading.value = false }
 }
 function ex(e) { q.value = e; run() }
@@ -34,7 +36,7 @@ function ex(e) { q.value = e; run() }
     <div class="page-title">적임자 추천</div>
     <div class="page-sub">
       요구사항을 입력하면 <b>강점 기반</b>으로 가장 적합한 AI 직원을 추천합니다. 점수는
-      역할적합·직무기준 키워드중복·증류역량·활동실적의 가중합이며, 각 추천의 <b>근거를 항별로</b> 보여줍니다.
+      직군 적합·키워드 일치·전문성·실적의 가중합이며, 각 추천의 <b>근거를 항목별로</b> 보여줍니다.
     </div>
 
     <div class="flex" style="margin-bottom:10px">
@@ -42,9 +44,9 @@ function ex(e) { q.value = e; run() }
       <button class="btn" @click="run" :disabled="loading">{{ loading ? '추천 중…' : '추천' }}</button>
     </div>
     <div class="wrap-tags" style="margin-bottom:18px">
-      <button v-for="e in examples" :key="e" class="btn ghost"
-              style="font-size:12px;padding:5px 10px" @click="ex(e)">{{ e }}</button>
+      <button v-for="e in examples" :key="e" class="ex-chip" @click="ex(e)">{{ e }}</button>
     </div>
+    <div v-if="error" class="pending-bar">추천을 불러오지 못했습니다. 잠시 후 다시 시도하세요.</div>
 
     <div v-if="loading" class="empty"><span class="spin"></span></div>
     <template v-else-if="result">
@@ -64,15 +66,15 @@ function ex(e) { q.value = e; run() }
             <div class="flex">
               <span v-if="r.distill_count" class="grow">증류 {{ r.distill_count }}</span>
               <span class="badge">활동 {{ r.event_count }}</span>
-              <span class="mono" style="font-weight:700;color:var(--accent2)">{{ (r.score * 100).toFixed(0) }}</span>
+              <span class="mono" style="font-weight:700;color:var(--accent2)">{{ (r.score * 100).toFixed(0) }}<span class="muted" style="font-weight:400;font-size:11px">점</span></span>
             </div>
           </div>
           <div class="scorebar" style="margin-top:10px">
-            <i v-for="(seg, k) in SEG" :key="k" :style="{ width: (r.reasons[k] * 100) + '%', background: seg.c }"></i>
+            <i v-for="(seg, k) in SEG" :key="k" :style="{ width: ((r.reasons[k] || 0) * 100) + '%', background: seg.c }"></i>
           </div>
           <div class="legend">
             <span v-for="(seg, k) in SEG" :key="k">
-              <i :style="{ background: seg.c }"></i>{{ seg.l }} {{ (r.reasons[k] * 100).toFixed(0) }}
+              <i :style="{ background: seg.c }"></i>{{ seg.l }} {{ ((r.reasons[k] || 0) * 100).toFixed(0) }}
             </span>
           </div>
         </div>
@@ -81,3 +83,9 @@ function ex(e) { q.value = e; run() }
     <div v-else class="empty">검색어를 입력하거나 예시를 눌러보세요</div>
   </div>
 </template>
+
+<style scoped>
+.ex-chip { background: var(--surface2); border: 1px solid var(--line); border-radius: 20px; color: var(--text2);
+  padding: 5px 13px; font: inherit; font-size: 12.5px; cursor: pointer; transition: .12s }
+.ex-chip:hover { color: var(--text); border-color: var(--accent-line) }
+</style>

@@ -6,6 +6,7 @@ import { kindMeta, timeFmt } from '../kinds'
 import CollabPanel from '../components/CollabPanel.vue'
 import Icon from '../components/Icon.vue'
 import { monogram, avatarColor, avatarBg } from '../avatar'
+import { askPrompt, askConfirm } from '../dialog'
 
 const route = useRoute()
 const router = useRouter()
@@ -74,8 +75,10 @@ async function load() {
 // 라이브 폴링 — 새 메시지를 새로고침 없이. 바닥에 있을 때만 자동스크롤, 탭 숨김 시 정지.
 async function refresh() {
   if (document.hidden) return
+  const pid = route.params.pid                 // 채널 전환 레이스 방지: 응답이 늦게 와도 현재 채널만 반영
   try {
-    const fresh = await api.channelMessages(route.params.pid)
+    const fresh = await api.channelMessages(pid)
+    if (pid !== route.params.pid) return        // 그새 채널이 바뀌었으면 버린다
     const prevLast = data.value?.messages?.length
     data.value = fresh
     live.value = true
@@ -90,13 +93,19 @@ async function send() {
   sending.value = true
   try {
     const m = await api.say(route.params.pid, { body, author: '사람' })
-    data.value.messages.push(m); draft.value = ''
+    if (data.value?.messages) data.value.messages.push(m)
+    draft.value = ''
     await nextTick(); scrollBottom()
   } finally { sending.value = false }
 }
+const briefErr = ref(false)
 async function loadBrief() {
   showBrief.value = !showBrief.value
-  if (showBrief.value && !briefing.value) briefing.value = await api.briefing(route.params.pid)
+  if (showBrief.value && !briefing.value) {
+    briefErr.value = false
+    try { briefing.value = await api.briefing(route.params.pid) }
+    catch (e) { briefErr.value = true }
+  }
 }
 async function suggest() {
   const q = reqBody.value.trim(); if (!q) return
@@ -119,7 +128,7 @@ async function sendRequest() {
   reqSending.value = true
   try {
     await api.makeRequest(route.params.pid, { to_id: reqTo.value || undefined, kind: reqKind.value, body })
-    reqBody.value = ''
+    reqBody.value = ''; reqTo.value = ''       // 다음 요청은 기본(리더)으로 리셋
     data.value = await api.channelMessages(route.params.pid)
     await nextTick(); scrollBottom()
   } finally { reqSending.value = false }
@@ -128,9 +137,9 @@ async function sendRequest() {
 const isMine = computed(() => !/^P-/.test(route.params.pid))
 async function doRename() {
   menu.value = false
-  const name = prompt('새 채널 이름:', data.value?.name || '')
-  if (!name || !name.trim()) return
-  const r = await api.renameChannel(route.params.pid, name.trim())
+  const name = await askPrompt({ title: '채널 이름 변경', placeholder: '새 이름', value: data.value?.name || '' })
+  if (!name) return
+  const r = await api.renameChannel(route.params.pid, name)
   if (data.value) data.value.name = r.name
 }
 async function doArchive() {
@@ -139,7 +148,8 @@ async function doArchive() {
 }
 async function doRemove() {
   menu.value = false
-  if (!confirm(`채널 '${data.value?.name || route.params.pid}'을(를) 삭제할까요? 되돌릴 수 없습니다.`)) return
+  const ok = await askConfirm({ title: '채널 삭제', message: `'${data.value?.name || route.params.pid}' 채널을 삭제합니다. 되돌릴 수 없습니다.`, danger: true })
+  if (!ok) return
   await api.removeChannel(route.params.pid)
   router.push('/')
 }
@@ -150,7 +160,11 @@ onMounted(() => {
   startPoll()
 })
 onUnmounted(stopPoll)
-watch(() => route.params.pid, () => { live.value = false; load() })
+watch(() => route.params.pid, () => {
+  live.value = false; menu.value = false; pickerOpen.value = false
+  showBrief.value = false; showStruct.value = false
+  load()
+})
 </script>
 
 <template>
@@ -158,12 +172,12 @@ watch(() => route.params.pid, () => { live.value = false; load() })
     <span class="h">{{ data?.name || route.params.pid }}</span>
     <span class="cid">{{ route.params.pid }}</span>
     <span v-if="batonHere" class="live-baton"><i class="pulse"></i>{{ batonHere }} 작업 중</span>
-    <span v-else-if="live" class="live-tag" title="라이브 — 자동 갱신 중"><i></i>LIVE</span>
+    <span v-else-if="live" class="muted" style="font-size:11.5px" title="자동 갱신 중">실시간 보기</span>
     <div class="baton">
-      <button class="iconbtn" :class="{ on: showStruct }" title="협업 구조" @click="showStruct = !showStruct"><Icon name="network" /></button>
-      <button class="iconbtn" :class="{ on: showBrief }" title="AI 브리핑" @click="loadBrief"><Icon name="spark" /></button>
+      <button class="iconbtn" :class="{ on: showStruct }" title="협업 구조" aria-label="협업 구조" @click="showStruct = !showStruct"><Icon name="network" /></button>
+      <button class="iconbtn" :class="{ on: showBrief }" title="AI 브리핑" aria-label="AI 브리핑" @click="loadBrief"><Icon name="spark" /></button>
       <div class="ch-menu">
-        <button class="iconbtn" title="채널 관리" @click="menu = !menu"><Icon name="more" /></button>
+        <button class="iconbtn" title="채널 관리" aria-label="채널 관리" @click="menu = !menu"><Icon name="more" /></button>
         <div v-if="menu" class="menu-back" @click="menu = false"></div>
         <div v-if="menu" class="menu-pop">
           <button @click="doRename"><Icon class="ic" name="edit" :size="15" />이름 변경</button>
@@ -179,9 +193,10 @@ watch(() => route.params.pid, () => { live.value = false; load() })
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />
 
   <div v-if="data && data.pending_count" class="pending-bar">
-    대기 중인 봇 요청 <b>{{ data.pending_count }}건</b> — 요청은 정상 접수됐습니다. 실제 협업은 <b>라이브 러너가 켜져 있을 때</b> 처리됩니다.
+    대기 중인 요청 <b>{{ data.pending_count }}건</b> — 정상 접수됐습니다. 실제 작업은 <b>협업 엔진이 켜져 있을 때</b> 직원들이 처리합니다.
   </div>
 
+  <div v-if="showBrief && briefErr" class="pending-bar">브리핑을 불러오지 못했습니다. 잠시 후 다시 시도하세요.</div>
   <div v-if="showBrief && briefing" class="panel" style="margin:12px 20px 0">
     <h2>생성형 AI 협업 브리핑</h2>
     <div style="padding:14px 16px">
@@ -195,10 +210,10 @@ watch(() => route.params.pid, () => { live.value = false; load() })
   <div class="msgs" ref="msgsEl" @scroll.passive="onScroll">
     <div v-if="loading" class="empty"><span class="spin"></span> 대화 불러오는 중…</div>
     <template v-else>
-      <div class="day-sep">채널 시작 — 봇들의 협업 대화</div>
+      <div v-if="rendered.length" class="day-sep">채널 시작</div>
       <template v-for="m in rendered" :key="m.key">
         <div v-if="m.type === 'activity'" class="activity">
-          <span class="dotmark"></span>{{ m.role || '직원' }} — 작업 {{ m.n }}건 (Read · run · Edit)
+          <span class="dotmark"></span>{{ m.role || '직원' }} — 작업 {{ m.n }}건
         </div>
         <div v-else-if="m.type === 'human'" class="msg human">
           <div class="av" style="background:var(--accent)">나</div>
@@ -208,7 +223,7 @@ watch(() => route.params.pid, () => { live.value = false; load() })
           </div>
         </div>
         <div v-else class="msg agent">
-          <router-link v-if="m.actor_id" :to="`/agents/${m.actor_id}`" class="av" :style="{ background: avatarColor(m.actor_name || m.actor_role) }">{{ monogram(m.actor_name, m.actor_role) }}</router-link>
+          <router-link v-if="m.actor_id" :to="`/agents/${m.actor_id}`" class="av" :style="{ background: avatarColor(m.actor_id || m.actor_name || m.actor_role) }">{{ monogram(m.actor_name, m.actor_role) }}</router-link>
           <div v-else class="av" :style="{ background: avatarColor(m.actor_name || m.actor_role) }">{{ monogram(m.actor_name, m.actor_role) }}</div>
           <div class="bd">
             <div class="who">
@@ -281,6 +296,6 @@ watch(() => route.params.pid, () => { live.value = false; load() })
         <button class="btn" @click="sendRequest" :disabled="reqSending || !reqBody.trim()"><Icon name="send" :size="15" />{{ reqSending ? '…' : '요청' }}</button>
       </div>
     </template>
-    <div class="hint">메시지는 사람 소통, 요청은 봇에게 작업·질문을 1급으로 투입합니다 — 러너 연결 시 라이브 협업.</div>
+    <div class="hint">메시지는 팀과의 대화이고, 요청은 직원에게 작업·질문을 맡깁니다. 처리는 협업 엔진이 켜져 있을 때 진행됩니다.</div>
   </div>
 </template>

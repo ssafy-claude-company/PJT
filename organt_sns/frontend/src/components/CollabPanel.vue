@@ -2,14 +2,15 @@
 import { ref, onMounted, computed } from 'vue'
 import api from '../api'
 import { timeFmt } from '../kinds'
+import { avatarColor, monogram } from '../avatar'
 import Icon from './Icon.vue'
 
 const props = defineProps({ pid: { type: String, required: true }, baton: { type: Object, default: null } })
 const d = ref(null)
 const loading = ref(true)
 
-function avatarColor(role) { let h = 0; for (const c of (role || '?')) h = (h * 31 + c.charCodeAt(0)) % 360; return `hsl(${h} 48% 56%)` }
-const initials = (r) => (r || '?').replace(/[^가-힣A-Za-z]/g, '').slice(0, 2) || '?'
+const initials = (r) => monogram(null, r)
+const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''))
 
 const tree = computed(() => {
   const by = {}
@@ -33,7 +34,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
         <span class="badge">교차검증 {{ d.counts.cross_checks }}</span>
         <span class="badge">개입 {{ d.counts.interventions }}</span>
         <span class="badge">배포 {{ d.counts.deploys }}</span>
-        <span class="badge">Task {{ d.counts.tasks }}</span>
+        <span class="badge">작업 {{ d.counts.tasks }}</span>
       </div>
 
       <div>
@@ -57,7 +58,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
             <div class="tedges">
               <div v-for="e in edges" :key="e.to" class="tedge">
                 <Icon name="arrowR" :size="13" class="ar" /><b>{{ e.to }}</b><span class="x">×{{ e.count }}</span>
-                <span class="last" v-if="e.last">{{ e.last.replace(/^[^:]*:\s*/, '').slice(0, 40) }}</span>
+                <span class="last" v-if="e.last">{{ clip(e.last.replace(/^[^:]*:\s*/, ''), 40) }}</span>
               </div>
             </div>
           </div>
@@ -74,7 +75,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
             <span class="badge" :class="{ ok: t.cross_checks > 0 }">교차검증 {{ t.cross_checks }}</span>
             <span class="badge" :class="{ ok: t.deploy_count > 0 }">배포 {{ t.deploy_count }}</span>
           </div>
-          <div v-if="t.purpose || t.goal" class="gbody">{{ (t.purpose || t.goal).slice(0, 160) }}</div>
+          <div v-if="t.purpose || t.goal" class="gbody">{{ clip(t.purpose || t.goal, 160) }}</div>
         </div>
       </div>
 
@@ -82,7 +83,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
         <div class="sec">산출물</div>
         <div v-for="(o, i) in d.outputs.slice().reverse()" :key="i" class="out">
           <div class="oh"><span class="badge">{{ o.role || '직원' }}</span><span class="t">{{ timeFmt(o.ts) }}</span></div>
-          <div class="obody">{{ o.result.slice(0, 220) }}</div>
+          <div class="obody">{{ clip(o.result, 220) }}</div>
           <div v-if="o.links && o.links.length" class="olinks">
             <a v-for="l in o.links" :key="l" :href="l" target="_blank" rel="noopener" class="olink"><Icon name="link" :size="13" />{{ l.replace(/^https?:\/\//, '').slice(0, 40) }}</a>
           </div>
@@ -92,7 +93,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
       <div v-if="d.interventions.length">
         <div class="sec">사람 개입 · {{ d.interventions.length }}</div>
         <div class="iv" v-for="(iv, i) in d.interventions.slice(-6)" :key="i">
-          <span class="t">{{ timeFmt(iv.ts) }}</span><span class="who">{{ iv.role || '사람' }}</span>{{ (iv.summary || '').slice(0, 70) }}
+          <span class="t">{{ timeFmt(iv.ts) }}</span><span class="who">{{ iv.role || '사람' }}</span>{{ clip(iv.summary, 70) }}
         </div>
       </div>
     </div>
@@ -126,6 +127,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
 .olink { font-size: 12px; color: var(--ok); border: 1px solid rgba(82,183,136,.3); border-radius: 20px; padding: 3px 11px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px }
 .olink:hover { background: var(--ok-soft) }
 .iv { font-size: 12.5px; color: var(--text); padding: 5px 0; border-top: 1px solid var(--line) }
+.iv:first-child { border-top: 0 }
 .iv .t { color: var(--text3); font-size: 11px; margin-right: 8px }
 .iv .who { color: var(--accent2); margin-right: 7px }
 </style>

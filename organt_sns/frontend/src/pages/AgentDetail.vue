@@ -15,15 +15,17 @@ const editing = ref(false)
 const saving = ref(false)
 const form = ref({ name: '', role: '', avatar: '', persona: '' })
 
+const error = ref(false)
 async function load() {
-  loading.value = true
+  loading.value = true; error.value = false
   const id = route.params.botId
   try {
     agent.value = await api.agent(id)
     events.value = await api.agentEvents(id)
     const profs = await api.profiles()
     profile.value = profs.find((p) => p.role === agent.value.role) || null
-  } finally { loading.value = false }
+  } catch (e) { error.value = true; agent.value = null }
+  finally { loading.value = false }
 }
 function startEdit() {
   form.value = { name: agent.value.name || '', role: agent.value.role || '', avatar: agent.value.avatar || '', persona: agent.value.persona || '' }
@@ -42,7 +44,7 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
 
 <template>
   <div class="container" v-if="!loading && agent">
-    <router-link to="/agents" class="muted" style="font-size:13px">← AI 직원</router-link>
+    <router-link to="/agents" class="back"><Icon name="arrowL" :size="15" />AI 직원</router-link>
 
     <div class="prof-head">
       <span class="big-av" :style="{ background: avatarBg(agent) }">{{ monogram(agent.name, agent.role) }}</span>
@@ -103,7 +105,7 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
         <div v-if="profile" style="padding:16px">
           <div class="flex" style="margin-bottom:12px">
             <span class="grow">누적 증류 {{ profile.distill_count }}회</span>
-            <span class="badge">원석 경험 {{ profile.experience_count }}</span>
+            <span class="badge">미반영 경험 {{ profile.experience_count }}</span>
           </div>
           <div class="pre">{{ profile.criteria || '(비어 있음)' }}</div>
         </div>
@@ -111,10 +113,13 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
       </div>
     </div>
   </div>
+  <div v-else-if="error" class="container empty">직원을 찾을 수 없습니다. <router-link to="/agents" class="muted" style="text-decoration:underline">목록으로</router-link></div>
   <div v-else class="container empty"><span class="spin"></span></div>
 </template>
 
 <style scoped>
+.back { display: inline-flex; align-items: center; gap: 5px; color: var(--text3); font-size: 13px }
+.back:hover { color: var(--text) }
 .prof-head { display: flex; gap: 18px; align-items: flex-start; margin: 16px 0 22px }
 .big-av { width: 64px; height: 64px; border-radius: 19px; flex: none; display: flex; align-items: center; justify-content: center;
   font-size: 27px; color: #fff; font-weight: 700 }

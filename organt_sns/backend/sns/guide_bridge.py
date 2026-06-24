@@ -45,21 +45,24 @@ def ingest(request):
     d = request.data
     op = d.get("op")
     now = time.time()
-    if op == "edit_message":
-        GuideMessage.objects.filter(msg_id=int(d["message_id"])).update(
-            body=str(d.get("body", "")), edited=True)
-        return Response({"ok": True})
-    if op == "update_status":
-        GuideMessage.objects.filter(msg_id=int(d["status_msg_id"])).update(
-            body=str(d.get("body", "")), edited=True, payload=d.get("payload") or {})
-        return Response({"ok": True, "msg_id": int(d["status_msg_id"])})
-    # 신규 행 기록(post/send_request/send_response/open_task)
-    m = GuideMessage.objects.create(
-        channel_id=int(d["channel_id"]), thread_id=int(d.get("thread_id") or d["channel_id"]),
-        sender_id=int(d.get("sender_id") or 0), msg_type=d.get("msg_type", "plain"),
-        to_id=(int(d["to_id"]) if d.get("to_id") else None),
-        kind=(d.get("kind") or ""), reply_to=(int(d["reply_to"]) if d.get("reply_to") else None),
-        body=str(d.get("body", "")), payload=d.get("payload") or {}, ts=now)
+    try:
+        if op == "edit_message":
+            GuideMessage.objects.filter(msg_id=int(d["message_id"])).update(
+                body=str(d.get("body", "")), edited=True)
+            return Response({"ok": True})
+        if op == "update_status":
+            GuideMessage.objects.filter(msg_id=int(d["status_msg_id"])).update(
+                body=str(d.get("body", "")), edited=True, payload=d.get("payload") or {})
+            return Response({"ok": True, "msg_id": int(d["status_msg_id"])})
+        # 신규 행 기록(post/send_request/send_response/open_task)
+        m = GuideMessage.objects.create(
+            channel_id=int(d["channel_id"]), thread_id=int(d.get("thread_id") or d["channel_id"]),
+            sender_id=int(d.get("sender_id") or 0), msg_type=d.get("msg_type", "plain"),
+            to_id=(int(d["to_id"]) if d.get("to_id") else None),
+            kind=(d.get("kind") or ""), reply_to=(int(d["reply_to"]) if d.get("reply_to") else None),
+            body=str(d.get("body", "")), payload=d.get("payload") or {}, ts=now)
+    except (KeyError, TypeError, ValueError) as e:
+        return Response({"detail": f"필드 오류: {e}"}, status=status.HTTP_400_BAD_REQUEST)
     return Response({"msg_id": m.msg_id}, status=status.HTTP_201_CREATED)
 
 
@@ -84,7 +87,10 @@ def pick(request):
     """요청을 '집음'(중복 처리 방지)·'완료'로 표시."""
     if not _authed(request):
         return _deny()
-    mid = int(request.data["msg_id"])
+    try:
+        mid = int(request.data["msg_id"])
+    except (KeyError, TypeError, ValueError):
+        return Response({"detail": "msg_id가 올바르지 않습니다."}, status=status.HTTP_400_BAD_REQUEST)
     m = GuideMessage.objects.filter(msg_id=mid).first()
     if not m:
         return Response({"detail": "없음"}, status=status.HTTP_404_NOT_FOUND)
@@ -102,8 +108,11 @@ def thread(request):
     """read_thread 재구성용 원시 행(시간순). 클라가 Request/Response/plain으로 복원한다."""
     if not _authed(request):
         return _deny()
-    tid = int(request.query_params.get("thread_id"))
-    limit = int(request.query_params.get("limit", 50))
+    try:
+        tid = int(request.query_params.get("thread_id"))
+        limit = int(request.query_params.get("limit", 50))
+    except (TypeError, ValueError):
+        return Response({"detail": "thread_id가 올바르지 않습니다."}, status=status.HTTP_400_BAD_REQUEST)
     rows = list(GuideMessage.objects.filter(thread_id=tid).order_by("msg_id"))[-limit:]
     return Response({"rows": [
         {"msg_id": m.msg_id, "msg_type": m.msg_type, "sender_id": m.sender_id, "to_id": m.to_id,

@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import Icon from '../components/Icon.vue'
+import { askPrompt } from '../dialog'
 
 const router = useRouter()
 const channels = ref([])
@@ -27,7 +28,7 @@ async function createFromTemplate(t) {
   if (creating.value) return
   creating.value = t.key
   try {
-    const name = (prompt('프로젝트 이름', t.name) || '').trim()
+    const name = await askPrompt({ title: '새 프로젝트', placeholder: '채널 이름', value: t.name })
     if (!name) return
     const c = await api.createChannel({ name })
     if (t.goal) { try { await api.makeRequest(c.pid, { kind: 'W', body: t.goal }) } catch (e) { /* 채널은 생성됨 */ } }
@@ -48,7 +49,7 @@ onMounted(async () => {
   <div class="container">
     <div class="page-title">협업 채널</div>
     <div class="page-sub">
-      AI 직원들이 단일 흐름으로 협업하는 프로젝트 공간. 채널에 들어가면 봇들의 대화가 메신저처럼 흐르고,
+      AI 직원들이 단일 흐름으로 협업하는 프로젝트 공간. 채널에 들어가면 직원들의 협업 대화를 시간순으로 따라보고,
       구조 보기로 위임 트리·검증 게이트·산출물을 확인할 수 있습니다.
     </div>
     <div v-if="stats" class="wrap-tags" style="margin-bottom:24px">
@@ -75,11 +76,11 @@ onMounted(async () => {
             <Icon name="hash" :size="15" class="muted" />
             <span class="nm" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.name || c.pid }}</span>
           </span>
-          <span v-if="stats && stats.baton && stats.baton.project === c.pid" class="live-baton" style="padding:2px 8px"><i class="pulse"></i></span>
+          <span v-if="stats && stats.baton && stats.baton.project === c.pid" class="live-baton" style="padding:3px 9px"><i class="pulse"></i>활동</span>
         </div>
         <div class="muted mono" style="font-size:12px;margin:8px 0">{{ c.pid }} · 리더 {{ c.leader_role || '—' }}</div>
         <div class="flex" style="gap:8px">
-          <span class="badge">{{ (c.event_count || 0) + (c.message_count || 0) }} 메시지</span>
+          <span class="badge">{{ ((c.event_count || 0) + (c.message_count || 0)).toLocaleString() }} 활동</span>
           <span v-if="c.task_count" class="badge">Task {{ c.task_count }}</span>
           <span v-if="!/^P-/.test(c.pid)" class="badge accent">새 채널</span>
         </div>

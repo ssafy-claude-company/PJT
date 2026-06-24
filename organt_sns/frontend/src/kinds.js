@@ -1,24 +1,31 @@
-// 협업 이벤트 종류 → 라벨·색 (피드/배지 공통). normalize.py의 KIND_* 와 1:1.
+// 협업 이벤트 종류 → 라벨·색. 디자인 토큰 팔레트와 정렬(인디고/그린/앰버/레드/그레이·바이올렛).
+const ACCENT = '#8f8cf5', ACCENT_BG = 'rgba(123,120,240,.14)'
+const OK = '#5ec98f', OK_BG = 'rgba(82,183,136,.14)'
+const WARN = '#d9a44a', WARN_BG = 'rgba(217,164,74,.12)'
+const DANGER = '#e9696b', DANGER_BG = 'rgba(233,105,107,.13)'
+const VIOLET = '#b88cf0', VIOLET_BG = 'rgba(184,140,240,.13)'
+const GREY = '#8a8a93', GREY_BG = 'rgba(255,255,255,.045)'
+const FAINT = '#65656f', FAINT_BG = 'rgba(255,255,255,.03)'
 export const KIND = {
-  delegation: { label: '위임', c: '#79c0ff', bg: '#1f6feb33' },
-  consultation: { label: '자문', c: '#d2a8ff', bg: '#bc8cff22' },
-  work: { label: '작업', c: '#8b949e', bg: '#21262d' },
-  goal_set: { label: '목표', c: '#56d364', bg: '#3fb95022' },
-  meeting: { label: '회의', c: '#79c0ff', bg: '#1f6feb22' },
-  verification: { label: '검증', c: '#e3b341', bg: '#d2992222' },
-  deploy: { label: '배포', c: '#56d364', bg: '#3fb95033' },
-  task_complete: { label: '완성', c: '#7ee787', bg: '#3fb95044' },
-  recruit: { label: '충원', c: '#a5d6ff', bg: '#1f6feb22' },
-  agent_learned: { label: '학습', c: '#d2a8ff', bg: '#bc8cff33' },
-  experience_saved: { label: '경험', c: '#6e7681', bg: '#161b22' },
-  convergence_alert: { label: '경보', c: '#ff7b72', bg: '#f8514933' },
-  user_request: { label: '요청', c: '#a5d6ff', bg: '#1f6feb44' },
-  intervention: { label: '개입', c: '#a5d6ff', bg: '#1f6feb33' },
-  queued: { label: '대기', c: '#8b949e', bg: '#21262d' },
-  flow_complete: { label: '종료', c: '#8b949e', bg: '#21262d' },
-  recovery: { label: '복구', c: '#6e7681', bg: '#161b22' },
-  denied: { label: '거부', c: '#ff7b72', bg: '#f8514922' },
-  raw: { label: '·', c: '#6e7681', bg: '#161b22' },
+  delegation: { label: '위임', c: ACCENT, bg: ACCENT_BG },
+  consultation: { label: '자문', c: VIOLET, bg: VIOLET_BG },
+  work: { label: '작업', c: GREY, bg: GREY_BG },
+  goal_set: { label: '목표', c: OK, bg: OK_BG },
+  meeting: { label: '회의', c: ACCENT, bg: ACCENT_BG },
+  verification: { label: '검증', c: WARN, bg: WARN_BG },
+  deploy: { label: '배포', c: OK, bg: OK_BG },
+  task_complete: { label: '완료', c: OK, bg: 'rgba(82,183,136,.2)' },
+  recruit: { label: '충원', c: ACCENT, bg: ACCENT_BG },
+  agent_learned: { label: '학습', c: VIOLET, bg: VIOLET_BG },
+  experience_saved: { label: '경험', c: FAINT, bg: FAINT_BG },
+  convergence_alert: { label: '경보', c: DANGER, bg: DANGER_BG },
+  user_request: { label: '요청', c: ACCENT, bg: 'rgba(123,120,240,.2)' },
+  intervention: { label: '개입', c: ACCENT, bg: ACCENT_BG },
+  queued: { label: '대기', c: GREY, bg: GREY_BG },
+  flow_complete: { label: '종료', c: FAINT, bg: FAINT_BG },
+  recovery: { label: '복구', c: FAINT, bg: FAINT_BG },
+  denied: { label: '거부', c: DANGER, bg: DANGER_BG },
+  raw: { label: '기타', c: FAINT, bg: FAINT_BG },
 }
 export const kindMeta = (k) => KIND[k] || KIND.raw
 

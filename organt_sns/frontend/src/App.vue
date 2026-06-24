@@ -3,6 +3,8 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from './api'
 import Icon from './components/Icon.vue'
+import Dialog from './components/Dialog.vue'
+import { askPrompt } from './dialog'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,9 +15,9 @@ const q = ref('')                // 채널 필터
 let timer = null
 
 async function newChannel() {
-  const name = prompt('새 프로젝트(채널) 이름:')
-  if (!name || !name.trim()) return
-  const c = await api.createChannel({ name: name.trim() })
+  const name = await askPrompt({ title: '새 프로젝트', placeholder: '채널 이름' })
+  if (!name) return
+  const c = await api.createChannel({ name })
   await load()
   drawer.value = false
   router.push(`/channels/${c.pid}`)
@@ -74,7 +76,7 @@ const isLive = computed(() => stats.value?.baton?.role)
 
         <div class="sb-sec between">
           <span>채널 · {{ channels.length }}</span>
-          <span class="sb-add" title="새 프로젝트" @click="newChannel"><Icon name="plus" :size="16" /></span>
+          <button class="sb-add" title="새 프로젝트" aria-label="새 프로젝트" @click="newChannel"><Icon name="plus" :size="16" /></button>
         </div>
         <input v-if="channels.length > 6" v-model="q" class="field sb-search" placeholder="채널 검색" />
         <router-link v-for="c in shown" :key="c.pid" :to="`/channels/${c.pid}`"
@@ -84,10 +86,11 @@ const isLive = computed(() => stats.value?.baton?.role)
           <Icon v-if="c.status === 'archived'" class="arch-tag" name="archive" :size="14" />
           <span v-else-if="stats && stats.baton && stats.baton.project === c.pid" class="dot" title="지금 활동 중"></span>
         </router-link>
-        <div v-if="!channels.length" class="muted" style="padding:8px 10px;font-size:12px">불러오는 중…</div>
+        <div v-if="!channels.length" class="empty" style="padding:14px"><span class="spin"></span></div>
         <div v-else-if="!shown.length" class="muted" style="padding:8px 10px;font-size:12px">검색 결과 없음</div>
       </div>
     </aside>
     <main class="main"><router-view /></main>
+    <Dialog />
   </div>
 </template>

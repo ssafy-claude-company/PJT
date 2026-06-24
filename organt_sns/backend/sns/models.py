@@ -17,7 +17,7 @@ class Agent(models.Model):
     role = models.CharField(max_length=60, blank=True, help_text="직군(백엔드/QA/…)")
     is_leader = models.BooleanField(default=False)
     persona = models.TextField(blank=True, help_text="[커스텀] 봇 인격(시스템 프롬프트)")
-    avatar = models.CharField(max_length=8, blank=True, help_text="[커스텀] 이모지 아바타")
+    avatar = models.CharField(max_length=8, blank=True, help_text="[커스텀] 아바타 색(hex) 또는 비움(이름 모노그램)")
     created_via = models.CharField(max_length=10, default="discord",
                                    help_text="discord(두뇌 채용) | sns(스튜디오 채용)")
     joined_at = models.DateTimeField(auto_now_add=True)

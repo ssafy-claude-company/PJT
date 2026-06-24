@@ -20,12 +20,18 @@ from .serializers import (
 class AgentViewSet(viewsets.ReadOnlyModelViewSet):
     """AI 직원 목록·상세. /api/agents/ , /api/agents/{bot_id}/ , /api/agents/{bot_id}/events/
     공개 식별자 bot_id로 조회(피드·추천이 모두 bot_id로 참조)."""
-    queryset = Agent.objects.annotate(event_count=Count("events"))
+    # bot_id=0은 system/user 센티넬과 충돌하는 유령 행 — 직원 목록·상세·선택에서 제외.
+    queryset = Agent.objects.exclude(bot_id=0).annotate(event_count=Count("events"))
     serializer_class = AgentSerializer
     lookup_field = "bot_id"
     lookup_value_regex = "[0-9]+"
     ordering_fields = ["event_count", "role", "bot_id"]
     ordering = ["-event_count"]
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx["profiles"] = {p.role: p.distill_count for p in RoleProfile.objects.all()}  # N+1 회피
+        return ctx
 
     @action(detail=True)
     def events(self, request, bot_id=None):
@@ -33,14 +39,19 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["patch"])
     def edit(self, request, bot_id=None):
-        """봇 편집(관리 기능) — 이름·인격·아바타·직군 수정. PATCH /api/agents/{bot_id}/edit/"""
+        """봇 편집(관리 기능) — 이름·인격·아바타색·직군 수정. PATCH /api/agents/{bot_id}/edit/"""
+        import re as _re
         a = self.get_object()
         for f in ("name", "persona", "avatar", "role"):
-            if f in request.data:
-                v = request.data[f]
-                setattr(a, f, (str(v)[:8] if f == "avatar" else str(v)[:200] if f == "persona" else str(v)[:60]))
+            if f not in request.data:
+                continue
+            v = str(request.data[f])
+            if f == "avatar":                       # 아바타는 hex 색 또는 빈값(모노그램) — 그 외는 무시
+                a.avatar = v if _re.fullmatch(r"#[0-9a-fA-F]{3,8}", v) else ""
+            else:
+                setattr(a, f, v[:200] if f == "persona" else v[:60])
         a.save()
-        return Response(AgentSerializer(a).data)
+        return Response(AgentSerializer(a, context=self.get_serializer_context()).data)
 
 
 class RoleProfileViewSet(viewsets.ReadOnlyModelViewSet):
@@ -159,9 +170,12 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True)
     def messages(self, request, pid=None):
-        """채널(=프로젝트) 메시지 타임라인 — 봇 협업 이벤트 + 사람 코멘트를 시간순 병합(상위 Discord 코어)."""
+        """채널(=프로젝트) 메시지 타임라인 — 봇 협업 이벤트 + 사람 코멘트를 시간순 병합."""
         proj = self.get_object()
-        limit = min(int(request.query_params.get("limit") or 160), 400)
+        try:
+            limit = min(int(request.query_params.get("limit") or 160), 400)
+        except (TypeError, ValueError):
+            limit = 160
         evs = list(proj.events.select_related("actor", "target").order_by("-seq")[:limit])
         evs.reverse()
         msgs = [{
@@ -176,12 +190,12 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         # SNS-네이티브 라이브 메시지(GuideMessage) — 스튜디오 요청 + (러너 단계) SnsGuide 출력
         gms = list(GuideMessage.objects.filter(channel_id=proj.id).exclude(msg_type="status").order_by("msg_id"))
         if gms:
-            ag = {a.bot_id: a for a in Agent.objects.all()}
+            ag = {a.bot_id: a for a in Agent.objects.exclude(bot_id=0)}   # 유령 bot_id=0 제외
             _km = {"request": "delegation", "response": "work", "plain": "work"}
             for gm in gms:
                 if gm.sender_id == 0 and gm.msg_type == "request":
                     msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
-                                 "author": "요청", "body": gm.body})
+                                 "author": "나", "body": gm.body})
                 else:
                     a = ag.get(gm.sender_id); ta = ag.get(gm.to_id) if gm.to_id else None
                     kind = "consultation" if (gm.msg_type == "request" and gm.kind == "I") else _km.get(gm.msg_type, "work")
@@ -191,8 +205,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                                  "actor_id": str(a.bot_id) if a else None,
                                  "target_role": ta.role if ta else None,
                                  "target_name": ta.name if ta else None, "summary": gm.body})
-        thread = proj.threads.first()
-        if thread:
+        for thread in proj.threads.all():          # 모든 스레드의 코멘트 병합(첫 스레드만 보던 버그)
             for c in thread.comments.all():
                 msgs.append({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),
                              "author": c.author_name, "body": c.body})
@@ -205,7 +218,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="request")
     def make_request(self, request, pid=None):
-        """스튜디오 — 채널에 요청 투입(Work/Info 1급). SYS 러너가 픽업(다음 단계). 지금은 큐 적재+표시."""
+        """채널에 봇 요청(작업/질문)을 맡긴다 — 협업 엔진이 픽업해 처리. 지금은 큐 적재+표시."""
         import time
         proj = self.get_object()
         body = (request.data.get("body") or "").strip()
@@ -213,9 +226,17 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({"detail": "내용은 필수입니다."}, status=400)
         kind = "W" if str(request.data.get("kind", "W")).upper().startswith("W") else "I"
         to_id = request.data.get("to_id")
+        to_int = None
+        if to_id:
+            try:
+                to_int = int(to_id)
+            except (TypeError, ValueError):
+                return Response({"detail": "담당 봇 지정이 올바르지 않습니다."}, status=400)
+            if not Agent.objects.filter(bot_id=to_int).exists():
+                return Response({"detail": "대상 봇을 찾을 수 없습니다."}, status=400)
         m = GuideMessage.objects.create(
             channel_id=proj.id, thread_id=proj.id, sender_id=0, msg_type="request",
-            to_id=int(to_id) if to_id else None, kind=kind, body=body[:4000], ts=time.time())
+            to_id=to_int, kind=kind, body=body[:4000], ts=time.time())
         return Response({"msg_id": m.msg_id, "kind": kind, "queued": True}, status=201)
 
     @action(detail=True, methods=["post"])
@@ -233,8 +254,10 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["patch"])
     def rename(self, request, pid=None):
-        """채널 이름 변경(관리 기능). PATCH /api/projects/{pid}/rename/"""
+        """채널 이름 변경(관리 기능). PATCH /api/projects/{pid}/rename/ — 기본 제공(P-) 채널은 보호."""
         proj = self.get_object()
+        if proj.pid.startswith("P-"):
+            return Response({"detail": "기본 제공(데모) 채널은 변경할 수 없습니다."}, status=403)
         name = (request.data.get("name") or "").strip()
         if not name:
             return Response({"detail": "이름은 필수입니다."}, status=400)
@@ -244,18 +267,20 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"])
     def archive(self, request, pid=None):
-        """채널 보관/복원 토글(status). POST /api/projects/{pid}/archive/"""
+        """채널 보관/복원 토글(status). POST /api/projects/{pid}/archive/ — 기본 제공(P-) 채널은 보호."""
         proj = self.get_object()
+        if proj.pid.startswith("P-"):
+            return Response({"detail": "기본 제공(데모) 채널은 보관할 수 없습니다."}, status=403)
         proj.status = "" if proj.status == "archived" else "archived"
         proj.save(update_fields=["status"])
         return Response({"pid": proj.pid, "status": proj.status, "archived": proj.status == "archived"})
 
     @action(detail=True, methods=["delete"])
     def remove(self, request, pid=None):
-        """채널 삭제 — SNS-네이티브(U-/S-)만(디스코드 쇼케이스 데이터 보호). DELETE /api/projects/{pid}/remove/"""
+        """채널 삭제 — 내가 만든 채널(U-/S-)만. 기본 제공(P-) 채널은 보호. DELETE /api/projects/{pid}/remove/"""
         proj = self.get_object()
         if proj.pid.startswith("P-"):
-            return Response({"detail": "디스코드 투영 채널은 삭제할 수 없습니다(쇼케이스 데이터)."}, status=403)
+            return Response({"detail": "기본 제공(데모) 채널은 삭제할 수 없습니다."}, status=403)
         GuideMessage.objects.filter(channel_id=proj.id).delete()
         pid_ = proj.pid
         proj.delete()
@@ -348,19 +373,30 @@ class RecruitView(APIView):
     def post(self, request):
         import time
         import random
+        import re as _re
+        from django.db import IntegrityError
         role = (request.data.get("role") or "").strip()
         if not role:
             return Response({"detail": "직군(role)은 필수입니다."}, status=400)
-        bot_id = int(time.time() * 1000) * 1000 + random.randint(0, 999)
         name = (request.data.get("name") or "").strip()
-        if not name:                          # 이름은 정체성 — 비우면 고유 이름 자동 배정(직군≠이름)
-            from .names import assign_name
-            taken = set(n for n in Agent.objects.exclude(name="").values_list("name", flat=True) if n)
-            name = assign_name(bot_id, taken)
-        a = Agent.objects.create(
-            bot_id=bot_id, role=role[:60], name=name[:100],
-            persona=(request.data.get("persona") or "")[:5000],
-            avatar=(request.data.get("avatar") or "")[:8], created_via="sns")
+        av = str(request.data.get("avatar") or "")
+        avatar = av if _re.fullmatch(r"#[0-9a-fA-F]{3,8}", av) else ""   # hex 색 또는 빈값(모노그램)
+        for _ in range(5):                    # bot_id 충돌(같은 ms) 대비 재시도
+            bot_id = int(time.time() * 1000) * 1000 + random.randint(0, 999999)
+            if not name:                      # 이름은 정체성 — 비우면 고유 이름 자동 배정(직군≠이름)
+                from .names import assign_name
+                taken = set(n for n in Agent.objects.exclude(name="").values_list("name", flat=True) if n)
+                name = assign_name(bot_id, taken)
+            try:
+                a = Agent.objects.create(
+                    bot_id=bot_id, role=role[:60], name=name[:100],
+                    persona=(request.data.get("persona") or "")[:5000],
+                    avatar=avatar, created_via="sns")
+                break
+            except IntegrityError:
+                continue
+        else:
+            return Response({"detail": "봇 생성에 실패했습니다. 다시 시도하세요."}, status=500)
         a.event_count = 0
         return Response(AgentSerializer(a).data, status=201)
 
@@ -379,7 +415,10 @@ class ChannelCreateView(APIView):
         leader = None
         lb = request.data.get("leader_bot_id")
         if lb:
-            leader = Agent.objects.filter(bot_id=int(lb)).first()
+            try:
+                leader = Agent.objects.filter(bot_id=int(lb)).first()
+            except (TypeError, ValueError):
+                return Response({"detail": "리더 봇 지정이 올바르지 않습니다."}, status=400)
         p = Project.objects.create(pid=pid, name=name[:200], status="live", leader=leader)
         return Response({"pid": p.pid, "name": p.name, "status": p.status,
                          "leader_role": leader.role if leader else None,
@@ -393,6 +432,7 @@ class StatsView(APIView):
                        .annotate(n=Count("id")).values_list("kind", "n"))
         last = (Event.objects
                 .filter(kind__in=["work", "delegation", "verification", "goal_set", "deploy", "consultation"])
+                .exclude(project__status="archived")        # 보관된 채널은 베턴에서 제외
                 .select_related("actor", "project").first())
         baton = None
         if last:
@@ -402,7 +442,7 @@ class StatsView(APIView):
                      "summary": last.summary, "ts": last.ts}
         return Response({
             "events": Event.objects.count(),
-            "agents": Agent.objects.count(),
+            "agents": Agent.objects.exclude(bot_id=0).count(),
             "projects": Project.objects.count(),
             "profiles": RoleProfile.objects.count(),
             "threads": Thread.objects.count(),

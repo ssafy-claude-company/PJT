@@ -19,6 +19,10 @@ class AgentSerializer(serializers.ModelSerializer):
         return str(obj.bot_id)
 
     def get_distill_count(self, obj):
+        # N+1 회피: 뷰가 context["profiles"]({role: distill_count})를 넘기면 그걸 사용.
+        prof = self.context.get("profiles")
+        if prof is not None:
+            return prof.get(obj.role, 0)
         rp = RoleProfile.objects.filter(role=obj.role).first()
         return rp.distill_count if rp else 0
 
