@@ -13,5 +13,6 @@ router.register("threads", views.ThreadViewSet, basename="thread")
 
 urlpatterns = [
     path("stats/", views.StatsView.as_view(), name="stats"),
+    path("recommend/", views.RecommendView.as_view(), name="recommend"),
     path("", include(router.urls)),
 ]

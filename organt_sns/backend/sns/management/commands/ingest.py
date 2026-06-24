@@ -10,6 +10,7 @@
 """
 import json
 import os
+import re
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
@@ -17,6 +18,33 @@ from django.db import transaction
 
 from sns.normalize import normalize, KIND_LEARN
 from sns.models import Agent, RoleProfile, Project, CollabTask, Event
+
+_PID_RE = re.compile(r"^P-\d+$")
+# 협업 이벤트(특정 프로젝트에 귀속) — 학습/관리 등 전사 이벤트는 제외(귀속 안 함).
+_SCOPED_KINDS = {"work", "delegation", "consultation", "goal_set",
+                 "meeting", "verification", "deploy", "task_complete"}
+_SESSION_GAP = 1800  # 30분 이상 공백 = 세션 경계 → 귀속 리셋(타 프로젝트 누수 방지)
+
+
+def attribute_projects(evs):
+    """단일 흐름(한 번에 한 프로젝트) 모델에 근거한 *시간적 귀속*.
+
+    두뇌 로그의 협업 이벤트(work/위임/검증 등)는 대부분 프로젝트 id를 직접 담지 않는다(전역 스트림).
+    그러나 Organt는 설계상 한 시점에 한 프로젝트만 진행하므로, 명시 pid를 가진 이벤트를 앵커로
+    'active 프로젝트'를 추적해 pid 없는 협업 이벤트에 직전 active를 채운다. 30분 이상 공백은
+    세션 경계로 보고 리셋한다. ts 오름차순 입력을 가정하며 e.project를 제자리 갱신한다.
+    """
+    active = None
+    last_ts = None
+    for e in evs:
+        if last_ts is not None and e.ts - last_ts > _SESSION_GAP:
+            active = None
+        last_ts = e.ts
+        if e.project and _PID_RE.match(e.project):
+            active = e.project           # 명시 pid 앵커
+        elif active and not e.project and e.kind in _SCOPED_KINDS:
+            e.project = active           # 협업 이벤트에 active 귀속
+    return evs
 
 
 def _load_json(path, default):
@@ -142,6 +170,7 @@ class Command(BaseCommand):
     @transaction.atomic
     def ingest_events(self, logs, max_bytes, max_lines):
         evs = self._events_window(logs, max_bytes, max_lines)
+        attribute_projects(evs)        # 단일 흐름 시간적 귀속(협업 이벤트 → 프로젝트)
         Event.objects.all().delete()   # 투영 → 윈도우로 재구축
         pid2proj = {p.pid: p for p in Project.objects.all()}
         rows = []

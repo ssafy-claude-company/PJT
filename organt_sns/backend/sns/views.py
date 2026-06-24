@@ -7,6 +7,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Agent, RoleProfile, Project, Event, Thread, Comment, Like
+from .recommend import score_candidates
+from .insights import project_briefing
 from .serializers import (
     AgentSerializer, RoleProfileSerializer, EventSerializer,
     ProjectSerializer, ProjectDetailSerializer,
@@ -45,6 +47,12 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True)
     def events(self, request, pid=None):
         return Response(EventSerializer(self.get_object().events.all()[:80], many=True).data)
+
+    @action(detail=True)
+    def briefing(self, request, pid=None):
+        """생성형 AI 협업 브리핑(F1302). /api/projects/P-032/briefing/
+        AI 키 설정 시 LLM 요약, 미설정 시 규칙기반 폴백(generated=false)."""
+        return Response(project_briefing(self.get_object()))
 
 
 class EventViewSet(viewsets.ReadOnlyModelViewSet):
@@ -88,6 +96,43 @@ class ThreadViewSet(viewsets.ModelViewSet):
         _obj, created = Like.objects.get_or_create(thread=thread, user_key=user_key)
         return Response({"liked": True, "like_count": thread.likes.count()},
                         status=201 if created else 200)
+
+
+class RecommendView(APIView):
+    """강점 기반 적임자 추천(F1301) — Organt의 '적임자 선발'을 사용자향 추천으로.
+
+    GET /api/recommend/?q=실시간 멀티플레이 서버 동기화&top=5
+      q   : 도메인·요구 키워드(자유 텍스트). 비우면 전반 역량 상위 순.
+      top : 상위 N명(기본 5, 최대 20).
+    응답의 results[].reasons 에 항별 점수 기여도를 담아 추천 근거를 투명하게 노출.
+    """
+    def get(self, request):
+        q = (request.query_params.get("q") or request.query_params.get("query") or "").strip()
+        try:
+            top = min(max(int(request.query_params.get("top") or 5), 1), 20)
+        except (TypeError, ValueError):
+            top = 5
+        profiles = {p.role: p for p in RoleProfile.objects.all()}
+        agents = (Agent.objects.annotate(event_count=Count("events"))
+                  .exclude(role="").exclude(role__isnull=True))
+        candidates = []
+        for a in agents:
+            p = profiles.get(a.role)
+            candidates.append({
+                "bot_id": a.bot_id, "name": a.name, "role": a.role,
+                "is_leader": a.is_leader, "event_count": a.event_count,
+                "distill_count": p.distill_count if p else 0,
+                "experience_count": p.experience_count if p else 0,
+                "criteria": p.criteria if p else "",
+            })
+        ranked = score_candidates(q, candidates)
+        return Response({
+            "query": q,
+            "weights": {"role_match": 0.40, "keyword_overlap": 0.30,
+                        "expertise": 0.20, "track_record": 0.10},
+            "count": len(ranked),
+            "results": ranked[:top],
+        })
 
 
 class StatsView(APIView):
