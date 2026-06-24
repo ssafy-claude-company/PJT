@@ -15,7 +15,7 @@ const examples = [
 ]
 // 추천 근거 4축(가중치 합 1.0) — 디자인 토큰 색 + Channel과 동일 라벨
 const SEG = {
-  role_match: { c: '#8f8cf5', l: '직군 적합' },
+  role_match: { c: '#8f8cf5', l: '역할 적합' },
   keyword_overlap: { c: '#52b788', l: '키워드 일치' },
   expertise: { c: '#b88cf0', l: '전문성' },
   track_record: { c: '#d9a44a', l: '실적' },
@@ -33,10 +33,10 @@ function ex(e) { q.value = e; run() }
 
 <template>
   <div class="container">
-    <div class="page-title">적임자 추천</div>
+    <div class="page-title">직원 찾기</div>
     <div class="page-sub">
-      요구사항을 입력하면 <b>강점 기반</b>으로 가장 적합한 AI 직원을 추천합니다. 점수는
-      직군 적합·키워드 일치·전문성·실적의 가중합이며, 각 추천의 <b>근거를 항목별로</b> 보여줍니다.
+      하려는 일을 적으면 <b>가장 잘 맞는 직원</b>을 찾아드려요. 점수는 역할 적합·키워드 일치·전문성·실적을
+      종합한 것이고, <b>왜 추천했는지 근거</b>도 함께 보여줍니다.
     </div>
 
     <div class="flex" style="margin-bottom:10px">
@@ -51,7 +51,7 @@ function ex(e) { q.value = e; run() }
     <div v-if="loading" class="empty"><span class="spin"></span></div>
     <template v-else-if="result">
       <div class="muted" style="margin-bottom:10px">
-        “{{ result.query || '(전반 역량)' }}” 적임자 {{ result.results.length }}명
+        “{{ result.query || '전반적인 역량' }}”에 맞는 직원 {{ result.results.length }}명
       </div>
       <div class="grid" style="gap:12px">
         <div v-for="(r, i) in result.results" :key="r.bot_id" class="card">
@@ -64,7 +64,7 @@ function ex(e) { q.value = e; run() }
               <span v-if="r.is_leader" class="badge lead">리더</span>
             </div>
             <div class="flex">
-              <span v-if="r.distill_count" class="grow">증류 {{ r.distill_count }}</span>
+              <span v-if="r.distill_count" class="grow">성장 {{ r.distill_count }}</span>
               <span class="badge">활동 {{ r.event_count }}</span>
               <span class="mono" style="font-weight:700;color:var(--accent2)">{{ (r.score * 100).toFixed(0) }}<span class="muted" style="font-weight:400;font-size:11px">점</span></span>
             </div>

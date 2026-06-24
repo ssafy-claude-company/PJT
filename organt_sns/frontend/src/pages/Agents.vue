@@ -25,14 +25,14 @@ onMounted(load)
 
 <template>
   <div class="container">
-    <div class="page-title">AI 직원</div>
-    <div class="page-sub">경험→수면 증류로 성장하는 AI 직원들. 각자 고유한 이름을 갖고 직군은 맡은 일입니다. 카드를 눌러 직무기준·활동을 보고 인격·직군을 편집하세요.</div>
+    <div class="page-title">우리 직원</div>
+    <div class="page-sub">일하면서 경험을 쌓고 쉬는 동안 정리하며 성장하는 직원들이에요. 저마다 이름이 있고 역할은 맡은 일입니다. 카드를 눌러 쌓은 노하우와 활동을 보고, 성격·역할을 바꿀 수 있어요.</div>
 
     <div class="flex" style="margin-bottom:18px;gap:8px;flex-wrap:wrap">
-      <input v-model="q" placeholder="이름·직군 검색" style="max-width:240px" />
+      <input v-model="q" placeholder="이름·역할 검색" style="max-width:240px" />
       <span class="muted" style="font-size:12px">정렬</span>
       <button class="btn ghost sm" :class="active('-event_count')" @click="setSort('-event_count')">활동순</button>
-      <button class="btn ghost sm" :class="active('role')" @click="setSort('role')">직군순</button>
+      <button class="btn ghost sm" :class="active('role')" @click="setSort('role')">역할순</button>
       <span class="muted" style="font-size:12px">· {{ shown.length }}명</span>
     </div>
 
@@ -45,7 +45,7 @@ onMounted(load)
           <div style="min-width:0;flex:1">
             <div class="nm" style="font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ a.name || '이름 없음' }}</div>
             <div class="flex" style="gap:6px;margin-top:2px">
-              <span class="muted" style="font-size:12.5px">{{ a.role || '예비' }}</span>
+              <span class="muted" style="font-size:12.5px">{{ a.role || '대기 중' }}</span>
               <span v-if="a.is_leader" class="badge lead">리더</span>
             </div>
           </div>
@@ -53,8 +53,8 @@ onMounted(load)
         <div v-if="a.persona" class="persona-sm">{{ a.persona }}</div>
         <div class="flex" style="gap:8px;margin-top:11px">
           <span class="badge">활동 {{ a.event_count }}</span>
-          <span v-if="a.distill_count" class="grow">증류 {{ a.distill_count }}</span>
-          <span v-if="a.created_via === 'sns'" class="badge accent">스튜디오</span>
+          <span v-if="a.distill_count" class="grow">성장 {{ a.distill_count }}</span>
+          <span v-if="a.created_via === 'sns'" class="badge accent">내가 만든</span>
         </div>
       </router-link>
     </div>

@@ -116,7 +116,7 @@ async function suggest() {
   } finally { recLoading.value = false }
 }
 function pickRec(b) { reqTo.value = b.bot_id; recs.value = [] }
-const REASON_LABEL = { role_match: '직군 적합', keyword_overlap: '키워드 일치', expertise: '전문성', track_record: '실적' }
+const REASON_LABEL = { role_match: '역할 적합', keyword_overlap: '키워드 일치', expertise: '전문성', track_record: '실적' }
 function recWhy(b) {
   const r = b.reasons || {}
   const top = Object.entries(r).sort((a, c) => c[1] - a[1])[0]
@@ -174,8 +174,8 @@ watch(() => route.params.pid, () => {
     <span v-if="batonHere" class="live-baton"><i class="pulse"></i>{{ batonHere }} 작업 중</span>
     <span v-else-if="live" class="muted" style="font-size:11.5px" title="자동 갱신 중">실시간 보기</span>
     <div class="baton">
-      <button class="iconbtn" :class="{ on: showStruct }" title="협업 구조" aria-label="협업 구조" @click="showStruct = !showStruct"><Icon name="network" /></button>
-      <button class="iconbtn" :class="{ on: showBrief }" title="AI 브리핑" aria-label="AI 브리핑" @click="loadBrief"><Icon name="spark" /></button>
+      <button class="iconbtn" :class="{ on: showStruct }" title="협업 한눈에" aria-label="협업 한눈에" @click="showStruct = !showStruct"><Icon name="network" /></button>
+      <button class="iconbtn" :class="{ on: showBrief }" title="AI 요약" aria-label="AI 요약" @click="loadBrief"><Icon name="spark" /></button>
       <div class="ch-menu">
         <button class="iconbtn" title="채널 관리" aria-label="채널 관리" @click="menu = !menu"><Icon name="more" /></button>
         <div v-if="menu" class="menu-back" @click="menu = false"></div>
@@ -198,11 +198,11 @@ watch(() => route.params.pid, () => {
 
   <div v-if="showBrief && briefErr" class="pending-bar">브리핑을 불러오지 못했습니다. 잠시 후 다시 시도하세요.</div>
   <div v-if="showBrief && briefing" class="panel" style="margin:12px 20px 0">
-    <h2>생성형 AI 협업 브리핑</h2>
+    <h2>AI 요약</h2>
     <div style="padding:14px 16px">
       <div class="pre">{{ briefing.text }}</div>
       <div class="muted" style="font-size:11px;margin-top:8px">
-        {{ briefing.generated ? '생성형 AI' : '규칙기반' }} · 교차검증 {{ briefing.stats.cross_checks }}회 · 배포 {{ briefing.stats.deploy_count }}회
+        {{ briefing.generated ? 'AI가 요약' : '자동 요약' }} · 서로 점검 {{ briefing.stats.cross_checks }}회 · 배포 {{ briefing.stats.deploy_count }}회
       </div>
     </div>
   </div>
@@ -210,7 +210,7 @@ watch(() => route.params.pid, () => {
   <div class="msgs" ref="msgsEl" @scroll.passive="onScroll">
     <div v-if="loading" class="empty"><span class="spin"></span> 대화 불러오는 중…</div>
     <template v-else>
-      <div v-if="rendered.length" class="day-sep">채널 시작</div>
+      <div v-if="rendered.length" class="day-sep">여기서부터 대화</div>
       <template v-for="m in rendered" :key="m.key">
         <div v-if="m.type === 'activity'" class="activity">
           <span class="dotmark"></span>{{ m.role || '직원' }} — 작업 {{ m.n }}건
@@ -238,14 +238,14 @@ watch(() => route.params.pid, () => {
           </div>
         </div>
       </template>
-      <div v-if="!rendered.length" class="empty">아직 메시지가 없습니다</div>
+      <div v-if="!rendered.length" class="empty">아직 대화가 없어요. 아래에서 직원에게 일을 부탁해보세요.</div>
     </template>
   </div>
 
   <div class="composer">
     <div class="seg" style="margin-bottom:10px">
       <button :class="{ on: mode === 'msg' }" @click="mode = 'msg'"><Icon name="message" :size="15" />메시지</button>
-      <button :class="{ on: mode === 'req' }" @click="mode = 'req'"><Icon name="send" :size="15" />봇에게 요청</button>
+      <button :class="{ on: mode === 'req' }" @click="mode = 'req'"><Icon name="send" :size="15" />직원에게 부탁</button>
     </div>
 
     <div v-if="mode === 'msg'" class="row">
@@ -261,7 +261,7 @@ watch(() => route.params.pid, () => {
               <span class="bot-av sm" :style="{ background: avatarBg(reqToBot) }">{{ monogram(reqToBot.name, reqToBot.role) }}</span>
               <span>{{ reqToBot.name || reqToBot.role }}<span v-if="reqToBot.name" class="muted"> · {{ reqToBot.role }}</span></span>
             </template>
-            <span v-else class="ph">담당 봇 선택 (비우면 리더)</span>
+            <span v-else class="ph">맡길 직원 (비우면 리더가)</span>
             <Icon class="chev" name="chevron" :size="15" />
           </button>
           <template v-if="pickerOpen">
@@ -280,12 +280,12 @@ watch(() => route.params.pid, () => {
           <button :class="{ on: reqKind === 'W' }" @click="reqKind = 'W'">작업</button>
           <button :class="{ on: reqKind === 'I' }" @click="reqKind = 'I'">질문</button>
         </div>
-        <button class="btn ghost sm" :disabled="recLoading || !reqBody.trim()" @click="suggest" title="이 일에 적합한 봇 추천">
-          <Icon name="target" :size="15" />{{ recLoading ? '…' : '적임자' }}
+        <button class="btn ghost sm" :disabled="recLoading || !reqBody.trim()" @click="suggest" title="이 일에 잘 맞는 직원 추천">
+          <Icon name="target" :size="15" />{{ recLoading ? '…' : '추천 받기' }}
         </button>
       </div>
       <div v-if="recs.length" class="recs">
-        <span class="muted" style="font-size:11.5px">추천</span>
+        <span class="muted" style="font-size:11.5px">이 일엔</span>
         <button v-for="b in recs" :key="b.bot_id" class="recchip" @click="pickRec(b)" :title="`${b.role} · 활동 ${b.event_count}`">
           <span class="bot-av sm" :style="{ background: avatarColor(b.name || b.role) }">{{ monogram(b.name, b.role) }}</span>
           <b>{{ b.name || b.role }}</b><span class="muted" style="font-size:11.5px">{{ b.role }}</span><span class="why" v-if="recWhy(b)">{{ recWhy(b) }}</span>

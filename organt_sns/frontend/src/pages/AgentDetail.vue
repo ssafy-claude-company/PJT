@@ -44,7 +44,7 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
 
 <template>
   <div class="container" v-if="!loading && agent">
-    <router-link to="/agents" class="back"><Icon name="arrowL" :size="15" />AI 직원</router-link>
+    <router-link to="/agents" class="back"><Icon name="arrowL" :size="15" />우리 직원</router-link>
 
     <div class="prof-head">
       <span class="big-av" :style="{ background: avatarBg(agent) }">{{ monogram(agent.name, agent.role) }}</span>
@@ -53,28 +53,28 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
           <div>
             <div class="page-title" style="margin:0">{{ agent.name || '이름 없음' }}</div>
             <div class="flex" style="gap:7px;margin-top:4px">
-              <span class="muted" style="font-size:14px">{{ agent.role || '예비' }}</span>
+              <span class="muted" style="font-size:14px">{{ agent.role || '대기 중' }}</span>
               <span v-if="agent.is_leader" class="badge lead">리더</span>
-              <span v-if="agent.created_via === 'sns'" class="badge accent">스튜디오</span>
+              <span v-if="agent.created_via === 'sns'" class="badge accent">내가 만든</span>
             </div>
           </div>
-          <button v-if="!editing" class="btn ghost sm" @click="startEdit"><Icon name="edit" :size="15" />편집</button>
+          <button v-if="!editing" class="btn ghost sm" @click="startEdit"><Icon name="edit" :size="15" />정보 수정</button>
         </div>
-        <div class="muted mono" style="font-size:12px;margin-top:8px">봇 #{{ agent.bot_id }} · 활동 {{ agent.event_count }}<span v-if="agent.distill_count"> · 증류 {{ agent.distill_count }}</span></div>
+        <div class="muted mono" style="font-size:12px;margin-top:8px">활동 {{ agent.event_count }}<span v-if="agent.distill_count"> · 성장 {{ agent.distill_count }}</span></div>
         <div v-if="agent.persona && !editing" class="persona">{{ agent.persona }}</div>
       </div>
     </div>
 
     <div v-if="editing" class="panel" style="margin-bottom:18px">
-      <h2>봇 편집</h2>
+      <h2>직원 정보 수정</h2>
       <div style="padding:18px;display:grid;gap:14px">
         <div>
           <label class="lbl">이름</label>
-          <input v-model="form.name" placeholder="봇 이름" />
+          <input v-model="form.name" placeholder="직원 이름" />
         </div>
         <div>
-          <label class="lbl">직군</label>
-          <input v-model="form.role" placeholder="직군" />
+          <label class="lbl">역할</label>
+          <input v-model="form.role" placeholder="역할 — 맡은 일" />
         </div>
         <div>
           <label class="lbl">아바타 색</label>
@@ -84,8 +84,8 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
           </div>
         </div>
         <div>
-          <label class="lbl">인격</label>
-          <textarea v-model="form.persona" rows="3" placeholder="인격 (시스템 프롬프트, 선택)"></textarea>
+          <label class="lbl">성격</label>
+          <textarea v-model="form.persona" rows="3" placeholder="어떻게 일하면 좋을지 (선택)"></textarea>
         </div>
         <div class="flex" style="gap:8px">
           <button class="btn" @click="saveEdit" :disabled="saving">{{ saving ? '저장 중…' : '저장' }}</button>
@@ -96,20 +96,20 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
 
     <div class="grid cols2">
       <div class="panel" style="align-self:start">
-        <h2>최근 협업 활동</h2>
-        <div v-if="!events.length" class="empty">기록된 활동이 없습니다</div>
+        <h2>최근 활동</h2>
+        <div v-if="!events.length" class="empty">아직 활동 기록이 없어요</div>
         <EventItem v-for="e in events" :key="e.seq" :ev="e" />
       </div>
       <div class="panel" style="align-self:start">
-        <h2>직무기준 · {{ agent.role }}</h2>
+        <h2>쌓은 노하우 · {{ agent.role }}</h2>
         <div v-if="profile" style="padding:16px">
           <div class="flex" style="margin-bottom:12px">
-            <span class="grow">누적 증류 {{ profile.distill_count }}회</span>
-            <span class="badge">미반영 경험 {{ profile.experience_count }}</span>
+            <span class="grow">성장 {{ profile.distill_count }}회</span>
+            <span class="badge">새 경험 {{ profile.experience_count }}</span>
           </div>
-          <div class="pre">{{ profile.criteria || '(비어 있음)' }}</div>
+          <div class="pre">{{ profile.criteria || '(아직 없어요)' }}</div>
         </div>
-        <div v-else class="empty">아직 직무기준이 수립되지 않았습니다</div>
+        <div v-else class="empty">아직 쌓은 노하우가 없어요</div>
       </div>
     </div>
   </div>

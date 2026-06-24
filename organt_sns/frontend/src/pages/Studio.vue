@@ -29,28 +29,28 @@ onMounted(load)
 
 <template>
   <div class="container">
-    <div class="page-title">봇 스튜디오</div>
+    <div class="page-title">직원 만들기</div>
     <div class="page-sub">
-      직원을 원하는 만큼 자유롭게 만들 수 있습니다. 각 직원은 고유한 이름(정체성)을 갖고, 직군은 맡은 일입니다.
-      채용하면 필요할 때 시스템이 이 직원의 AI 세션을 자동으로 실행합니다.
+      원하는 만큼 직원을 만들어 팀을 꾸려보세요. 직원마다 자기 이름이 있고, 역할은 맡은 일이에요.
+      한 번 만들어두면 필요할 때 알아서 일하러 옵니다.
     </div>
 
     <div class="panel" style="margin-bottom:24px">
-      <h2>봇 채용</h2>
+      <h2>새 직원</h2>
       <div style="padding:18px;display:grid;gap:16px;max-width:560px">
         <div class="flex" style="gap:13px;align-items:center">
           <span class="bot-av" style="width:48px;height:48px;font-size:19px;border-radius:14px" :style="{ background: previewBg() }">{{ monogram(form.name, form.role) }}</span>
-          <div class="muted" style="font-size:12.5px">{{ form.name || '이름은 비우면 자동 배정' }}<span v-if="form.role"> · {{ form.role }}</span></div>
+          <div class="muted" style="font-size:12.5px">{{ form.name || '이름은 비우면 알아서 지어줘요' }}<span v-if="form.role"> · {{ form.role }}</span></div>
         </div>
         <div>
-          <label class="lbl">직군</label>
+          <label class="lbl">역할</label>
           <div class="flex" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">
             <button v-for="r in ROLES" :key="r" class="chip" :class="{ on: form.role === r }" @click="form.role = r">{{ r }}</button>
           </div>
-          <input v-model="form.role" placeholder="직군 — 위에서 고르거나 직접 입력" />
+          <input v-model="form.role" placeholder="역할 — 위에서 고르거나 직접 적어도 돼요" />
         </div>
         <div>
-          <label class="lbl">이름 <span class="muted" style="font-weight:400;text-transform:none">(선택 — 비우면 고유 이름 자동)</span></label>
+          <label class="lbl">이름 <span class="muted" style="font-weight:400;text-transform:none">(비우면 알아서 지어줘요)</span></label>
           <input v-model="form.name" placeholder="예: 카이" />
         </div>
         <div>
@@ -61,14 +61,14 @@ onMounted(load)
           </div>
         </div>
         <div>
-          <label class="lbl">인격 <span class="muted" style="font-weight:400;text-transform:none">(시스템 프롬프트, 선택)</span></label>
-          <textarea v-model="form.persona" rows="2" placeholder="예: 보안에 깐깐하고 테스트를 먼저 쓴다"></textarea>
+          <label class="lbl">성격 <span class="muted" style="font-weight:400;text-transform:none">(어떻게 일하면 좋을지, 선택)</span></label>
+          <textarea v-model="form.persona" rows="2" placeholder="예: 꼼꼼하게 보고 테스트를 먼저 챙겨요"></textarea>
         </div>
-        <div><button class="btn" @click="recruit" :disabled="saving || !form.role.trim()">{{ saving ? '채용 중…' : '채용하기' }}</button></div>
+        <div><button class="btn" @click="recruit" :disabled="saving || !form.role.trim()">{{ saving ? '만드는 중…' : '직원 만들기' }}</button></div>
       </div>
     </div>
 
-    <div class="sec-h">직원 · {{ bots.length }}명</div>
+    <div class="sec-h">우리 직원 {{ bots.length }}명</div>
     <div v-if="loading" class="empty"><span class="spin"></span></div>
     <div v-else class="grid cards">
       <router-link v-for="b in bots" :key="b.bot_id" class="card link" :to="`/agents/${b.bot_id}`">
@@ -76,14 +76,14 @@ onMounted(load)
           <span class="bot-av" style="width:38px;height:38px;font-size:15px;border-radius:11px" :style="{ background: avatarBg(b) }">{{ monogram(b.name, b.role) }}</span>
           <div style="min-width:0;flex:1">
             <div class="nm" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ b.name || '이름 없음' }}</div>
-            <div class="muted" style="font-size:12px">{{ b.role || '예비' }}</div>
+            <div class="muted" style="font-size:12px">{{ b.role || '대기 중' }}</div>
           </div>
-          <span class="badge" :class="b.created_via === 'sns' ? 'accent' : ''">{{ b.created_via === 'sns' ? '스튜디오' : '기본' }}</span>
+          <span class="badge" :class="b.created_via === 'sns' ? 'accent' : ''">{{ b.created_via === 'sns' ? '내가 만든' : '기본' }}</span>
         </div>
-        <div v-if="b.persona" class="persona-sm">{{ b.persona.slice(0, 64) }}</div>
+        <div v-if="b.persona" class="persona-sm">{{ b.persona }}</div>
         <div class="flex" style="gap:8px;margin-top:10px">
           <span class="badge">활동 {{ b.event_count }}</span>
-          <span v-if="b.distill_count" class="grow">증류 {{ b.distill_count }}</span>
+          <span v-if="b.distill_count" class="grow">성장 {{ b.distill_count }}</span>
         </div>
       </router-link>
     </div>

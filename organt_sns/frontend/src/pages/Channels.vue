@@ -47,19 +47,19 @@ onMounted(async () => {
 
 <template>
   <div class="container">
-    <div class="page-title">협업 채널</div>
+    <div class="page-title">채널</div>
     <div class="page-sub">
-      AI 직원들이 단일 흐름으로 협업하는 프로젝트 공간. 채널에 들어가면 직원들의 협업 대화를 시간순으로 따라보고,
-      구조 보기로 위임 트리·검증 게이트·산출물을 확인할 수 있습니다.
+      직원들이 함께 일하는 공간이에요. 채널에 들어가면 직원들이 주고받은 대화를 시간순으로 따라보고,
+      '협업 한눈에'로 누가 누구에게 맡겼는지·점검·결과물을 볼 수 있어요.
     </div>
     <div v-if="stats" class="wrap-tags" style="margin-bottom:24px">
-      <span class="badge">이벤트 {{ stats.events.toLocaleString() }}</span>
-      <span class="badge">AI 직원 {{ stats.agents }}</span>
+      <span class="badge">활동 {{ stats.events.toLocaleString() }}</span>
+      <span class="badge">직원 {{ stats.agents }}명</span>
       <span class="badge">채널 {{ channels.length }}</span>
-      <span v-if="stats.baton && stats.baton.role" class="badge ok">베턴 · {{ stats.baton.role }}</span>
+      <span v-if="stats.baton && stats.baton.role" class="badge ok">지금 {{ stats.baton.role }} 일하는 중</span>
     </div>
 
-    <div class="sec-h">새 프로젝트 시작</div>
+    <div class="sec-h">새로 시작하기</div>
     <div class="tpls">
       <button v-for="t in TEMPLATES" :key="t.key" class="tpl" :disabled="creating" @click="createFromTemplate(t)">
         <span class="l">{{ creating === t.key ? '만드는 중…' : t.label }}</span>

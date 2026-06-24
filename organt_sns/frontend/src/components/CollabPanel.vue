@@ -25,33 +25,33 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
 
 <template>
   <div class="panel collab" style="margin:12px 20px 0">
-    <h2>협업 구조</h2>
+    <h2>협업 한눈에</h2>
     <div v-if="loading" class="empty" style="padding:22px"><span class="spin"></span></div>
     <div v-else-if="d" style="padding:14px 16px;display:grid;gap:18px">
       <div class="wrap-tags">
         <span v-if="batonHere" class="live-baton"><i class="pulse"></i>{{ batonHere }} 작업 중</span>
-        <span class="badge">위임 {{ d.counts.delegations }}</span>
-        <span class="badge">교차검증 {{ d.counts.cross_checks }}</span>
-        <span class="badge">개입 {{ d.counts.interventions }}</span>
+        <span class="badge">맡김 {{ d.counts.delegations }}</span>
+        <span class="badge">서로 점검 {{ d.counts.cross_checks }}</span>
+        <span class="badge">사람 참여 {{ d.counts.interventions }}</span>
         <span class="badge">배포 {{ d.counts.deploys }}</span>
-        <span class="badge">작업 {{ d.counts.tasks }}</span>
+        <span class="badge">일 {{ d.counts.tasks }}</span>
       </div>
 
       <div>
-        <div class="sec">역할</div>
+        <div class="sec">누가 무엇을</div>
         <div class="roles">
           <div v-for="r in d.roles" :key="r.role" class="rcard" :class="{ lead: r.is_leader }">
             <span class="bot-av" style="width:30px;height:30px;font-size:12px" :style="{ background: avatarColor(r.role) }">{{ initials(r.role) }}</span>
             <div>
               <div class="rn">{{ r.role }} <span v-if="r.is_leader" class="badge lead" style="margin-left:2px">리더</span></div>
-              <div class="rs">위임 {{ r.out }} · 받음 {{ r.recv }} · 작업 {{ r.work }}<span v-if="r.verify"> · 검증 {{ r.verify }}</span></div>
+              <div class="rs">맡김 {{ r.out }} · 받음 {{ r.recv }} · 일 {{ r.work }}<span v-if="r.verify"> · 점검 {{ r.verify }}</span></div>
             </div>
           </div>
         </div>
       </div>
 
       <div v-if="tree.length">
-        <div class="sec">위임 흐름</div>
+        <div class="sec">누가 누구에게 맡겼나</div>
         <div class="tree">
           <div v-for="[from, edges] in tree" :key="from" class="tnode">
             <div class="tfrom"><span class="dot2" :style="{ background: avatarColor(from) }"></span>{{ from }}</div>
@@ -66,13 +66,12 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
       </div>
 
       <div v-if="d.tasks.length">
-        <div class="sec">검증 · 배포 게이트</div>
+        <div class="sec">점검 · 배포</div>
         <div v-for="t in d.tasks" :key="t.task_id" class="gate">
           <div class="gh">
-            <span class="mono muted" style="font-size:12px">{{ t.task_id }}</span>
             <span v-if="t.owner_role" class="badge">{{ t.owner_role }}</span>
             <span style="flex:1"></span>
-            <span class="badge" :class="{ ok: t.cross_checks > 0 }">교차검증 {{ t.cross_checks }}</span>
+            <span class="badge" :class="{ ok: t.cross_checks > 0 }">서로 점검 {{ t.cross_checks }}</span>
             <span class="badge" :class="{ ok: t.deploy_count > 0 }">배포 {{ t.deploy_count }}</span>
           </div>
           <div v-if="t.purpose || t.goal" class="gbody">{{ clip(t.purpose || t.goal, 160) }}</div>
@@ -80,7 +79,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
       </div>
 
       <div v-if="d.outputs && d.outputs.length">
-        <div class="sec">산출물</div>
+        <div class="sec">결과물</div>
         <div v-for="(o, i) in d.outputs.slice().reverse()" :key="i" class="out">
           <div class="oh"><span class="badge">{{ o.role || '직원' }}</span><span class="t">{{ timeFmt(o.ts) }}</span></div>
           <div class="obody">{{ clip(o.result, 220) }}</div>
@@ -91,7 +90,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
       </div>
 
       <div v-if="d.interventions.length">
-        <div class="sec">사람 개입 · {{ d.interventions.length }}</div>
+        <div class="sec">사람이 거든 것 · {{ d.interventions.length }}</div>
         <div class="iv" v-for="(iv, i) in d.interventions.slice(-6)" :key="i">
           <span class="t">{{ timeFmt(iv.ts) }}</span><span class="who">{{ iv.role || '사람' }}</span>{{ clip(iv.summary, 70) }}
         </div>

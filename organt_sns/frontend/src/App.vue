@@ -60,18 +60,18 @@ const isLive = computed(() => stats.value?.baton?.role)
     <aside class="sidebar" :class="{ open: drawer }">
       <router-link to="/" class="sb-brand">
         <span class="wm"><Icon class="mark" name="layers" :size="18" />Organt</span>
-        <span class="sub">AI 직원 협업 워크스페이스</span>
+        <span class="sub">AI 직원들과 함께 일하는 공간</span>
       </router-link>
       <div class="sb-scroll">
         <div class="sb-sec">둘러보기</div>
         <router-link to="/studio" class="sb-item" :class="{ active: route.path === '/studio' }">
-          <Icon class="ic" name="sliders" /><span class="nm">봇 스튜디오</span>
+          <Icon class="ic" name="sliders" /><span class="nm">직원 만들기</span>
         </router-link>
         <router-link to="/agents" class="sb-item" :class="{ active: route.path.startsWith('/agents') }">
-          <Icon class="ic" name="bot" /><span class="nm">AI 직원</span>
+          <Icon class="ic" name="bot" /><span class="nm">우리 직원</span>
         </router-link>
         <router-link to="/recommend" class="sb-item" :class="{ active: route.path === '/recommend' }">
-          <Icon class="ic" name="target" /><span class="nm">적임자 추천</span>
+          <Icon class="ic" name="target" /><span class="nm">직원 찾기</span>
         </router-link>
 
         <div class="sb-sec between">
