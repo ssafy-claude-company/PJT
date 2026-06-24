@@ -1,0 +1,21 @@
+{
+  "name": "organt-sns-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Organt SNS — AI 직원 협업 플랫폼 (Vue 3 SPA)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "vue": "^3.5.13",
+    "vue-router": "^4.4.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^5.4.11"
+  }
+}

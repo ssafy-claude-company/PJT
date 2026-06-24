@@ -17,14 +17,17 @@ from .serializers import (
 
 
 class AgentViewSet(viewsets.ReadOnlyModelViewSet):
-    """AI 직원 목록·상세. /api/agents/ , /api/agents/{id}/ , /api/agents/{id}/events/"""
+    """AI 직원 목록·상세. /api/agents/ , /api/agents/{bot_id}/ , /api/agents/{bot_id}/events/
+    공개 식별자 bot_id로 조회(피드·추천이 모두 bot_id로 참조)."""
     queryset = Agent.objects.annotate(event_count=Count("events"))
     serializer_class = AgentSerializer
+    lookup_field = "bot_id"
+    lookup_value_regex = "[0-9]+"
     ordering_fields = ["event_count", "role", "bot_id"]
     ordering = ["-event_count"]
 
     @action(detail=True)
-    def events(self, request, pk=None):
+    def events(self, request, bot_id=None):
         return Response(EventSerializer(self.get_object().events.all()[:60], many=True).data)
 
 
