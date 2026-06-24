@@ -19,3 +19,5 @@ error_*.png
 
 # 봇 생성 스크립트의 크롬 저장 프로필(로그인 세션 — 비밀)
 .chrome_bot_profile/
+organt_sns_state/
+organt_sns_workspace/
