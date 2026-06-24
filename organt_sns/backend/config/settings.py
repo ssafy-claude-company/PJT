@@ -109,6 +109,9 @@ CORS_ALLOWED_ORIGINS = [o for o in os.environ.get("CORS_ORIGINS", "").split(",")
 ORGANT_PJT = os.environ.get("ORGANT_PJT", "/home/user/PJT")
 ORGANT_LOGS = os.path.join(ORGANT_PJT, "logs")
 
+# guide bridge 토큰(Phase 2) — 두뇌 러너만 출력 ingest 가능. 미설정이면 bridge 비활성(fail-closed).
+ORGANT_GUIDE_TOKEN = os.environ.get("ORGANT_GUIDE_TOKEN", "")
+
 # ── 생성형 AI (F1302 + 심화) — 키는 .env에서 ─────────────────────────
 AI_API_KEY = os.environ.get("AI_API_KEY", "")
 AI_BASE_URL = os.environ.get("AI_BASE_URL", "")   # GMS 등 OpenAI 호환 엔드포인트
