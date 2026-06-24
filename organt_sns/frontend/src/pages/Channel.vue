@@ -35,22 +35,58 @@ const pickerOpen = ref(false)
 const reqToBot = computed(() => agents.value.find((b) => String(b.bot_id) === String(reqTo.value)))
 function choose(b) { reqTo.value = b ? b.bot_id : ''; pickerOpen.value = false }
 
-// 대화(conversation) 종류 — 버블로. 그 외(work/raw/experience)는 활동 줄로 접는다.
+// 대화로 보일 종류. 그 외(work/raw 등 도구활동)는 흐름을 끊지 않게 뒤로 접는다.
 const CONV = new Set(['delegation', 'consultation', 'goal_set', 'meeting', 'verification',
   'deploy', 'task_complete', 'recruit', 'agent_learned', 'convergence_alert', 'user_request', 'intervention'])
-
-const rendered = computed(() => {
-  const out = []
-  let runRole = null, runN = 0
-  const flush = () => { if (runN) { out.push({ type: 'activity', role: runRole, n: runN, key: 'a' + out.length }); runN = 0; runRole = null } }
-  for (const m of (data.value?.messages || [])) {
-    if (m.type === 'human') { flush(); out.push(m); continue }
-    if (CONV.has(m.kind)) { flush(); out.push(m); continue }
-    const who = m.actor_name || m.actor_role
-    if (who === runRole) runN++
-    else { flush(); runRole = who; runN = 1 }
+// 사람·SnsGuide(g/c 키) 메시지는 항상 대화. 이벤트(e 키)는 CONV 종류만 대화, work/raw는 활동.
+const isConv = (m) => m.type === 'human' || (m.key && (m.key[0] === 'g' || m.key[0] === 'c')) || CONV.has(m.kind)
+// 로그 접두("이름 → id: 본문")를 떼어 자연스러운 말로. 본문 없는 마커는 종류별 한마디로.
+const VERB = { delegation: '맡겼어요', verification: '확인했어요', task_complete: '완료했어요', deploy: '배포했어요', goal_set: '목표를 정했어요', consultation: '물어봤어요', recruit: '합류했어요' }
+function cleanLine(s, kind) {
+  s = (s || '').trim()
+  const arrow = s.search(/→/)
+  if (arrow >= 0) {
+    const colon = s.indexOf(':', arrow)
+    if (colon >= 0) { const body = s.slice(colon + 1).trim(); if (body) return body }
+    return VERB[kind] || ''                         // 본문 없는 위임 마커 등
   }
-  flush()
+  s = s.replace(/^사용자\s*개입\s*[—\-:]\s*/, '').trim()    // "사용자 개입 — " 접두 제거
+  s = s.replace(/^[가-힣A-Za-z ]{1,20}:\s*/, '').trim()
+  if (VERB[kind] && s.length <= 4) return VERB[kind] // "배포","완료" 같은 단어 마커 → 친근한 말
+  return s
+}
+
+// 디스코드식: 사람·직원 구분 없이 한 흐름. 같은 사람 연속 메시지는 한 묶음(머리글 1번).
+const groups = computed(() => {
+  const out = []
+  let cur = null, work = null
+  const flushWork = () => { if (work) { out.push(work); work = null } }
+  for (const m of (data.value?.messages || [])) {
+    if (!isConv(m)) {                                   // 도구 작업 — 한 줄로 조용히 접는다
+      cur = null
+      const who = m.actor_name || m.actor_role || '직원'
+      if (work && work.who === who) work.n++
+      else { flushWork(); work = { type: 'work', key: 'w' + out.length, who, n: 1 } }
+      continue
+    }
+    flushWork()
+    // 사람: 직접 보낸 메시지 + 행위자 없는 사용자 요청·개입(과거 디스코드 기록)
+    const userOrigin = (m.kind === 'user_request' || m.kind === 'intervention') && !m.actor_id
+    const isHuman = m.type === 'human' || userOrigin
+    const author = m.type === 'human' ? (m.author || '나') : isHuman ? '사람' : (m.actor_name || m.actor_role || '직원')
+    const id = isHuman ? 'h:' + author : (m.actor_id || m.actor_role || '?')
+    const raw = m.body || m.summary || ''
+    const line = { key: m.key, text: isHuman ? cleanLine(raw, null) : cleanLine(raw, m.kind), kind: m.kind, ts: m.ts,
+      to: (!isHuman && (m.target_name || m.target_role)) || null }
+    if (cur && cur.id === id) { cur.lines.push(line) }
+    else {
+      cur = { type: 'group', key: 'g' + m.key, id, author, isHuman,
+        seed: isHuman ? author : (m.actor_id || m.actor_name || m.actor_role),
+        actorId: isHuman ? null : m.actor_id, lines: [line], ts: m.ts }
+      out.push(cur)
+    }
+  }
+  flushWork()
   return out
 })
 
@@ -210,35 +246,27 @@ watch(() => route.params.pid, () => {
   <div class="msgs" ref="msgsEl" @scroll.passive="onScroll">
     <div v-if="loading" class="empty"><span class="spin"></span> 대화 불러오는 중…</div>
     <template v-else>
-      <div v-if="rendered.length" class="day-sep">여기서부터 대화</div>
-      <template v-for="m in rendered" :key="m.key">
-        <div v-if="m.type === 'activity'" class="activity">
-          <span class="dotmark"></span>{{ m.role || '직원' }} — 작업 {{ m.n }}건
-        </div>
-        <div v-else-if="m.type === 'human'" class="msg human">
-          <div class="av" style="background:var(--accent)">나</div>
-          <div class="bd">
-            <div class="who"><span class="nm">{{ m.author }}</span><span class="t">{{ timeFmt(m.ts) }}</span></div>
-            <div class="bubble">{{ m.body }}</div>
-          </div>
-        </div>
-        <div v-else class="msg agent">
-          <router-link v-if="m.actor_id" :to="`/agents/${m.actor_id}`" class="av" :style="{ background: avatarColor(m.actor_id || m.actor_name || m.actor_role) }">{{ monogram(m.actor_name, m.actor_role) }}</router-link>
-          <div v-else class="av" :style="{ background: avatarColor(m.actor_name || m.actor_role) }">{{ monogram(m.actor_name, m.actor_role) }}</div>
-          <div class="bd">
-            <div class="who">
-              <router-link v-if="m.actor_id" :to="`/agents/${m.actor_id}`" class="nm">{{ m.actor_name || m.actor_role || '직원' }}</router-link>
-              <span v-else class="nm">{{ m.actor_name || m.actor_role || '직원' }}</span>
-              <span v-if="m.actor_name && m.actor_role" class="role">{{ m.actor_role }}</span>
-              <span class="ktag" :style="{ background: kindMeta(m.kind).bg, color: kindMeta(m.kind).c }">{{ kindMeta(m.kind).label }}</span>
-              <span v-if="m.target_name || m.target_role" class="role">→ {{ m.target_name || m.target_role }}</span>
-              <span class="t">{{ timeFmt(m.ts) }}</span>
+      <template v-for="g in groups" :key="g.key">
+        <!-- 도구 작업: 조용한 한 줄 -->
+        <div v-if="g.type === 'work'" class="work-line"><span class="dotmark"></span>{{ g.who }} 작업 중 · {{ g.n }}건</div>
+        <!-- 메시지 묶음: 사람·직원 동일 레이아웃 -->
+        <div v-else class="cmsg">
+          <router-link v-if="g.actorId" :to="`/agents/${g.actorId}`" class="cmsg-av" :style="{ background: g.isHuman ? 'var(--accent)' : avatarColor(g.seed) }">{{ monogram(g.author) }}</router-link>
+          <div v-else class="cmsg-av" :style="{ background: g.isHuman ? 'var(--accent)' : avatarColor(g.seed) }">{{ monogram(g.author) }}</div>
+          <div class="cmsg-bd">
+            <div class="cmsg-head">
+              <router-link v-if="g.actorId" :to="`/agents/${g.actorId}`" class="cmsg-name">{{ g.author }}</router-link>
+              <span v-else class="cmsg-name">{{ g.author }}</span>
+              <span v-if="!g.isHuman" class="ai-tag">AI</span>
+              <span class="cmsg-time">{{ timeFmt(g.ts) }}</span>
             </div>
-            <div class="txt">{{ m.summary }}</div>
+            <div v-for="ln in g.lines" :key="ln.key" class="cmsg-line">
+              <span v-if="ln.to" class="cmsg-to">@{{ ln.to }}</span>{{ ln.text }}
+            </div>
           </div>
         </div>
       </template>
-      <div v-if="!rendered.length" class="empty">아직 대화가 없어요. 아래에서 직원에게 일을 부탁해보세요.</div>
+      <div v-if="!groups.length" class="empty">아직 대화가 없어요. 아래에서 메시지를 보내거나 직원에게 일을 부탁해보세요.</div>
     </template>
   </div>
 
