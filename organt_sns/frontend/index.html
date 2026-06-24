@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Organt SNS — 라이브 협업</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;
+        --accent:#58a6ff;--ok:#3fb950;--warn:#d29922;--alert:#f85149;--learn:#bc8cff;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--bd);background:var(--panel);position:sticky;top:0;z-index:10}
+  header h1{font-size:16px;margin:0;font-weight:700}
+  header .dot{width:8px;height:8px;border-radius:50%;background:var(--alert);transition:.3s}
+  header .dot.live{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  header .stats{margin-left:auto;display:flex;gap:18px;color:var(--mut);font-size:12px}
+  header .stats b{color:var(--fg)}
+  .wrap{display:grid;grid-template-columns:1fr 360px;gap:16px;padding:16px;max-width:1400px;margin:0 auto}
+  .panel{background:var(--panel);border:1px solid var(--bd);border-radius:10px;overflow:hidden}
+  .panel h2{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--mut);margin:0;padding:10px 14px;border-bottom:1px solid var(--bd)}
+  .feed-item{display:flex;gap:10px;padding:9px 14px;border-bottom:1px solid #21262d;align-items:flex-start}
+  .feed-item:hover{background:#1c2128}
+  .feed-item .k{flex:none;font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;min-width:64px;text-align:center}
+  .feed-item .s{flex:1;min-width:0;word-break:break-word}
+  .feed-item .t{flex:none;color:var(--mut);font-size:11px;font-variant-numeric:tabular-nums}
+  .feed-item .p{color:var(--accent);font-size:11px;font-weight:600;margin-left:6px}
+  .side{display:flex;flex-direction:column;gap:16px}
+  .baton{padding:14px}
+  .baton .who{font-size:18px;font-weight:700;margin:4px 0}
+  .baton .who.idle{color:var(--mut);font-weight:400}
+  .baton .meta{color:var(--mut);font-size:12px}
+  .edge{font-size:12px;color:var(--mut);padding:2px 0}
+  .row{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;border-bottom:1px solid #21262d;cursor:default}
+  .row:hover{background:#1c2128}
+  .row .nm{font-weight:600}.row .sub{color:var(--mut);font-size:12px}
+  .badge{font-size:11px;background:#21262d;border:1px solid var(--bd);border-radius:5px;padding:1px 6px;color:var(--mut)}
+  .grow{color:var(--learn);font-size:11px}
+  .agent{cursor:pointer}
+  #profile{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+  #profile .card{background:var(--panel);border:1px solid var(--bd);border-radius:12px;max-width:680px;max-height:80vh;overflow:auto;padding:20px}
+  #profile h3{margin:0 0 4px}#profile .pre{white-space:pre-wrap;color:#c9d1d9;font-size:13px;line-height:1.6}
+  #profile .x{float:right;cursor:pointer;color:var(--mut)}
+  .empty{color:var(--mut);padding:16px;text-align:center;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>Organt SNS <span style="color:var(--mut);font-weight:400">· 라이브 협업</span></h1>
+  <div class="stats">
+    <span>이벤트 <b id="st-total">0</b></span>
+    <span>활성 프로젝트 <b id="st-proj">–</b></span>
+    <span id="st-alert"></span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="panel">
+    <h2>협업 피드 — 봇들이 지금 무엇을 하는가</h2>
+    <div id="feed"><div class="empty">연결 중…</div></div>
+  </div>
+
+  <div class="side">
+    <div class="panel baton">
+      <h2 style="border:0;padding:0 0 6px;margin:0">지금 베턴 (단일 흐름)</h2>
+      <div class="who idle" id="baton-who">유휴</div>
+      <div class="meta" id="baton-meta"></div>
+      <div id="baton-edges" style="margin-top:8px"></div>
+    </div>
+    <div class="panel">
+      <h2>프로젝트</h2>
+      <div id="projects"></div>
+    </div>
+    <div class="panel">
+      <h2>에이전트 — 직군·활동·성장(증류)</h2>
+      <div id="agents"></div>
+    </div>
+  </div>
+</div>
+
+<div id="profile" onclick="if(event.target.id==='profile')this.style.display='none'">
+  <div class="card"><span class="x" onclick="document.getElementById('profile').style.display='none'">✕ 닫기</span>
+    <h3 id="pf-title"></h3><div class="grow" id="pf-sub"></div>
+    <div class="pre" id="pf-body" style="margin-top:12px"></div></div>
+</div>
+
+<script>
+const KIND_STYLE = {
+  delegation:{bg:'#1f6feb33',c:'#79c0ff',label:'위임'},
+  consultation:{bg:'#bc8cff22',c:'#d2a8ff',label:'자문'},
+  work:{bg:'#21262d',c:'#8b949e',label:'작업'},
+  goal_set:{bg:'#3fb95022',c:'#56d364',label:'목표'},
+  meeting:{bg:'#1f6feb22',c:'#79c0ff',label:'회의'},
+  verification:{bg:'#d2992222',c:'#e3b341',label:'검증'},
+  deploy:{bg:'#3fb95033',c:'#56d364',label:'배포'},
+  task_complete:{bg:'#3fb95044',c:'#7ee787',label:'완성'},
+  recruit:{bg:'#21262d',c:'#8b949e',label:'충원'},
+  agent_learned:{bg:'#bc8cff33',c:'#d2a8ff',label:'학습'},
+  experience_saved:{bg:'#161b22',c:'#6e7681',label:'경험'},
+  convergence_alert:{bg:'#f8514933',c:'#ff7b72',label:'경보'},
+  user_request:{bg:'#1f6feb44',c:'#a5d6ff',label:'요청'},
+  intervention:{bg:'#1f6feb33',c:'#a5d6ff',label:'개입'},
+  queued:{bg:'#21262d',c:'#8b949e',label:'대기'},
+  flow_complete:{bg:'#21262d',c:'#8b949e',label:'종료'},
+  recovery:{bg:'#161b22',c:'#6e7681',label:'복구'},
+  denied:{bg:'#f8514922',c:'#ff7b72',label:'거부'},
+  raw:{bg:'#161b22',c:'#6e7681',label:'·'},
+};
+let PROFILES={}, NAMES={};
+const $=s=>document.querySelector(s);
+const tfmt=ts=>{const d=new Date(ts*1000);return d.toLocaleTimeString('ko-KR',{hour12:false})};
+const projLabel=p=>p?(NAMES[p]?.name?`${p}·${NAMES[p].name}`:p):'';
+
+function feedRow(e){
+  const st=KIND_STYLE[e.kind]||KIND_STYLE.raw;
+  const div=document.createElement('div');div.className='feed-item';
+  div.innerHTML=`<span class="k" style="background:${st.bg};color:${st.c}">${st.label}</span>
+    <span class="s">${escapeHtml(e.summary)}${e.project?`<span class="p">${escapeHtml(projLabel(e.project))}</span>`:''}</span>
+    <span class="t">${tfmt(e.ts)}</span>`;
+  return div;
+}
+function escapeHtml(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+
+function renderSnapshot(snap){
+  PROFILES=snap.profiles?.profiles||{}; NAMES=snap.project_names||{};
+  // 피드
+  const feed=$('#feed');feed.innerHTML='';
+  const items=(snap.feed||[]).slice(-120).reverse();
+  if(!items.length)feed.innerHTML='<div class="empty">아직 이벤트 없음</div>';
+  items.forEach(e=>feed.appendChild(feedRow(e)));
+  renderSide(snap);
+}
+function renderSide(snap){
+  $('#st-total').textContent=(snap.stats?.total??0).toLocaleString();
+  const b=snap.baton||{};
+  $('#st-proj').textContent=projLabel(b.project)||'–';
+  const al=snap.stats?.alerts||[];
+  $('#st-alert').innerHTML=al.length?`<b style="color:var(--alert)">⚠ 수렴경보 ${al.length}</b>`:'';
+  // 베턴
+  const who=$('#baton-who');
+  if(b.actor){who.className='who';who.textContent=`${b.role||b.actor}`;
+    $('#baton-meta').textContent=`${projLabel(b.project)} · ${b.last_ts?tfmt(b.last_ts):''} 활동`;}
+  else{who.className='who idle';who.textContent='유휴';$('#baton-meta').textContent='활동 흐름 없음';}
+  $('#baton-edges').innerHTML=(b.recent_edges||[]).slice(-6).reverse().map(ed=>
+    `<div class="edge">${ed.frm_role||ed.frm} ${ed.kind==='consultation'?'?→':'→'} ${ed.to}</div>`).join('');
+  // 프로젝트
+  $('#projects').innerHTML=(snap.projects||[]).slice(0,10).map(p=>{
+    const nm=NAMES[p.id]?.name||'';
+    return `<div class="row"><div><span class="nm">${p.id}</span> <span class="sub">${escapeHtml(nm)}</span><br>
+      <span class="sub">${escapeHtml(p.last_summary||'')}</span></div>
+      <span class="badge">${p.events}ev${p.deploys?` · 배포${p.deploys}`:''}${p.completes?` · ✓${p.completes}`:''}</span></div>`;
+  }).join('')||'<div class="empty">–</div>';
+  // 에이전트
+  const dist=snap.agents?.distills_by_role||{};
+  $('#agents').innerHTML=(snap.agents?.agents||[]).slice(0,14).map(a=>{
+    const g=dist[a.role]||0;
+    return `<div class="row agent" onclick="showProfile('${escapeHtml(a.role||'')}')">
+      <div><span class="nm">${escapeHtml(a.role||a.actor)}</span><br><span class="sub">${escapeHtml(a.last||'')}</span></div>
+      <div style="text-align:right"><span class="badge">${a.actions} act</span>${g?`<br><span class="grow">↑증류 ${g}</span>`:''}</div></div>`;
+  }).join('')||'<div class="empty">–</div>';
+}
+function showProfile(role){
+  const body=PROFILES[role];if(!body)return;
+  $('#pf-title').textContent=role+' — 증류된 직무기준';
+  $('#pf-sub').textContent='경험→수면 증류로 압축된 품질 기준 (작업·검증 시 루브릭으로 주입)';
+  $('#pf-body').textContent=body;$('#profile').style.display='flex';
+}
+
+let snapCache=null;
+function connect(){
+  const ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws');
+  ws.onopen=()=>$('#dot').classList.add('live');
+  ws.onclose=()=>{$('#dot').classList.remove('live');setTimeout(connect,2000)};
+  ws.onmessage=ev=>{
+    const m=JSON.parse(ev.data);
+    if(m.type==='snapshot'){snapCache=m.snapshot;renderSnapshot(snapCache);}
+    else if(m.type==='event'){
+      const e=m.event;
+      const feed=$('#feed');const empty=feed.querySelector('.empty');if(empty)empty.remove();
+      feed.insertBefore(feedRow(e),feed.firstChild);
+      while(feed.children.length>200)feed.removeChild(feed.lastChild);
+    }
+  };
+}
+// 사이드 패널은 2초마다 스냅샷으로 갱신(투영 최신화)
+setInterval(async()=>{try{const r=await fetch('/api/snapshot');if(r.ok){snapCache=await r.json();renderSide(snapCache);}}catch(e){}},2000);
+connect();
+</script>
+</body>
+</html>
