@@ -19,6 +19,7 @@ export default {
   project: (pid) => http.get(`/projects/${pid}/`).then((r) => r.data),
   projectEvents: (pid) => http.get(`/projects/${pid}/events/`).then((r) => r.data),
   briefing: (pid) => http.get(`/projects/${pid}/briefing/`).then((r) => r.data),
+  collab: (pid) => http.get(`/projects/${pid}/collab/`).then((r) => r.data),  // 협업 구조(Phase 3)
 
   // 상위 Discord — 채널(프로젝트) 메시지 타임라인 + 사람 메시지 전송
   channelMessages: (pid, limit = 200) =>

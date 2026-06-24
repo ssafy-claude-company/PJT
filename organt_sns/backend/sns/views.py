@@ -52,6 +52,81 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(EventSerializer(self.get_object().events.all()[:80], many=True).data)
 
     @action(detail=True)
+    def collab(self, request, pid=None):
+        """협업 '구조'(Phase 3 시각화) — 베턴·위임 트리·검증 게이트·개입·배포를 이벤트에서 구조화.
+        평탄한 메시지 목록(messages)과 달리, '누가 누구에게 위임했고 어디서 검증·개입·배포됐나'를 1급으로."""
+        from collections import defaultdict
+        proj = self.get_object()
+        leader_role = proj.leader.role if proj.leader else None
+        roles = {}
+        edges = defaultdict(lambda: {"count": 0, "last": "", "ts": 0})
+        gates, interventions, deploys, milestones = [], [], [], []
+
+        def rec(r, leader=False):
+            if not r:
+                return None
+            x = roles.setdefault(r, {"role": r, "is_leader": False, "out": 0, "recv": 0, "work": 0, "verify": 0})
+            if leader:
+                x["is_leader"] = True
+            return x
+
+        def verdict(s):
+            s = s or ""
+            if any(w in s for w in ("통과", "승인", "합격", "pass", "PASS", "✅")):
+                return "pass"
+            if any(w in s for w in ("반려", "실패", "거부", "미흡", "fail", "FAIL", "❌")):
+                return "fail"
+            return "open"
+
+        rec(leader_role, leader=True)
+        for e in proj.events.select_related("actor", "target").order_by("seq"):
+            ar = e.actor.role if e.actor else None
+            tr = e.target.role if e.target else None
+            rec(ar); rec(tr)
+            if e.kind == "delegation" and ar and tr:
+                k = (ar, tr); edges[k]["count"] += 1; edges[k]["last"] = e.summary; edges[k]["ts"] = e.ts
+                rec(ar)["out"] += 1; rec(tr)["recv"] += 1
+            elif e.kind == "work" and ar:
+                rec(ar)["work"] += 1
+            elif e.kind in ("verification", "consultation") and ar:
+                rec(ar)["verify"] += 1
+                gates.append({"role": ar, "target": tr, "summary": e.summary, "ts": e.ts,
+                              "outcome": verdict(e.summary), "kind": e.kind})
+            elif e.kind == "intervention":
+                interventions.append({"role": ar, "summary": e.summary, "ts": e.ts})
+            elif e.kind == "deploy":
+                deploys.append({"role": ar, "summary": e.summary, "ts": e.ts})
+            elif e.kind in ("goal_set", "task_complete"):
+                milestones.append({"kind": e.kind, "role": ar, "summary": e.summary, "ts": e.ts})
+        # 라이브/스튜디오 GuideMessage 요청도 위임 엣지로(러너 흐름·스튜디오 요청 가시화)
+        ag = {a.bot_id: a for a in Agent.objects.all()}
+        for gm in GuideMessage.objects.filter(channel_id=proj.id, msg_type="request"):
+            a = ag.get(gm.sender_id); ta = ag.get(gm.to_id) if gm.to_id else None
+            ar = (a.role if a else ("요청" if gm.sender_id == 0 else None))
+            tr = ta.role if ta else None
+            if ar and tr:
+                k = (ar, tr); edges[k]["count"] += 1; edges[k]["last"] = gm.body; edges[k]["ts"] = gm.ts
+        delegations = [{"from": k[0], "to": k[1], **v}
+                       for k, v in sorted(edges.items(), key=lambda x: -x[1]["count"])]
+        # 태스크 단위 구조(검증 게이트의 진짜 신호 — cross_checks/deploy는 태스크에 집계됨)
+        tasks = [{"task_id": t.task_id, "purpose": t.purpose, "goal": t.goal,
+                  "owner_role": t.owner.role if t.owner else None,
+                  "cross_checks": t.cross_checks, "deploy_count": t.deploy_count, "status": t.status}
+                 for t in proj.tasks.select_related("owner").order_by("task_id")]
+        cross_total = sum(t["cross_checks"] for t in tasks)
+        return Response({
+            "pid": proj.pid, "name": proj.name, "leader_role": leader_role,
+            "roles": sorted(roles.values(), key=lambda r: (not r["is_leader"], -(r["out"] + r["work"]))),
+            "delegations": delegations, "tasks": tasks,
+            "gates": gates[-40:], "interventions": interventions[-25:],
+            "deploys": deploys[-20:], "milestones": milestones[-20:],
+            "counts": {"delegations": sum(v["count"] for v in edges.values()),
+                       "consult_gates": len(gates), "cross_checks": cross_total,
+                       "interventions": len(interventions), "deploys": len(deploys),
+                       "tasks": len(tasks)},
+        })
+
+    @action(detail=True)
     def briefing(self, request, pid=None):
         """생성형 AI 협업 브리핑(F1302). /api/projects/P-032/briefing/
         AI 키 설정 시 LLM 요약, 미설정 시 규칙기반 폴백(generated=false)."""

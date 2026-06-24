@@ -3,6 +3,7 @@ import { ref, onMounted, watch, nextTick, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
 import { kindMeta, timeFmt } from '../kinds'
+import CollabPanel from '../components/CollabPanel.vue'
 
 const route = useRoute()
 const data = ref(null)
@@ -11,6 +12,8 @@ const draft = ref('')
 const sending = ref(false)
 const briefing = ref(null)
 const showBrief = ref(false)
+const showStruct = ref(false)
+const stats = ref(null)
 const msgsEl = ref(null)
 // 입력 모드: 사람 메시지(msg) vs 봇 요청(req, Work/Info 1급)
 const mode = ref('msg')
@@ -73,7 +76,11 @@ async function sendRequest() {
     await nextTick(); scrollBottom()
   } finally { reqSending.value = false }
 }
-onMounted(() => { load(); api.agents({ ordering: '-event_count' }).then((a) => { agents.value = a }) })
+onMounted(() => {
+  load()
+  api.agents({ ordering: '-event_count' }).then((a) => { agents.value = a })
+  api.stats().then((s) => { stats.value = s }).catch(() => {})
+})
 watch(() => route.params.pid, load)
 </script>
 
@@ -82,9 +89,14 @@ watch(() => route.params.pid, load)
     <span class="h"># {{ data?.name || route.params.pid }}</span>
     <span class="muted mono" style="font-size:12px">{{ route.params.pid }}</span>
     <div class="baton">
+      <button class="btn ghost" style="padding:4px 11px"
+              :style="showStruct ? 'border-color:var(--accent);color:var(--accent)' : ''"
+              @click="showStruct = !showStruct">🔭 구조</button>
       <button class="btn ghost" style="padding:4px 11px" @click="loadBrief">🧠 브리핑</button>
     </div>
   </div>
+
+  <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />
 
   <div v-if="showBrief && briefing" class="panel" style="margin:10px 18px 0">
     <h2>🧠 생성형 AI 협업 브리핑</h2>
