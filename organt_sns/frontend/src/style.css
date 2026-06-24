@@ -65,9 +65,23 @@ h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.02em}
 a.cmsg-name:hover{text-decoration:underline}
 .ai-tag{font-size:9px;font-weight:700;letter-spacing:.05em;color:var(--accent2);background:var(--accent-soft);
   border-radius:4px;padding:1px 5px;position:relative;top:-1px}
+.cmsg-role{font-size:12px;color:var(--text3)}
+.lead-pill{font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--warn);background:rgba(217,164,74,.12);border-radius:4px;padding:1px 5px;position:relative;top:-1px}
 .cmsg-time{font-size:11px;color:var(--text3)}
-.cmsg-line{font-size:14px;line-height:1.5;color:var(--text);word-break:break-word;white-space:pre-wrap;margin-top:2px}
+.cmsg-line{font-size:14px;line-height:1.6;color:var(--text);word-break:break-word;margin-top:2px}
+.cmsg-line .md-pre{background:#07070b;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:6px 0;
+  font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#d6d6e0;overflow-x:auto;white-space:pre}
+.cmsg-line .md-code{background:var(--surface2);border:1px solid var(--line);border-radius:5px;padding:1px 5px;
+  font:12.5px ui-monospace,Menlo,Consolas,monospace;color:#cbb8ff}
+.cmsg-line .md-link{color:var(--accent2);text-decoration:none}.cmsg-line .md-link:hover{text-decoration:underline}
 .cmsg-to{color:var(--accent2);font-weight:600;background:var(--accent-soft);border-radius:5px;padding:0 6px;margin-right:5px;font-size:13px}
+.day-sep{display:flex;align-items:center;gap:12px;margin:18px 12px 8px;color:var(--text3);font-size:11px}
+.day-sep::before,.day-sep::after{content:"";flex:1;height:1px;background:var(--line2)}
+.day-sep span{flex:none}
+.to-bottom{position:sticky;bottom:12px;margin:8px 6px 0 auto;width:fit-content;display:flex;align-items:center;gap:5px;
+  background:var(--elevated);border:1px solid var(--line);color:var(--text);border-radius:20px;padding:7px 13px;
+  font:inherit;font-size:12.5px;font-weight:550;cursor:pointer;box-shadow:var(--shadow);z-index:5}
+.to-bottom:hover{border-color:var(--accent-line)}
 .work-line{display:flex;align-items:center;gap:8px;padding:2px 12px 2px 66px;color:var(--text3);font-size:11.5px}
 .msgs>.cmsg:last-child{animation:msgin .18s ease}
 @keyframes msgin{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}

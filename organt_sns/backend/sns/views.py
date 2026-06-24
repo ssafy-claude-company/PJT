@@ -222,7 +222,9 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
         pending = sum(1 for g in gms if g.sender_id == 0 and g.msg_type == "request"
                       and not (g.payload or {}).get("picked") and g.msg_id not in responded)
-        return Response({"pid": proj.pid, "name": proj.name, "messages": msgs, "pending_count": pending})
+        return Response({"pid": proj.pid, "name": proj.name, "messages": msgs, "pending_count": pending,
+                         "leader_id": str(proj.leader.bot_id) if proj.leader else None,
+                         "leader_role": proj.leader.role if proj.leader else None})
 
     @action(detail=True, methods=["post"], url_path="request")
     def make_request(self, request, pid=None):

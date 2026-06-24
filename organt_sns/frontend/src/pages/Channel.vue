@@ -58,8 +58,14 @@ function cleanLine(s, kind) {
 // 디스코드식: 사람·직원 구분 없이 한 흐름. 같은 사람 연속 메시지는 한 묶음(머리글 1번).
 const groups = computed(() => {
   const out = []
-  let cur = null, work = null
+  let cur = null, work = null, lastDay = null
+  const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getFullYear()}.${d.getMonth()}.${d.getDate()}` }
+  const dayLabel = (ts) => new Date(ts * 1000).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })
   const flushWork = () => { if (work) { out.push(work); work = null } }
+  const maybeDay = (ts) => {
+    const k = dayKey(ts)
+    if (k !== lastDay) { flushWork(); cur = null; out.push({ type: 'date', key: 'd' + out.length, label: dayLabel(ts) }); lastDay = k }
+  }
   for (const m of (data.value?.messages || [])) {
     if (!isConv(m)) {                                   // 도구 작업 — 누가 했든 한 줄로 조용히 접는다
       cur = null
@@ -67,6 +73,7 @@ const groups = computed(() => {
       else work = { type: 'work', key: 'w' + out.length, n: 1 }
       continue
     }
+    maybeDay(m.ts)
     flushWork()
     // 사람: 직접 보낸 메시지 + 행위자 없는 사용자 요청·개입(과거 디스코드 기록)
     const userOrigin = (m.kind === 'user_request' || m.kind === 'intervention') && !m.actor_id
@@ -79,6 +86,7 @@ const groups = computed(() => {
     if (cur && cur.id === id) { cur.lines.push(line) }
     else {
       cur = { type: 'group', key: 'g' + m.key, id, author, isHuman,
+        role: isHuman ? null : (m.actor_name ? m.actor_role : null),
         seed: isHuman ? author : (m.actor_id || m.actor_name || m.actor_role),
         actorId: isHuman ? null : m.actor_id, lines: [line], ts: m.ts }
       out.push(cur)
@@ -87,6 +95,15 @@ const groups = computed(() => {
   flushWork()
   return out
 })
+// 가벼운 마크다운 — 코드블록·인라인코드·굵게·링크·줄바꿈. HTML 이스케이프 후 적용.
+function renderMd(s) {
+  s = String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, l, c) => `<pre class="md-pre">${c.replace(/\n+$/, '')}</pre>`)
+  s = s.replace(/`([^`\n]+)`/g, '<code class="md-code">$1</code>')
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+  s = s.replace(/(https?:\/\/[^\s<）)]+)/g, '<a href="$1" target="_blank" rel="noopener" class="md-link">$1</a>')
+  return s.replace(/\n/g, '<br>')
+}
 
 const batonHere = computed(() => {
   const b = stats.value?.baton
@@ -245,8 +262,10 @@ watch(() => route.params.pid, () => {
     <div v-if="loading" class="empty"><span class="spin"></span> 대화 불러오는 중…</div>
     <template v-else>
       <template v-for="g in groups" :key="g.key">
+        <!-- 날짜 구분 -->
+        <div v-if="g.type === 'date'" class="day-sep"><span>{{ g.label }}</span></div>
         <!-- 도구 작업: 조용한 한 줄 -->
-        <div v-if="g.type === 'work'" class="work-line"><span class="dotmark"></span>작업 중 · {{ g.n }}건</div>
+        <div v-else-if="g.type === 'work'" class="work-line"><span class="dotmark"></span>작업 중 · {{ g.n }}건</div>
         <!-- 메시지 묶음: 사람·직원 동일 레이아웃 -->
         <div v-else class="cmsg">
           <router-link v-if="g.actorId" :to="`/agents/${g.actorId}`" class="cmsg-av" :style="{ background: g.isHuman ? 'var(--accent)' : avatarColor(g.seed) }">{{ monogram(g.author) }}</router-link>
@@ -255,17 +274,20 @@ watch(() => route.params.pid, () => {
             <div class="cmsg-head">
               <router-link v-if="g.actorId" :to="`/agents/${g.actorId}`" class="cmsg-name">{{ g.author }}</router-link>
               <span v-else class="cmsg-name">{{ g.author }}</span>
-              <span v-if="!g.isHuman" class="ai-tag">AI</span>
+              <span v-if="g.role" class="cmsg-role">{{ g.role }}</span>
+              <span v-if="g.actorId && g.actorId === data?.leader_id" class="lead-pill">리더</span>
+              <span v-else-if="!g.isHuman" class="ai-tag">AI</span>
               <span class="cmsg-time">{{ timeFmt(g.ts) }}</span>
             </div>
             <div v-for="ln in g.lines" :key="ln.key" class="cmsg-line">
-              <span v-if="ln.to" class="cmsg-to">@{{ ln.to }}</span>{{ ln.text }}
+              <span v-if="ln.to" class="cmsg-to">@{{ ln.to }}</span><span v-html="renderMd(ln.text)"></span>
             </div>
           </div>
         </div>
       </template>
       <div v-if="!groups.length" class="empty">아직 대화가 없어요. 아래에서 메시지를 보내거나 직원에게 일을 부탁해보세요.</div>
     </template>
+    <button v-if="!atBottom && groups.length" class="to-bottom" @click="scrollBottom(); atBottom = true"><Icon name="chevron" :size="16" />맨 아래로</button>
   </div>
 
   <div class="composer">
