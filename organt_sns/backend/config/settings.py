@@ -65,12 +65,19 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+# DB: 자체 서버에선 DATABASE_URL(Postgres)로 영속. 미설정 시 SQLITE_PATH(또는 기본 파일).
+# Render 무료 플랜은 DATABASE_URL 없이 SQLite — 재배포마다 초기화(데모). 자체 서버는 영속.
+_DB_URL = os.environ.get("DATABASE_URL", "").strip()
+if _DB_URL:
+    import dj_database_url
+    DATABASES = {"default": dj_database_url.parse(_DB_URL, conn_max_age=600, ssl_require=False)}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": os.environ.get("SQLITE_PATH", "").strip() or (BASE_DIR / "db.sqlite3"),
+        }
     }
-}
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},

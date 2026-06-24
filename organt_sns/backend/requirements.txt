@@ -5,3 +5,6 @@ django-cors-headers==4.9.0
 python-dotenv==1.2.2
 requests==2.34.2
 gunicorn==23.0.0
+# 자체 서버 영속 DB(Postgres)용 — DATABASE_URL 설정 시에만 사용. Render(SQLite)에선 미사용.
+dj-database-url==2.3.0
+psycopg[binary]==3.2.3
