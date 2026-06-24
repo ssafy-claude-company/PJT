@@ -45,13 +45,12 @@ const VERB = { delegation: '맡겼어요', verification: '확인했어요', task
 function cleanLine(s, kind) {
   s = (s || '').trim()
   const arrow = s.search(/→/)
-  if (arrow >= 0) {
+  if (arrow >= 0) {                                   // 폴백 요약("이름 → id: 본문")만 접두 제거
     const colon = s.indexOf(':', arrow)
     if (colon >= 0) { const body = s.slice(colon + 1).trim(); if (body) return body }
-    return VERB[kind] || ''                         // 본문 없는 위임 마커 등
+    return VERB[kind] || ''                           // 본문 없는 위임 마커 등
   }
   s = s.replace(/^사용자\s*개입\s*[—\-:]\s*/, '').trim()    // "사용자 개입 — " 접두 제거
-  s = s.replace(/^[가-힣A-Za-z ]{1,20}:\s*/, '').trim()
   if (VERB[kind] && s.length <= 4) return VERB[kind] // "배포","완료" 같은 단어 마커 → 친근한 말
   return s
 }

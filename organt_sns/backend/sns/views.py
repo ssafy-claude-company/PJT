@@ -178,6 +178,14 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             limit = 160
         evs = list(proj.events.select_related("actor", "target").order_by("-seq")[:limit])
         evs.reverse()
+        # 본문은 payload(body/result/goal)에 전체가 있다 — summary는 100자 컷 요약이라 표시엔 전체 본문을 쓴다.
+        def _full(e):
+            p = e.payload or {}
+            return p.get("body") or p.get("result") or p.get("goal") or e.summary
+
+        def _marker(e):   # 본문 없는 위임 마커("ID → ID 위임") — 내용 이벤트가 본문을 들고 있어 중복
+            s = (e.summary or "").rstrip()
+            return e.kind == "delegation" and s.endswith("위임") and ":" not in s
         msgs = [{
             "type": "agent", "key": f"e{e.seq}", "ts": e.ts, "kind": e.kind,
             "actor_role": e.actor.role if e.actor else None,
@@ -185,8 +193,8 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             "actor_id": str(e.actor.bot_id) if e.actor else None,
             "target_role": e.target.role if e.target else None,
             "target_name": e.target.name if e.target else None,
-            "summary": e.summary,
-        } for e in evs]
+            "summary": _full(e),
+        } for e in evs if not _marker(e)]
         # SNS-네이티브 라이브 메시지(GuideMessage) — 스튜디오 요청 + (러너 단계) SnsGuide 출력
         gms = list(GuideMessage.objects.filter(channel_id=proj.id).exclude(msg_type="status").order_by("msg_id"))
         if gms:
