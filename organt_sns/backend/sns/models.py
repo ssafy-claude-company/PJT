@@ -134,3 +134,33 @@ class Like(models.Model):
 
     class Meta:
         unique_together = ("thread", "user_key")
+
+
+class GuideMessage(models.Model):
+    """[SnsGuide — 라이브 Guide의 1급 메시지] Organt Rule이 *되읽어 상태를 복원*하는 구조화 대화 저장소.
+
+    DiscordGuide가 Discord 메시지에 하던 걸 여기서 DB로 한다 — Rule의 read_thread가 Request/Response
+    객체를 재구성할 수 있도록 sender/to/kind/body/reply_to/thread/상태블록을 *그대로* 보존한다.
+    (투영용 Event와 별개: Event는 과거 디스코드 로그의 투영, GuideMessage는 SNS 위에서 *실제로 오가는* 메시지.)
+    """
+    MSG_TYPES = [("plain", "평문"), ("request", "요청"), ("response", "응답"), ("status", "상태블록")]
+    msg_id = models.BigAutoField(primary_key=True)            # post/send_*의 반환 message_id
+    channel_id = models.BigIntegerField(db_index=True)        # 프로젝트 채널 id
+    thread_id = models.BigIntegerField(db_index=True)         # Task 스레드 id(없으면 channel_id)
+    sender_id = models.BigIntegerField(default=0)             # 봇 bot_id (0=system/user)
+    msg_type = models.CharField(max_length=10, choices=MSG_TYPES, default="plain")
+    to_id = models.BigIntegerField(null=True, blank=True)     # 요청 대상 봇
+    kind = models.CharField(max_length=1, blank=True)         # 'W'(Work)|'I'(Info)
+    reply_to = models.BigIntegerField(null=True, blank=True)  # 응답이 가리키는 요청 msg_id
+    body = models.TextField(blank=True)
+    payload = models.JSONField(default=dict, blank=True)      # 상태블록 등 부가 구조
+    edited = models.BooleanField(default=False)
+    ts = models.FloatField()
+
+    class Meta:
+        ordering = ["msg_id"]
+        indexes = [models.Index(fields=["thread_id", "msg_id"]),
+                   models.Index(fields=["channel_id", "msg_id"])]
+
+    def __str__(self):
+        return f"[{self.msg_type}] {self.sender_id}: {self.body[:40]}"
