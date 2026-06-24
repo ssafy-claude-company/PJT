@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import api from '../api'
 import EventItem from '../components/EventItem.vue'
 import Icon from '../components/Icon.vue'
+import { monogram, avatarBg, AVATAR_COLORS } from '../avatar'
 
 const route = useRoute()
 const agent = ref(null)
@@ -12,10 +13,7 @@ const profile = ref(null)
 const loading = ref(true)
 const editing = ref(false)
 const saving = ref(false)
-const form = ref({ name: '', role: '', avatar: '🤖', persona: '' })
-const AVATARS = ['🤖', '🛠', '🎨', '🧪', '🧠', '📊', '🎮', '🔧', '🚀', '🦾', '🛡', '📐', '🔬', '⚙', '🧭', '💡']
-
-function avatarColor(role) { let h = 0; for (const c of (role || '?')) h = (h * 31 + c.charCodeAt(0)) % 360; return `hsl(${h} 52% 56%)` }
+const form = ref({ name: '', role: '', avatar: '', persona: '' })
 
 async function load() {
   loading.value = true
@@ -28,7 +26,7 @@ async function load() {
   } finally { loading.value = false }
 }
 function startEdit() {
-  form.value = { name: agent.value.name || '', role: agent.value.role || '', avatar: agent.value.avatar || '🤖', persona: agent.value.persona || '' }
+  form.value = { name: agent.value.name || '', role: agent.value.role || '', avatar: agent.value.avatar || '', persona: agent.value.persona || '' }
   editing.value = true
 }
 async function saveEdit() {
@@ -44,42 +42,49 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
 
 <template>
   <div class="container" v-if="!loading && agent">
-    <router-link to="/agents" class="muted">← AI 직원 목록</router-link>
+    <router-link to="/agents" class="muted" style="font-size:13px">← AI 직원</router-link>
 
-    <!-- 프로필 헤더 -->
     <div class="prof-head">
-      <span class="big-av" :style="{ background: avatarColor(agent.role) }">{{ agent.avatar || (agent.role || '?').slice(0, 1) }}</span>
+      <span class="big-av" :style="{ background: avatarBg(agent) }">{{ monogram(agent.name, agent.role) }}</span>
       <div style="flex:1;min-width:0">
         <div class="between">
-          <div class="page-title" style="margin:0">
-            {{ agent.role || '예비' }}
-            <span v-if="agent.is_leader" class="badge lead">리더</span>
-            <span v-if="agent.created_via === 'sns'" class="badge ok">스튜디오</span>
+          <div>
+            <div class="page-title" style="margin:0">{{ agent.name || '이름 없음' }}</div>
+            <div class="flex" style="gap:7px;margin-top:4px">
+              <span class="muted" style="font-size:14px">{{ agent.role || '예비' }}</span>
+              <span v-if="agent.is_leader" class="badge lead">리더</span>
+              <span v-if="agent.created_via === 'sns'" class="badge accent">스튜디오</span>
+            </div>
           </div>
           <button v-if="!editing" class="btn ghost sm" @click="startEdit"><Icon name="edit" :size="15" />편집</button>
         </div>
-        <div v-if="agent.name" class="muted" style="font-size:14px;margin-top:2px">{{ agent.name }}</div>
-        <div class="muted mono" style="font-size:12px;margin-top:3px">봇 #{{ agent.bot_id }}</div>
-        <div class="flex" style="gap:10px;margin-top:7px">
-          <span class="badge">활동 {{ agent.event_count }}</span>
-          <span v-if="agent.distill_count" class="grow">↑증류 {{ agent.distill_count }}</span>
-        </div>
-        <div v-if="agent.persona && !editing" class="persona">“{{ agent.persona }}”</div>
+        <div class="muted mono" style="font-size:12px;margin-top:8px">봇 #{{ agent.bot_id }} · 활동 {{ agent.event_count }}<span v-if="agent.distill_count"> · 증류 {{ agent.distill_count }}</span></div>
+        <div v-if="agent.persona && !editing" class="persona">{{ agent.persona }}</div>
       </div>
     </div>
 
-    <!-- 편집 폼 -->
-    <div v-if="editing" class="panel" style="margin-bottom:16px">
+    <div v-if="editing" class="panel" style="margin-bottom:18px">
       <h2>봇 편집</h2>
       <div style="padding:18px;display:grid;gap:14px">
-        <div class="flex" style="gap:8px">
-          <input v-model="form.role" placeholder="직군" style="flex:1" />
-          <input v-model="form.name" placeholder="이름 (선택)" style="flex:1" />
+        <div>
+          <label class="lbl">이름</label>
+          <input v-model="form.name" placeholder="봇 이름" />
         </div>
-        <div class="av-grid">
-          <button v-for="a in AVATARS" :key="a" class="av-pick" :class="{ on: form.avatar === a }" @click="form.avatar = a">{{ a }}</button>
+        <div>
+          <label class="lbl">직군</label>
+          <input v-model="form.role" placeholder="직군" />
         </div>
-        <textarea v-model="form.persona" rows="3" placeholder="인격 (시스템 프롬프트, 선택)"></textarea>
+        <div>
+          <label class="lbl">아바타 색</label>
+          <div class="av-grid">
+            <button class="sw" :class="{ on: !form.avatar }" :style="{ background: avatarBg({ name: form.name, role: form.role }) }" title="자동" @click="form.avatar = ''"></button>
+            <button v-for="c in AVATAR_COLORS" :key="c" class="sw" :class="{ on: form.avatar === c }" :style="{ background: c }" @click="form.avatar = c"></button>
+          </div>
+        </div>
+        <div>
+          <label class="lbl">인격</label>
+          <textarea v-model="form.persona" rows="3" placeholder="인격 (시스템 프롬프트, 선택)"></textarea>
+        </div>
         <div class="flex" style="gap:8px">
           <button class="btn" @click="saveEdit" :disabled="saving">{{ saving ? '저장 중…' : '저장' }}</button>
           <button class="btn ghost" @click="editing = false" :disabled="saving">취소</button>
@@ -94,9 +99,9 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
         <EventItem v-for="e in events" :key="e.seq" :ev="e" />
       </div>
       <div class="panel" style="align-self:start">
-        <h2>증류된 직무기준 — {{ agent.role }}</h2>
-        <div v-if="profile" style="padding:14px">
-          <div class="flex" style="margin-bottom:10px">
+        <h2>직무기준 · {{ agent.role }}</h2>
+        <div v-if="profile" style="padding:16px">
+          <div class="flex" style="margin-bottom:12px">
             <span class="grow">누적 증류 {{ profile.distill_count }}회</span>
             <span class="badge">원석 경험 {{ profile.experience_count }}</span>
           </div>
@@ -110,11 +115,15 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
 </template>
 
 <style scoped>
-.prof-head { display: flex; gap: 16px; align-items: flex-start; margin: 14px 0 18px }
-.big-av { width: 60px; height: 60px; border-radius: 18px; flex: none; display: flex; align-items: center; justify-content: center;
-  font-size: 28px; color: #fff; font-weight: 800 }
-.persona { margin-top: 10px; color: var(--fg); font-size: 13px; line-height: 1.55; padding: 9px 12px;
-  background: var(--panel2); border: 1px solid var(--bd); border-left: 3px solid var(--accent); border-radius: 7px }
+.prof-head { display: flex; gap: 18px; align-items: flex-start; margin: 16px 0 22px }
+.big-av { width: 64px; height: 64px; border-radius: 19px; flex: none; display: flex; align-items: center; justify-content: center;
+  font-size: 27px; color: #fff; font-weight: 700 }
+.persona { margin-top: 14px; color: var(--text); font-size: 13px; line-height: 1.6; padding: 11px 14px;
+  background: var(--surface2); border: 1px solid var(--line); border-left: 2px solid var(--accent); border-radius: var(--r) }
+.lbl { display: block; font-size: 11px; color: var(--text3); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 7px }
+.sw { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; transition: .12s; outline: 1px solid var(--line) }
+.sw:hover { transform: scale(1.08) }
+.sw.on { border-color: var(--text); outline-color: var(--text) }
 .cols2 { grid-template-columns: 1fr 1fr }
 @media(max-width:760px){ .cols2 { grid-template-columns: 1fr } }
 </style>

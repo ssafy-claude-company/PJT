@@ -5,6 +5,7 @@ import api from '../api'
 import { kindMeta, timeFmt } from '../kinds'
 import CollabPanel from '../components/CollabPanel.vue'
 import Icon from '../components/Icon.vue'
+import { monogram, avatarColor, avatarBg } from '../avatar'
 
 const route = useRoute()
 const router = useRouter()
@@ -44,18 +45,14 @@ const rendered = computed(() => {
   for (const m of (data.value?.messages || [])) {
     if (m.type === 'human') { flush(); out.push(m); continue }
     if (CONV.has(m.kind)) { flush(); out.push(m); continue }
-    if (m.actor_role === runRole) runN++
-    else { flush(); runRole = m.actor_role; runN = 1 }
+    const who = m.actor_name || m.actor_role
+    if (who === runRole) runN++
+    else { flush(); runRole = who; runN = 1 }
   }
   flush()
   return out
 })
 
-function avatarColor(role) {
-  let h = 0; for (const c of (role || '?')) h = (h * 31 + c.charCodeAt(0)) % 360
-  return `hsl(${h} 52% 58%)`
-}
-const initials = (role) => (role || '?').replace(/[^가-힣A-Za-z]/g, '').slice(0, 2) || '?'
 const batonHere = computed(() => {
   const b = stats.value?.baton
   return b && b.project === route.params.pid ? b.role : null
@@ -211,14 +208,15 @@ watch(() => route.params.pid, () => { live.value = false; load() })
           </div>
         </div>
         <div v-else class="msg agent">
-          <router-link v-if="m.actor_id" :to="`/agents/${m.actor_id}`" class="av" :style="{ background: avatarColor(m.actor_role) }">{{ initials(m.actor_role) }}</router-link>
-          <div v-else class="av" :style="{ background: avatarColor(m.actor_role) }">{{ initials(m.actor_role) }}</div>
+          <router-link v-if="m.actor_id" :to="`/agents/${m.actor_id}`" class="av" :style="{ background: avatarColor(m.actor_name || m.actor_role) }">{{ monogram(m.actor_name, m.actor_role) }}</router-link>
+          <div v-else class="av" :style="{ background: avatarColor(m.actor_name || m.actor_role) }">{{ monogram(m.actor_name, m.actor_role) }}</div>
           <div class="bd">
             <div class="who">
-              <router-link v-if="m.actor_id" :to="`/agents/${m.actor_id}`" class="nm">{{ m.actor_role || '직원' }}</router-link>
-              <span v-else class="nm">{{ m.actor_role || '직원' }}</span>
+              <router-link v-if="m.actor_id" :to="`/agents/${m.actor_id}`" class="nm">{{ m.actor_name || m.actor_role || '직원' }}</router-link>
+              <span v-else class="nm">{{ m.actor_name || m.actor_role || '직원' }}</span>
+              <span v-if="m.actor_name && m.actor_role" class="role">{{ m.actor_role }}</span>
               <span class="ktag" :style="{ background: kindMeta(m.kind).bg, color: kindMeta(m.kind).c }">{{ kindMeta(m.kind).label }}</span>
-              <span v-if="m.target_role" class="role">→ {{ m.target_role }}</span>
+              <span v-if="m.target_name || m.target_role" class="role">→ {{ m.target_name || m.target_role }}</span>
               <span class="t">{{ timeFmt(m.ts) }}</span>
             </div>
             <div class="txt">{{ m.summary }}</div>
@@ -245,8 +243,8 @@ watch(() => route.params.pid, () => { live.value = false; load() })
         <div class="picker" style="flex:1">
           <button class="trigger" @click="pickerOpen = !pickerOpen">
             <template v-if="reqToBot">
-              <span class="bot-av sm" :style="{ background: avatarColor(reqToBot.role) }">{{ reqToBot.avatar || initials(reqToBot.role) }}</span>
-              <span>{{ reqToBot.role }}<span v-if="reqToBot.name" class="muted"> · {{ reqToBot.name }}</span></span>
+              <span class="bot-av sm" :style="{ background: avatarBg(reqToBot) }">{{ monogram(reqToBot.name, reqToBot.role) }}</span>
+              <span>{{ reqToBot.name || reqToBot.role }}<span v-if="reqToBot.name" class="muted"> · {{ reqToBot.role }}</span></span>
             </template>
             <span v-else class="ph">담당 봇 선택 (비우면 리더)</span>
             <Icon class="chev" name="chevron" :size="15" />
@@ -256,8 +254,8 @@ watch(() => route.params.pid, () => { live.value = false; load() })
             <div class="picker-pop">
               <div class="picker-opt" :class="{ sel: !reqTo }" @click="choose(null)"><span class="ph muted">리더에게 (자동)</span></div>
               <div v-for="b in agents" :key="b.bot_id" class="picker-opt" :class="{ sel: String(b.bot_id) === String(reqTo) }" @click="choose(b)">
-                <span class="bot-av sm" :style="{ background: avatarColor(b.role) }">{{ b.avatar || initials(b.role) }}</span>
-                <span>{{ b.role }}<span v-if="b.name" class="muted"> · {{ b.name }}</span></span>
+                <span class="bot-av sm" :style="{ background: avatarBg(b) }">{{ monogram(b.name, b.role) }}</span>
+                <span>{{ b.name || b.role }}<span v-if="b.name" class="muted"> · {{ b.role }}</span></span>
                 <span class="role">활동 {{ b.event_count }}</span>
               </div>
             </div>
@@ -273,9 +271,9 @@ watch(() => route.params.pid, () => { live.value = false; load() })
       </div>
       <div v-if="recs.length" class="recs">
         <span class="muted" style="font-size:11.5px">추천</span>
-        <button v-for="b in recs" :key="b.bot_id" class="recchip" @click="pickRec(b)" :title="`활동 ${b.event_count}`">
-          <span class="bot-av sm" :style="{ background: avatarColor(b.role) }">{{ b.avatar || initials(b.role) }}</span>
-          <b>{{ b.role }}</b><span class="why" v-if="recWhy(b)">{{ recWhy(b) }}</span>
+        <button v-for="b in recs" :key="b.bot_id" class="recchip" @click="pickRec(b)" :title="`${b.role} · 활동 ${b.event_count}`">
+          <span class="bot-av sm" :style="{ background: avatarColor(b.name || b.role) }">{{ monogram(b.name, b.role) }}</span>
+          <b>{{ b.name || b.role }}</b><span class="muted" style="font-size:11.5px">{{ b.role }}</span><span class="why" v-if="recWhy(b)">{{ recWhy(b) }}</span>
         </button>
       </div>
       <div class="row">

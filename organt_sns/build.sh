@@ -6,3 +6,5 @@ pip install -r backend/requirements.txt
 python backend/manage.py migrate --noinput
 # 멱등 시드 — 영속 DB(자체 서버)에선 기존 데이터를 덮어쓰지 않는다. Render(매 배포 새 FS)는 매번 시드.
 python backend/manage.py seed_if_empty
+# 이름 없는 봇에 고유 이름 배정(직군≠이름). 멱등.
+python backend/manage.py name_agents

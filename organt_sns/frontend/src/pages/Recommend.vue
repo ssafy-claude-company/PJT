@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import api from '../api'
+import { monogram, avatarColor } from '../avatar'
 
 const q = ref('')
 const result = ref(null)
@@ -53,15 +54,17 @@ function ex(e) { q.value = e; run() }
       <div class="grid" style="gap:12px">
         <div v-for="(r, i) in result.results" :key="r.bot_id" class="card">
           <div class="between">
-            <div class="flex">
-              <span class="mono" style="font-size:18px;font-weight:800;color:var(--mut);width:22px">{{ i + 1 }}</span>
-              <router-link :to="`/agents/${r.bot_id}`" class="nm" style="font-size:15px">{{ r.role }}</router-link>
+            <div class="flex" style="min-width:0">
+              <span class="mono" style="font-size:15px;font-weight:700;color:var(--text3);width:20px">{{ i + 1 }}</span>
+              <span class="bot-av sm" :style="{ background: avatarColor(r.name || r.role) }">{{ monogram(r.name, r.role) }}</span>
+              <router-link :to="`/agents/${r.bot_id}`" class="nm" style="font-size:14.5px">{{ r.name || r.role }}</router-link>
+              <span class="muted" style="font-size:12.5px">{{ r.role }}</span>
               <span v-if="r.is_leader" class="badge lead">리더</span>
             </div>
             <div class="flex">
-              <span v-if="r.distill_count" class="grow">↑증류 {{ r.distill_count }}</span>
+              <span v-if="r.distill_count" class="grow">증류 {{ r.distill_count }}</span>
               <span class="badge">활동 {{ r.event_count }}</span>
-              <span class="mono" style="font-weight:800;color:var(--accent)">{{ (r.score * 100).toFixed(0) }}</span>
+              <span class="mono" style="font-weight:700;color:var(--accent2)">{{ (r.score * 100).toFixed(0) }}</span>
             </div>
           </div>
           <div class="scorebar" style="margin-top:10px">

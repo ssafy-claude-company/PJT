@@ -167,8 +167,10 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         msgs = [{
             "type": "agent", "key": f"e{e.seq}", "ts": e.ts, "kind": e.kind,
             "actor_role": e.actor.role if e.actor else None,
+            "actor_name": e.actor.name if e.actor else None,
             "actor_id": str(e.actor.bot_id) if e.actor else None,
             "target_role": e.target.role if e.target else None,
+            "target_name": e.target.name if e.target else None,
             "summary": e.summary,
         } for e in evs]
         # SNS-네이티브 라이브 메시지(GuideMessage) — 스튜디오 요청 + (러너 단계) SnsGuide 출력
@@ -185,8 +187,10 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                     kind = "consultation" if (gm.msg_type == "request" and gm.kind == "I") else _km.get(gm.msg_type, "work")
                     msgs.append({"type": "agent", "key": f"g{gm.msg_id}", "ts": gm.ts, "kind": kind,
                                  "actor_role": a.role if a else None,
+                                 "actor_name": a.name if a else None,
                                  "actor_id": str(a.bot_id) if a else None,
-                                 "target_role": ta.role if ta else None, "summary": gm.body})
+                                 "target_role": ta.role if ta else None,
+                                 "target_name": ta.name if ta else None, "summary": gm.body})
         thread = proj.threads.first()
         if thread:
             for c in thread.comments.all():
@@ -348,8 +352,13 @@ class RecruitView(APIView):
         if not role:
             return Response({"detail": "직군(role)은 필수입니다."}, status=400)
         bot_id = int(time.time() * 1000) * 1000 + random.randint(0, 999)
+        name = (request.data.get("name") or "").strip()
+        if not name:                          # 이름은 정체성 — 비우면 고유 이름 자동 배정(직군≠이름)
+            from .names import assign_name
+            taken = set(n for n in Agent.objects.exclude(name="").values_list("name", flat=True) if n)
+            name = assign_name(bot_id, taken)
         a = Agent.objects.create(
-            bot_id=bot_id, role=role[:60], name=(request.data.get("name") or "")[:100],
+            bot_id=bot_id, role=role[:60], name=name[:100],
             persona=(request.data.get("persona") or "")[:5000],
             avatar=(request.data.get("avatar") or "")[:8], created_via="sns")
         a.event_count = 0
