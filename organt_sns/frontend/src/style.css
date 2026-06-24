@@ -82,7 +82,15 @@ a.cmsg-name:hover{text-decoration:underline}
   background:var(--elevated);border:1px solid var(--line);color:var(--text);border-radius:20px;padding:7px 13px;
   font:inherit;font-size:12.5px;font-weight:550;cursor:pointer;box-shadow:var(--shadow);z-index:5}
 .to-bottom:hover{border-color:var(--accent-line)}
-.work-line{display:flex;align-items:center;gap:8px;padding:2px 12px 2px 66px;color:var(--text3);font-size:11.5px}
+.work-fold{padding:1px 12px 1px 54px}
+.work-toggle{display:inline-flex;align-items:center;gap:6px;background:none;border:0;color:var(--text3);font:inherit;font-size:11.5px;cursor:pointer;padding:3px 8px;border-radius:6px}
+.work-toggle:hover{color:var(--text2);background:rgba(255,255,255,.03)}
+.wchev{transition:transform .12s;transform:rotate(-90deg);color:var(--text3)}.wchev.open{transform:rotate(0)}
+.work-items{margin:1px 0 5px 20px;border-left:1px solid var(--line);padding:3px 0 3px 13px;display:grid;gap:3px}
+.work-item{font-size:11.5px;color:var(--text3);display:flex;gap:8px;align-items:baseline;min-width:0}
+.work-item .wt{color:var(--accent2);font-weight:600;flex:none;min-width:30px}
+.work-item .wg{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.work-item.wmore{color:var(--text3);font-style:italic}
 .msgs>.cmsg:last-child{animation:msgin .18s ease}
 @keyframes msgin{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
 .dotmark{width:4px;height:4px;border-radius:50%;background:var(--text3);flex:none}

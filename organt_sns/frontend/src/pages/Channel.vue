@@ -67,10 +67,11 @@ const groups = computed(() => {
     if (k !== lastDay) { flushWork(); cur = null; out.push({ type: 'date', key: 'd' + out.length, label: dayLabel(ts) }); lastDay = k }
   }
   for (const m of (data.value?.messages || [])) {
-    if (!isConv(m)) {                                   // 도구 작업 — 누가 했든 한 줄로 조용히 접는다
+    if (!isConv(m)) {                                   // 도구 작업 — 한 줄로 접되, 펼치면 무슨 작업인지 보이게
       cur = null
-      if (work) work.n++
-      else work = { type: 'work', key: 'w' + out.length, n: 1 }
+      const it = workItem(m.summary || '')
+      if (work) { work.n++; if (work.items.length < 50) work.items.push(it) }
+      else work = { type: 'work', key: 'w' + out.length, n: 1, items: [it] }
       continue
     }
     maybeDay(m.ts)
@@ -95,6 +96,19 @@ const groups = computed(() => {
   flushWork()
   return out
 })
+// 도구 작업 한 건을 "행동 + 대상"으로. summary 예: "AI 엔지니어: Read /…/game.js"
+const TOOL = { Read: '읽기', Write: '쓰기', Edit: '수정', MultiEdit: '수정', run: '실행', Bash: '실행', Glob: '검색', Grep: '검색', WebSearch: '검색', WebFetch: '가져오기', NotebookEdit: '수정' }
+function workItem(s) {
+  s = (s || '').replace(/^[^:]*:\s*/, '').trim()
+  const sp = s.indexOf(' ')
+  const tool = TOOL[sp > 0 ? s.slice(0, sp) : s] || (sp > 0 ? s.slice(0, sp) : s) || '작업'
+  let rest = sp > 0 ? s.slice(sp + 1).trim() : ''
+  if (/\//.test(rest) && !/\s/.test(rest)) rest = rest.split('/').filter(Boolean).pop() || rest   // 경로 → 파일명
+  if (rest.length > 48) rest = '…' + rest.slice(-46)
+  return { tool, target: rest }
+}
+const openWork = ref(new Set())
+function toggleWork(key) { const s = new Set(openWork.value); s.has(key) ? s.delete(key) : s.add(key); openWork.value = s }
 // 가벼운 마크다운 — 코드블록·인라인코드·굵게·링크·줄바꿈. HTML 이스케이프 후 적용.
 function renderMd(s) {
   s = String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -264,8 +278,17 @@ watch(() => route.params.pid, () => {
       <template v-for="g in groups" :key="g.key">
         <!-- 날짜 구분 -->
         <div v-if="g.type === 'date'" class="day-sep"><span>{{ g.label }}</span></div>
-        <!-- 도구 작업: 조용한 한 줄 -->
-        <div v-else-if="g.type === 'work'" class="work-line"><span class="dotmark"></span>작업 중 · {{ g.n }}건</div>
+        <!-- 도구 작업: 접힌 한 줄, 클릭하면 무슨 작업인지 펼침 -->
+        <div v-else-if="g.type === 'work'" class="work-fold">
+          <button class="work-toggle" @click="toggleWork(g.key)">
+            <Icon name="chevron" :size="13" class="wchev" :class="{ open: openWork.has(g.key) }" />
+            직원 작업 {{ g.n }}건
+          </button>
+          <div v-if="openWork.has(g.key)" class="work-items">
+            <div v-for="(it, i) in g.items" :key="i" class="work-item"><span class="wt">{{ it.tool }}</span><span v-if="it.target" class="wg">{{ it.target }}</span></div>
+            <div v-if="g.n > g.items.length" class="work-item wmore">…외 {{ g.n - g.items.length }}건</div>
+          </div>
+        </div>
         <!-- 메시지 묶음: 사람·직원 동일 레이아웃 -->
         <div v-else class="cmsg">
           <router-link v-if="g.actorId" :to="`/agents/${g.actorId}`" class="cmsg-av" :style="{ background: g.isHuman ? 'var(--accent)' : avatarColor(g.seed) }">{{ monogram(g.author) }}</router-link>
