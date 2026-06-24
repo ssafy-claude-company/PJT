@@ -12,6 +12,7 @@ import itertools
 import os
 import sys
 import time
+from contextlib import asynccontextmanager
 
 import requests
 
@@ -145,7 +146,12 @@ class HttpSnsGuide:
 
     # ── 디스코드 전용 — 안전 no-op ─────────────────────────────────
     def register_organt(self, user_id, client=None): pass
-    async def typing(self, channel_id, sender_id=None): return None
+
+    @asynccontextmanager
+    async def typing(self, channel_id, sender_id=None):
+        # DiscordGuide.typing과 같은 계약: async with로 쓰는 컨텍스트 매니저(SNS엔 타이핑 표시 없음 → no-op).
+        yield
+
     async def send_file(self, channel_id, path, sender_id=0, caption=""): return "0"
     async def react(self, channel_id, message_id, emoji): return None
     async def delete_message(self, channel_id, message_id): return None
