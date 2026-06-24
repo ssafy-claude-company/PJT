@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from './api'
 
@@ -7,6 +7,8 @@ const route = useRoute()
 const router = useRouter()
 const channels = ref([])
 const stats = ref(null)
+const drawer = ref(false)        // 모바일 사이드바 열림
+const q = ref('')                // 채널 필터
 let timer = null
 
 async function newChannel() {
@@ -14,6 +16,7 @@ async function newChannel() {
   if (!name || !name.trim()) return
   const c = await api.createChannel({ name: name.trim() })
   await load()
+  drawer.value = false
   router.push(`/channels/${c.pid}`)
 }
 
@@ -22,7 +25,6 @@ async function load() {
     const [p, s] = await Promise.all([api.projects({ ordering: '-event_count' }), api.stats()])
     // SNS-네이티브 채널(U-/S-)은 활동 0이어도 항상 보인다(사용자가 만든 것). P-(디스코드)는 활동 있을 때만.
     const vis = p.filter((c) => c.event_count > 0 || c.message_count > 0 || !/^P-/.test(c.pid))
-    // 내가 만든 채널(U-/S-)을 위로 — 디스코드 쇼케이스(P-)는 그 아래.
     const isMine = (c) => !/^P-/.test(c.pid)
     channels.value = vis.sort((a, b) => (isMine(b) - isMine(a)) || (b.event_count - a.event_count))
     stats.value = s
@@ -30,12 +32,27 @@ async function load() {
 }
 onMounted(() => { load(); timer = setInterval(load, 8000) })
 onUnmounted(() => clearInterval(timer))
+watch(() => route.fullPath, () => { drawer.value = false })   // 이동하면 드로어 닫힘
 const activePid = computed(() => route.params.pid)
+const shown = computed(() => {
+  const t = q.value.trim().toLowerCase()
+  if (!t) return channels.value
+  return channels.value.filter((c) => (c.name || c.pid).toLowerCase().includes(t) || c.pid.toLowerCase().includes(t))
+})
+const isLive = computed(() => stats.value?.baton?.role)
 </script>
 
 <template>
   <div class="shell">
-    <aside class="sidebar">
+    <!-- 모바일 탑바 -->
+    <header class="topbar">
+      <button class="burger" @click="drawer = true" aria-label="메뉴">☰</button>
+      <router-link to="/" class="tb-brand">Organt</router-link>
+      <span v-if="isLive" class="live-tag"><i></i>LIVE</span>
+    </header>
+
+    <div v-if="drawer" class="scrim" @click="drawer = false"></div>
+    <aside class="sidebar" :class="{ open: drawer }">
       <router-link to="/" class="sb-brand">
         Organt<span class="sub">AI 직원 협업 · 상위 Discord</span>
       </router-link>
@@ -55,13 +72,15 @@ const activePid = computed(() => route.params.pid)
           <span>채널 · {{ channels.length }}</span>
           <span class="hash" style="cursor:pointer;font-size:15px" title="새 프로젝트" @click="newChannel">＋</span>
         </div>
-        <router-link v-for="c in channels" :key="c.pid" :to="`/channels/${c.pid}`"
+        <input v-if="channels.length > 6" v-model="q" class="sb-search" placeholder="채널 검색…" />
+        <router-link v-for="c in shown" :key="c.pid" :to="`/channels/${c.pid}`"
                      class="sb-item" :class="{ active: activePid === c.pid }">
           <span class="hash">#</span>
           <span class="nm">{{ c.name || c.pid }}</span>
           <span v-if="stats && stats.baton && stats.baton.project === c.pid" class="dot" title="지금 활동 중"></span>
         </router-link>
         <div v-if="!channels.length" class="muted" style="padding:8px 10px;font-size:12px">불러오는 중…</div>
+        <div v-else-if="!shown.length" class="muted" style="padding:8px 10px;font-size:12px">검색 결과 없음</div>
       </div>
     </aside>
     <main class="main"><router-view /></main>

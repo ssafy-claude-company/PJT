@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, watch, nextTick, computed } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
 import { kindMeta, timeFmt } from '../kinds'
@@ -49,13 +49,38 @@ function avatarColor(role) {
   return `hsl(${h} 52% 58%)`
 }
 const initials = (role) => (role || '?').replace(/[^가-힣A-Za-z]/g, '').slice(0, 2) || '?'
+const batonHere = computed(() => {
+  const b = stats.value?.baton
+  return b && b.project === route.params.pid ? b.role : null
+})
 
+const atBottom = ref(true)
+const live = ref(false)
+let poll = null
 function scrollBottom() { const el = msgsEl.value; if (el) el.scrollTop = el.scrollHeight }
+function onScroll() {
+  const el = msgsEl.value; if (!el) return
+  atBottom.value = el.scrollTop + el.clientHeight >= el.scrollHeight - 80
+}
 async function load() {
   loading.value = true; briefing.value = null; showBrief.value = false
   try { data.value = await api.channelMessages(route.params.pid) }
-  finally { loading.value = false; await nextTick(); scrollBottom() }
+  finally { loading.value = false; atBottom.value = true; await nextTick(); scrollBottom() }
 }
+// 라이브 폴링 — 새 메시지를 새로고침 없이. 바닥에 있을 때만 자동스크롤, 탭 숨김 시 정지.
+async function refresh() {
+  if (document.hidden) return
+  try {
+    const fresh = await api.channelMessages(route.params.pid)
+    const prevLast = data.value?.messages?.length
+    data.value = fresh
+    live.value = true
+    if ((fresh.messages?.length || 0) !== prevLast && atBottom.value) { await nextTick(); scrollBottom() }
+  } catch (e) { /* 직전 상태 유지 */ }
+  api.stats().then((s) => { stats.value = s }).catch(() => {})
+}
+function startPoll() { stopPoll(); poll = setInterval(refresh, 4000) }
+function stopPoll() { if (poll) { clearInterval(poll); poll = null } }
 async function send() {
   const body = draft.value.trim(); if (!body) return
   sending.value = true
@@ -99,14 +124,18 @@ onMounted(() => {
   load()
   api.agents({ ordering: '-event_count' }).then((a) => { agents.value = a })
   api.stats().then((s) => { stats.value = s }).catch(() => {})
+  startPoll()
 })
-watch(() => route.params.pid, load)
+onUnmounted(stopPoll)
+watch(() => route.params.pid, () => { live.value = false; load() })
 </script>
 
 <template>
   <div class="chan-head">
     <span class="h"># {{ data?.name || route.params.pid }}</span>
     <span class="muted mono" style="font-size:12px">{{ route.params.pid }}</span>
+    <span v-if="batonHere" class="live-baton"><i class="pulse"></i>{{ batonHere }} 작업 중</span>
+    <span v-else-if="live" class="live-tag" title="라이브 — 자동 갱신 중"><i></i>LIVE</span>
     <div class="baton">
       <button class="btn ghost" style="padding:4px 11px"
               :style="showStruct ? 'border-color:var(--accent);color:var(--accent)' : ''"
@@ -131,7 +160,7 @@ watch(() => route.params.pid, load)
     </div>
   </div>
 
-  <div class="msgs" ref="msgsEl">
+  <div class="msgs" ref="msgsEl" @scroll.passive="onScroll">
     <div v-if="loading" class="empty"><span class="spin"></span> 대화 불러오는 중…</div>
     <template v-else>
       <div class="day-sep">채널 시작 — 봇들의 협업 대화</div>
