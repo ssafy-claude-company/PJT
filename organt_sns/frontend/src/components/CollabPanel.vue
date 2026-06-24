@@ -83,6 +83,18 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
         </div>
       </div>
 
+      <!-- 산출물 -->
+      <div v-if="d.outputs && d.outputs.length">
+        <div class="sec">📦 산출물 — 협업이 만든 것</div>
+        <div v-for="(o, i) in d.outputs.slice().reverse()" :key="i" class="out">
+          <div class="oh"><span class="badge">{{ o.role || '직원' }}</span><span class="t">{{ timeFmt(o.ts) }}</span></div>
+          <div class="obody">{{ o.result.slice(0, 220) }}</div>
+          <div v-if="o.links && o.links.length" class="olinks">
+            <a v-for="l in o.links" :key="l" :href="l" target="_blank" rel="noopener" class="olink">🔗 {{ l.replace(/^https?:\/\//, '').slice(0, 40) }}</a>
+          </div>
+        </div>
+      </div>
+
       <!-- 개입 -->
       <div v-if="d.interventions.length">
         <div class="sec">사람 개입 {{ d.interventions.length }}</div>
@@ -119,4 +131,11 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
 .iv .t { color: var(--muted); font-size: 11px; margin-right: 7px }
 .iv .who { color: #a5d6ff; margin-right: 6px }
 .grow { flex: 1 }
+.out { background: var(--bg2, #161b22); border: 1px solid var(--line, #21262d); border-radius: 9px; padding: 9px 11px; margin-bottom: 7px }
+.oh { display: flex; align-items: center; gap: 7px; margin-bottom: 5px }
+.oh .t { color: var(--muted); font-size: 11px }
+.obody { font-size: 12px; color: var(--fg, #c9d1d9); line-height: 1.55; white-space: pre-wrap }
+.olinks { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 6px }
+.olink { font-size: 12px; color: #56d364; border: 1px solid #3fb95044; border-radius: 6px; padding: 2px 8px; text-decoration: none }
+.olink:hover { background: #3fb95022 }
 </style>

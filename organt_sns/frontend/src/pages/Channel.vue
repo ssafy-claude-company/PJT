@@ -22,6 +22,9 @@ const reqTo = ref('')
 const reqKind = ref('W')
 const reqBody = ref('')
 const reqSending = ref(false)
+// 적임자 추천(F1301) — 요청 작성 중 누구에게 맡길지 제안
+const recs = ref([])
+const recLoading = ref(false)
 
 // 대화(conversation) 종류 — 버블로. 그 외(work/raw/experience)는 활동 줄로 접는다.
 const CONV = new Set(['delegation', 'consultation', 'goal_set', 'meeting', 'verification',
@@ -66,8 +69,24 @@ async function loadBrief() {
   showBrief.value = !showBrief.value
   if (showBrief.value && !briefing.value) briefing.value = await api.briefing(route.params.pid)
 }
+async function suggest() {
+  const q = reqBody.value.trim(); if (!q) return
+  recLoading.value = true
+  try {
+    const r = await api.recommend(q, 3)
+    recs.value = (r.results || []).slice(0, 3)
+  } finally { recLoading.value = false }
+}
+function pickRec(b) { reqTo.value = b.bot_id; recs.value = [] }
+const REASON_LABEL = { role_match: '직군 적합', keyword_overlap: '키워드 일치', expertise: '전문성', track_record: '실적' }
+function recWhy(b) {
+  const r = b.reasons || {}
+  const top = Object.entries(r).sort((a, c) => c[1] - a[1])[0]
+  return top ? (REASON_LABEL[top[0]] || top[0]) : ''
+}
 async function sendRequest() {
   const body = reqBody.value.trim(); if (!body) return
+  recs.value = []
   reqSending.value = true
   try {
     await api.makeRequest(route.params.pid, { to_id: reqTo.value || undefined, kind: reqKind.value, body })
@@ -163,6 +182,16 @@ watch(() => route.params.pid, load)
         </select>
         <button class="btn ghost" style="padding:7px 12px" :style="reqKind === 'W' ? 'border-color:var(--accent);color:var(--accent)' : ''" @click="reqKind = 'W'">작업</button>
         <button class="btn ghost" style="padding:7px 12px" :style="reqKind === 'I' ? 'border-color:var(--accent);color:var(--accent)' : ''" @click="reqKind = 'I'">질문</button>
+        <button class="btn ghost" style="padding:7px 12px" :disabled="recLoading || !reqBody.trim()" @click="suggest"
+                title="이 일에 적합한 봇 추천(F1301)">{{ recLoading ? '…' : '✨ 적임자' }}</button>
+      </div>
+      <div v-if="recs.length" class="recs">
+        <span class="muted" style="font-size:11px;margin-right:2px">추천:</span>
+        <button v-for="b in recs" :key="b.bot_id" class="recchip" @click="pickRec(b)"
+                :title="`활동 ${b.event_count} · ${recWhy(b)}`">
+          <b>{{ b.role }}</b><span v-if="b.name" class="muted"> {{ b.name }}</span>
+          <span class="why" v-if="recWhy(b)">{{ recWhy(b) }}</span>
+        </button>
       </div>
       <div class="row">
         <input v-model="reqBody" :placeholder="reqKind === 'W' ? '무엇을 만들/할지…' : '무엇을 물어볼지…'" @keyup.enter="sendRequest" :disabled="reqSending" />

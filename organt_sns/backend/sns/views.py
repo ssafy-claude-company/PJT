@@ -78,6 +78,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                 return "fail"
             return "open"
 
+        outputs = []
         rec(leader_role, leader=True)
         for e in proj.events.select_related("actor", "target").order_by("seq"):
             ar = e.actor.role if e.actor else None
@@ -98,6 +99,13 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                 deploys.append({"role": ar, "summary": e.summary, "ts": e.ts})
             elif e.kind in ("goal_set", "task_complete"):
                 milestones.append({"kind": e.kind, "role": ar, "summary": e.summary, "ts": e.ts})
+                if e.kind == "task_complete":   # 산출물 — 마감 보고의 result가 진짜 결과물 요약
+                    res = (e.payload or {}).get("result") or e.summary
+                    if res:
+                        import re
+                        links = re.findall(r"https?://[^\s)>\]]+", res)
+                        outputs.append({"role": ar, "result": res, "ts": e.ts,
+                                        "links": sorted(set(links))[:4]})
         # 라이브/스튜디오 GuideMessage 요청도 위임 엣지로(러너 흐름·스튜디오 요청 가시화)
         ag = {a.bot_id: a for a in Agent.objects.all()}
         for gm in GuideMessage.objects.filter(channel_id=proj.id, msg_type="request"):
@@ -117,7 +125,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         return Response({
             "pid": proj.pid, "name": proj.name, "leader_role": leader_role,
             "roles": sorted(roles.values(), key=lambda r: (not r["is_leader"], -(r["out"] + r["work"]))),
-            "delegations": delegations, "tasks": tasks,
+            "delegations": delegations, "tasks": tasks, "outputs": outputs[-8:],
             "gates": gates[-40:], "interventions": interventions[-25:],
             "deploys": deploys[-20:], "milestones": milestones[-20:],
             "counts": {"delegations": sum(v["count"] for v in edges.values()),

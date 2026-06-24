@@ -68,6 +68,11 @@ h1,h2,h3{margin:0}
   padding:11px 14px;font:inherit}
 .composer input:focus{outline:none;border-color:var(--accent)}
 .composer .hint{color:#6e7681;font-size:11px;margin-top:6px}
+.composer .recs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px}
+.composer .recchip{background:var(--panel2);border:1px solid var(--bd);border-radius:8px;color:var(--fg);
+  padding:4px 9px;font:inherit;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+.composer .recchip:hover{border-color:var(--accent)}
+.composer .recchip .why{color:#56d364;font-size:11px;background:#3fb95022;border-radius:5px;padding:0 5px}
 
 /* ── 공통 컴포넌트 ─────────────────────────── */
 .container{max-width:1080px;margin:0 auto;padding:18px 22px;width:100%;flex:1;min-height:0;overflow-y:auto}
