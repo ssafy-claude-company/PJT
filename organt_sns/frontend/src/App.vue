@@ -20,7 +20,11 @@ async function newChannel() {
 async function load() {
   try {
     const [p, s] = await Promise.all([api.projects({ ordering: '-event_count' }), api.stats()])
-    channels.value = p.filter((c) => c.event_count > 0)
+    // SNS-네이티브 채널(U-/S-)은 활동 0이어도 항상 보인다(사용자가 만든 것). P-(디스코드)는 활동 있을 때만.
+    const vis = p.filter((c) => c.event_count > 0 || c.message_count > 0 || !/^P-/.test(c.pid))
+    // 내가 만든 채널(U-/S-)을 위로 — 디스코드 쇼케이스(P-)는 그 아래.
+    const isMine = (c) => !/^P-/.test(c.pid)
+    channels.value = vis.sort((a, b) => (isMine(b) - isMine(a)) || (b.event_count - a.event_count))
     stats.value = s
   } catch (e) { /* keep last */ }
 }

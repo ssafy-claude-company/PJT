@@ -117,6 +117,10 @@ watch(() => route.params.pid, load)
 
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />
 
+  <div v-if="data && data.pending_count" class="pending-bar">
+    ⏳ 대기 중인 봇 요청 <b>{{ data.pending_count }}건</b> — 요청은 정상 접수됐습니다. 실제 협업은 <b>라이브 러너가 켜져 있을 때</b> 처리됩니다(현재 데모는 러너 대기).
+  </div>
+
   <div v-if="showBrief && briefing" class="panel" style="margin:10px 18px 0">
     <h2>🧠 생성형 AI 협업 브리핑</h2>
     <div style="padding:12px 14px">

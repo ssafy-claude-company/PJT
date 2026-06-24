@@ -68,6 +68,8 @@ h1,h2,h3{margin:0}
   padding:11px 14px;font:inherit}
 .composer input:focus{outline:none;border-color:var(--accent)}
 .composer .hint{color:#6e7681;font-size:11px;margin-top:6px}
+.pending-bar{margin:10px 18px 0;padding:9px 13px;border:1px solid #d2992244;background:#d2992212;
+  border-radius:9px;color:#e3b341;font-size:12.5px;line-height:1.5}
 .composer .recs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px}
 .composer .recchip{background:var(--panel2);border:1px solid var(--bd);border-radius:8px;color:var(--fg);
   padding:4px 9px;font:inherit;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:5px}

@@ -61,11 +61,12 @@ class ProjectSerializer(serializers.ModelSerializer):
     leader_role = serializers.CharField(source="leader.role", default=None, read_only=True)
     event_count = serializers.IntegerField(read_only=True, required=False)
     task_count = serializers.IntegerField(read_only=True, required=False)
+    message_count = serializers.IntegerField(read_only=True, required=False)
 
     class Meta:
         model = Project
         fields = ["id", "pid", "name", "leader", "leader_role", "status",
-                  "event_count", "task_count"]
+                  "event_count", "task_count", "message_count"]
 
 
 class ProjectDetailSerializer(ProjectSerializer):

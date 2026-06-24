@@ -39,7 +39,8 @@ async function createFromTemplate(t) {
 onMounted(async () => {
   try {
     const [p, s] = await Promise.all([api.projects({ ordering: '-event_count' }), api.stats()])
-    channels.value = p.filter((c) => c.event_count > 0)
+    // SNS-네이티브 채널(U-/S-)은 활동 0이어도 항상. P-(디스코드)는 활동 있을 때만.
+    channels.value = p.filter((c) => c.event_count > 0 || c.message_count > 0 || !/^P-/.test(c.pid))
     stats.value = s
   } finally { loading.value = false }
 })
@@ -77,8 +78,9 @@ onMounted(async () => {
         </div>
         <div class="muted mono" style="font-size:12px;margin:6px 0">{{ c.pid }} · 리더 {{ c.leader_role || '—' }}</div>
         <div class="flex" style="gap:12px">
-          <span class="badge">{{ c.event_count }} 메시지</span>
-          <span class="badge">Task {{ c.task_count }}</span>
+          <span class="badge">{{ (c.event_count || 0) + (c.message_count || 0) }} 메시지</span>
+          <span v-if="c.task_count" class="badge">Task {{ c.task_count }}</span>
+          <span v-if="!/^P-/.test(c.pid)" class="badge ok">새 채널</span>
         </div>
       </router-link>
     </div>

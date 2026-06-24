@@ -1,6 +1,7 @@
 """DRF 뷰 — RESTful(F1304). Organt 파생 데이터는 읽기전용(GET), 커뮤니티(쓰레드/댓글/좋아요)는
 사용자가 생성(POST) → 적합한 HTTP Method·status code로 응답."""
-from django.db.models import Count
+from django.db.models import Count, OuterRef, Subquery, IntegerField
+from django.db.models.functions import Coalesce
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -39,8 +40,13 @@ class RoleProfileViewSet(viewsets.ReadOnlyModelViewSet):
 
 class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
     """프로젝트 목록·상세. /api/projects/ , /api/projects/P-032/ , /api/projects/P-032/events/"""
+    # GuideMessage는 Project FK가 아니라 channel_id(=proj.id)로 묶인다 — 서브쿼리로 메시지 수 집계.
+    _msg_sq = (GuideMessage.objects.filter(channel_id=OuterRef("id")).exclude(msg_type="status")
+               .values("channel_id").annotate(c=Count("msg_id")).values("c"))
     queryset = Project.objects.annotate(
-        event_count=Count("events", distinct=True), task_count=Count("tasks", distinct=True))
+        event_count=Count("events", distinct=True), task_count=Count("tasks", distinct=True),
+        message_count=Coalesce(Subquery(_msg_sq, output_field=IntegerField()), 0)
+    ).order_by("-event_count", "-id")
     lookup_field = "pid"
     lookup_value_regex = "[A-Za-z]+-[0-9]+"   # P-(디스코드)·S-(SnsGuide)·U-(스튜디오) 모두
 
@@ -176,7 +182,11 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                 msgs.append({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),
                              "author": c.author_name, "body": c.body})
         msgs.sort(key=lambda m: m["ts"])
-        return Response({"pid": proj.pid, "name": proj.name, "messages": msgs})
+        # 미처리 요청 수(러너 꺼짐/대기 가시화) — sender_id=0 요청 중 픽업 안 됐고 응답도 없는 것
+        responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
+        pending = sum(1 for g in gms if g.sender_id == 0 and g.msg_type == "request"
+                      and not (g.payload or {}).get("picked") and g.msg_id not in responded)
+        return Response({"pid": proj.pid, "name": proj.name, "messages": msgs, "pending_count": pending})
 
     @action(detail=True, methods=["post"], url_path="request")
     def make_request(self, request, pid=None):
