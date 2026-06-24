@@ -6,7 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Agent, RoleProfile, Project, Event, Thread, Comment, Like
+from .models import Agent, RoleProfile, Project, Event, Thread, Comment, Like, GuideMessage
 from .recommend import score_candidates
 from .insights import project_briefing
 from .serializers import (
@@ -42,7 +42,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Project.objects.annotate(
         event_count=Count("events", distinct=True), task_count=Count("tasks", distinct=True))
     lookup_field = "pid"
-    lookup_value_regex = "P-[0-9]+"
+    lookup_value_regex = "[A-Za-z]+-[0-9]+"   # P-(디스코드)·S-(SnsGuide)·U-(스튜디오) 모두
 
     def get_serializer_class(self):
         return ProjectDetailSerializer if self.action == "retrieve" else ProjectSerializer
@@ -71,6 +71,22 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             "target_role": e.target.role if e.target else None,
             "summary": e.summary,
         } for e in evs]
+        # SNS-네이티브 라이브 메시지(GuideMessage) — 스튜디오 요청 + (러너 단계) SnsGuide 출력
+        gms = list(GuideMessage.objects.filter(channel_id=proj.id).exclude(msg_type="status").order_by("msg_id"))
+        if gms:
+            ag = {a.bot_id: a for a in Agent.objects.all()}
+            _km = {"request": "delegation", "response": "work", "plain": "work"}
+            for gm in gms:
+                if gm.sender_id == 0 and gm.msg_type == "request":
+                    msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
+                                 "author": "요청", "body": gm.body})
+                else:
+                    a = ag.get(gm.sender_id); ta = ag.get(gm.to_id) if gm.to_id else None
+                    kind = "consultation" if (gm.msg_type == "request" and gm.kind == "I") else _km.get(gm.msg_type, "work")
+                    msgs.append({"type": "agent", "key": f"g{gm.msg_id}", "ts": gm.ts, "kind": kind,
+                                 "actor_role": a.role if a else None,
+                                 "actor_id": str(a.bot_id) if a else None,
+                                 "target_role": ta.role if ta else None, "summary": gm.body})
         thread = proj.threads.first()
         if thread:
             for c in thread.comments.all():
@@ -78,6 +94,21 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                              "author": c.author_name, "body": c.body})
         msgs.sort(key=lambda m: m["ts"])
         return Response({"pid": proj.pid, "name": proj.name, "messages": msgs})
+
+    @action(detail=True, methods=["post"], url_path="request")
+    def make_request(self, request, pid=None):
+        """스튜디오 — 채널에 요청 투입(Work/Info 1급). SYS 러너가 픽업(다음 단계). 지금은 큐 적재+표시."""
+        import time
+        proj = self.get_object()
+        body = (request.data.get("body") or "").strip()
+        if not body:
+            return Response({"detail": "내용은 필수입니다."}, status=400)
+        kind = "W" if str(request.data.get("kind", "W")).upper().startswith("W") else "I"
+        to_id = request.data.get("to_id")
+        m = GuideMessage.objects.create(
+            channel_id=proj.id, thread_id=proj.id, sender_id=0, msg_type="request",
+            to_id=int(to_id) if to_id else None, kind=kind, body=body[:4000], ts=time.time())
+        return Response({"msg_id": m.msg_id, "kind": kind, "queued": True}, status=201)
 
     @action(detail=True, methods=["post"])
     def say(self, request, pid=None):
@@ -171,6 +202,45 @@ class RecommendView(APIView):
             "count": len(ranked),
             "results": ranked[:top],
         })
+
+
+class RecruitView(APIView):
+    """스튜디오 — 봇 채용(무한·커스텀). 디스코드 계정 제약이 없으니 클릭 한 번에 생성.
+    POST {role, name?, persona?, avatar?}"""
+    def post(self, request):
+        import time
+        import random
+        role = (request.data.get("role") or "").strip()
+        if not role:
+            return Response({"detail": "직군(role)은 필수입니다."}, status=400)
+        bot_id = int(time.time() * 1000) * 1000 + random.randint(0, 999)
+        a = Agent.objects.create(
+            bot_id=bot_id, role=role[:60], name=(request.data.get("name") or "")[:100],
+            persona=(request.data.get("persona") or "")[:5000],
+            avatar=(request.data.get("avatar") or "")[:8], created_via="sns")
+        a.event_count = 0
+        return Response(AgentSerializer(a).data, status=201)
+
+
+class ChannelCreateView(APIView):
+    """스튜디오 — 프로젝트(채널) 생성. POST {name, leader_bot_id?}"""
+    def post(self, request):
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return Response({"detail": "채널 이름은 필수입니다."}, status=400)
+        n = Project.objects.filter(pid__startswith="U-").count() + 1
+        pid = f"U-{n:03d}"
+        while Project.objects.filter(pid=pid).exists():
+            n += 1
+            pid = f"U-{n:03d}"
+        leader = None
+        lb = request.data.get("leader_bot_id")
+        if lb:
+            leader = Agent.objects.filter(bot_id=int(lb)).first()
+        p = Project.objects.create(pid=pid, name=name[:200], status="live", leader=leader)
+        return Response({"pid": p.pid, "name": p.name, "status": p.status,
+                         "leader_role": leader.role if leader else None,
+                         "event_count": 0, "task_count": 0}, status=201)
 
 
 class StatsView(APIView):

@@ -1,12 +1,21 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from './api'
 
 const route = useRoute()
+const router = useRouter()
 const channels = ref([])
 const stats = ref(null)
 let timer = null
+
+async function newChannel() {
+  const name = prompt('새 프로젝트(채널) 이름:')
+  if (!name || !name.trim()) return
+  const c = await api.createChannel({ name: name.trim() })
+  await load()
+  router.push(`/channels/${c.pid}`)
+}
 
 async function load() {
   try {
@@ -28,6 +37,9 @@ const activePid = computed(() => route.params.pid)
       </router-link>
       <div class="sb-scroll">
         <div class="sb-sec">둘러보기</div>
+        <router-link to="/studio" class="sb-item" :class="{ active: route.path === '/studio' }">
+          <span class="hash">⚙</span><span class="nm">봇 스튜디오</span>
+        </router-link>
         <router-link to="/agents" class="sb-item" :class="{ active: route.path.startsWith('/agents') }">
           <span class="hash">#</span><span class="nm">AI 직원</span>
         </router-link>
@@ -35,7 +47,10 @@ const activePid = computed(() => route.params.pid)
           <span class="hash">#</span><span class="nm">적임자 추천</span>
         </router-link>
 
-        <div class="sb-sec">채널 · 프로젝트 {{ channels.length }}</div>
+        <div class="sb-sec between" style="display:flex;align-items:center;justify-content:space-between">
+          <span>채널 · {{ channels.length }}</span>
+          <span class="hash" style="cursor:pointer;font-size:15px" title="새 프로젝트" @click="newChannel">＋</span>
+        </div>
         <router-link v-for="c in channels" :key="c.pid" :to="`/channels/${c.pid}`"
                      class="sb-item" :class="{ active: activePid === c.pid }">
           <span class="hash">#</span>

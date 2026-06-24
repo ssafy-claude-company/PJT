@@ -8,11 +8,18 @@ from django.db import models
 
 
 class Agent(models.Model):
-    """AI 직원(봇). 직군(role)을 가지고 도메인을 책임진다."""
-    bot_id = models.BigIntegerField(unique=True, help_text="Organt 두뇌의 봇 id")
+    """AI 직원(봇). 직군(role)을 가지고 도메인을 책임진다.
+
+    [스튜디오] 디스코드 계정 제약이 없으니 봇은 *무한·커스텀* — persona(인격 프롬프트)·avatar를
+    SNS에서 자유 편집하고, created_via='sns'로 사용자가 채용한 봇을 표시한다."""
+    bot_id = models.BigIntegerField(unique=True, help_text="봇 id(디스코드 or SNS 생성)")
     name = models.CharField(max_length=100, blank=True)
     role = models.CharField(max_length=60, blank=True, help_text="직군(백엔드/QA/…)")
     is_leader = models.BooleanField(default=False)
+    persona = models.TextField(blank=True, help_text="[커스텀] 봇 인격(시스템 프롬프트)")
+    avatar = models.CharField(max_length=8, blank=True, help_text="[커스텀] 이모지 아바타")
+    created_via = models.CharField(max_length=10, default="discord",
+                                   help_text="discord(두뇌 채용) | sns(스튜디오 채용)")
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

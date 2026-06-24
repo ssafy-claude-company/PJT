@@ -12,6 +12,13 @@ const sending = ref(false)
 const briefing = ref(null)
 const showBrief = ref(false)
 const msgsEl = ref(null)
+// 입력 모드: 사람 메시지(msg) vs 봇 요청(req, Work/Info 1급)
+const mode = ref('msg')
+const agents = ref([])
+const reqTo = ref('')
+const reqKind = ref('W')
+const reqBody = ref('')
+const reqSending = ref(false)
 
 // 대화(conversation) 종류 — 버블로. 그 외(work/raw/experience)는 활동 줄로 접는다.
 const CONV = new Set(['delegation', 'consultation', 'goal_set', 'meeting', 'verification',
@@ -56,7 +63,17 @@ async function loadBrief() {
   showBrief.value = !showBrief.value
   if (showBrief.value && !briefing.value) briefing.value = await api.briefing(route.params.pid)
 }
-onMounted(load)
+async function sendRequest() {
+  const body = reqBody.value.trim(); if (!body) return
+  reqSending.value = true
+  try {
+    await api.makeRequest(route.params.pid, { to_id: reqTo.value || undefined, kind: reqKind.value, body })
+    reqBody.value = ''
+    data.value = await api.channelMessages(route.params.pid)
+    await nextTick(); scrollBottom()
+  } finally { reqSending.value = false }
+}
+onMounted(() => { load(); api.agents({ ordering: '-event_count' }).then((a) => { agents.value = a }) })
 watch(() => route.params.pid, load)
 </script>
 
@@ -114,10 +131,32 @@ watch(() => route.params.pid, load)
   </div>
 
   <div class="composer">
-    <div class="row">
+    <div class="flex" style="gap:6px;margin-bottom:8px">
+      <button class="btn ghost" style="padding:4px 12px;font-size:12px"
+              :style="mode === 'msg' ? 'border-color:var(--accent);color:var(--accent)' : ''" @click="mode = 'msg'">💬 메시지</button>
+      <button class="btn ghost" style="padding:4px 12px;font-size:12px"
+              :style="mode === 'req' ? 'border-color:var(--accent);color:var(--accent)' : ''" @click="mode = 'req'">📨 요청(봇에게)</button>
+    </div>
+
+    <div v-if="mode === 'msg'" class="row">
       <input v-model="draft" placeholder="이 채널에 메시지 남기기…" @keyup.enter="send" :disabled="sending" />
       <button class="btn" @click="send" :disabled="sending || !draft.trim()">{{ sending ? '…' : '보내기' }}</button>
     </div>
-    <div class="hint">사람도 채널에 끼어들 수 있습니다 — 봇 협업 옆에 코멘트를 남겨보세요 (F1303 = Discord 자체가 커뮤니티).</div>
+
+    <template v-else>
+      <div class="flex" style="gap:8px;margin-bottom:6px">
+        <select v-model="reqTo" style="flex:1">
+          <option value="">담당 봇 (비우면 리더)</option>
+          <option v-for="b in agents" :key="b.bot_id" :value="b.bot_id">{{ b.avatar || '🤖' }} {{ b.role }}{{ b.name ? (' · ' + b.name) : '' }}</option>
+        </select>
+        <button class="btn ghost" style="padding:7px 12px" :style="reqKind === 'W' ? 'border-color:var(--accent);color:var(--accent)' : ''" @click="reqKind = 'W'">작업</button>
+        <button class="btn ghost" style="padding:7px 12px" :style="reqKind === 'I' ? 'border-color:var(--accent);color:var(--accent)' : ''" @click="reqKind = 'I'">질문</button>
+      </div>
+      <div class="row">
+        <input v-model="reqBody" :placeholder="reqKind === 'W' ? '무엇을 만들/할지…' : '무엇을 물어볼지…'" @keyup.enter="sendRequest" :disabled="reqSending" />
+        <button class="btn" @click="sendRequest" :disabled="reqSending || !reqBody.trim()">{{ reqSending ? '…' : '요청' }}</button>
+      </div>
+    </template>
+    <div class="hint">메시지 = 사람 소통(F1303) · 요청 = 봇에게 Work/Info 1급 투입 → SYS가 처리(러너 연결 시 라이브 협업).</div>
   </div>
 </template>

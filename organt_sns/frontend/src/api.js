@@ -25,6 +25,11 @@ export default {
     http.get(`/projects/${pid}/messages/`, { params: { limit } }).then((r) => r.data),
   say: (pid, payload) => http.post(`/projects/${pid}/say/`, payload).then((r) => r.data),
 
+  // 스튜디오 — 봇 채용·채널 생성·요청 투입 (디스코드 제약 해제 → 무한·커스텀)
+  recruit: (payload) => http.post('/recruit/', payload).then((r) => r.data),
+  createChannel: (payload) => http.post('/channels/', payload).then((r) => r.data),
+  makeRequest: (pid, payload) => http.post(`/projects/${pid}/request/`, payload).then((r) => r.data),
+
   // 봉투 유지(count·다음 페이지 필요) — 협업 피드 페이지네이션
   events: (params) => http.get('/events/', { params }).then((r) => r.data),
 

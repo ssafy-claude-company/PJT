@@ -14,5 +14,7 @@ router.register("threads", views.ThreadViewSet, basename="thread")
 urlpatterns = [
     path("stats/", views.StatsView.as_view(), name="stats"),
     path("recommend/", views.RecommendView.as_view(), name="recommend"),
+    path("recruit/", views.RecruitView.as_view(), name="recruit"),          # 스튜디오 봇 채용
+    path("channels/", views.ChannelCreateView.as_view(), name="channel-create"),  # 프로젝트 생성
     path("", include(router.urls)),
 ]
