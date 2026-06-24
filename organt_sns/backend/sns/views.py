@@ -449,6 +449,11 @@ class ChannelCreateView(APIView):
             except (TypeError, ValueError):
                 return Response({"detail": "리더 봇 지정이 올바르지 않습니다."}, status=400)
         p = Project.objects.create(pid=pid, name=name[:200], status="live", leader=leader)
+        from .social import current_person          # 만든 사람을 채널 리드 멤버로
+        from .models import Membership
+        person = current_person(request)
+        if person:
+            Membership.objects.get_or_create(person=person, project=p, defaults={"role": "lead"})
         return Response({"pid": p.pid, "name": p.name, "status": p.status,
                          "leader_role": leader.role if leader else None,
                          "event_count": 0, "task_count": 0}, status=201)

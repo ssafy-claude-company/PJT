@@ -8,6 +8,7 @@ const routes = [
   { path: '/agents', name: 'agents', component: () => import('./pages/Agents.vue'), meta: { title: 'AI 직원' } },
   { path: '/agents/:botId', name: 'agent', component: () => import('./pages/AgentDetail.vue'), meta: { title: '직원' } },
   { path: '/recommend', name: 'recommend', component: () => import('./pages/Recommend.vue'), meta: { title: '적임자 추천' } },
+  { path: '/friends', name: 'friends', component: () => import('./pages/Friends.vue'), meta: { title: '친구' } },
 ]
 
 const router = createRouter({

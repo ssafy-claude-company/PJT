@@ -3,11 +3,28 @@ import axios from 'axios'
 // 개발: vite 프록시가 /api → :8000. 배포: 동일 출처에서 Django가 서빙.
 const http = axios.create({ baseURL: '/api', timeout: 20000 })
 
+// 멀티유저 정체성 — 현재 @핸들을 헤더로(데모 인증).
+http.interceptors.request.use((cfg) => {
+  const h = localStorage.getItem('organt_handle')
+  if (h) cfg.headers['X-Organt-User'] = h
+  return cfg
+})
+
 // DRF 페이지네이션 봉투({count, results}) 또는 순수 배열 모두 안전 처리.
 const list = (data) => (Array.isArray(data) ? data : (data?.results ?? []))
 
 export default {
   stats: () => http.get('/stats/').then((r) => r.data),
+
+  // 소셜(멀티유저)
+  me: () => http.get('/me/').then((r) => r.data.me),
+  saveMe: (p) => http.post('/me/', p).then((r) => r.data.me),
+  people: (q) => http.get('/people/', { params: { q } }).then((r) => r.data.people),
+  friends: () => http.get('/friends/').then((r) => r.data.friends),
+  addFriend: (handle) => http.post('/friends/', { handle }).then((r) => r.data.friends),
+  removeFriend: (handle) => http.delete(`/friends/${handle}/`).then((r) => r.data),
+  members: (pid) => http.get(`/projects/${pid}/members/`).then((r) => r.data.members),
+  invite: (pid, handle) => http.post(`/projects/${pid}/members/`, { handle }).then((r) => r.data.members),
 
   agents: (params) => http.get('/agents/', { params }).then((r) => list(r.data)),
   agent: (botId) => http.get(`/agents/${botId}/`).then((r) => r.data),

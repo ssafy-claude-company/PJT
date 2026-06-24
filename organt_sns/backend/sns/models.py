@@ -171,3 +171,39 @@ class GuideMessage(models.Model):
 
     def __str__(self):
         return f"[{self.msg_type}] {self.sender_id}: {self.body[:40]}"
+
+
+# ── 소셜(멀티유저) — 사람 유저·친구·채널 멤버 ──────────────────────────
+class Person(models.Model):
+    """사람 유저 — AI 직원(Agent)과 구분되는 실제 사용자. 데모용 핸들 기반 정체성(비번 없음)."""
+    handle = models.CharField(max_length=30, unique=True, db_index=True, help_text="@핸들(로그인 식별)")
+    name = models.CharField(max_length=60)
+    color = models.CharField(max_length=8, blank=True, help_text="아바타 색(hex)")
+    bio = models.CharField(max_length=160, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"@{self.handle}"
+
+
+class Friendship(models.Model):
+    """친구 관계(데모: 추가 즉시 양방향). a가 b를 추가."""
+    a = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="friendships")
+    b = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="friend_of")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("a", "b")]
+
+
+class Membership(models.Model):
+    """프로젝트(채널) 멤버 — 여러 사람이 한 채널에서 협업·리드."""
+    ROLES = [("lead", "리드"), ("member", "멤버")]
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="memberships")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="members")
+    role = models.CharField(max_length=10, choices=ROLES, default="member")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("person", "project")]
+        ordering = ["-role", "created_at"]

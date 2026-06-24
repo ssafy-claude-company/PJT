@@ -7,6 +7,7 @@ import CollabPanel from '../components/CollabPanel.vue'
 import Icon from '../components/Icon.vue'
 import { monogram, avatarColor, avatarBg } from '../avatar'
 import { askPrompt, askConfirm } from '../dialog'
+import { isGuest } from '../user'
 
 const route = useRoute()
 const router = useRouter()
@@ -203,6 +204,27 @@ async function sendRequest() {
     await nextTick(); scrollBottom()
   } finally { reqSending.value = false }
 }
+// 멤버(멀티유저) — 채널을 함께 쓰는 사람들. 친구를 초대해 공동 리드.
+const members = ref([])
+const showMembers = ref(false)
+const myFriends = ref([])
+const mbg = (m) => m.color || avatarColor(m.handle || m.name)
+const mini = (m) => (m.name || m.handle || '?').slice(0, 1)
+const memberHandles = computed(() => new Set(members.value.map((m) => m.handle)))
+const invitable = computed(() => myFriends.value.filter((f) => !memberHandles.value.has(f.handle)))
+async function loadMembers() {
+  try { members.value = await api.members(route.params.pid) } catch (e) { members.value = [] }
+}
+async function toggleMembers() {
+  showMembers.value = !showMembers.value
+  if (showMembers.value && !isGuest()) {
+    try { myFriends.value = await api.friends() } catch (e) { myFriends.value = [] }
+  }
+}
+async function invite(handle) {
+  try { members.value = await api.invite(route.params.pid, handle) } catch (e) { /* 권한·중복 무시 */ }
+}
+
 // 채널 관리(관리 기능)
 const isMine = computed(() => !/^P-/.test(route.params.pid))
 async function doRename() {
@@ -224,7 +246,7 @@ async function doRemove() {
   router.push('/')
 }
 onMounted(() => {
-  load()
+  load(); loadMembers()
   api.agents({ ordering: '-event_count' }).then((a) => { agents.value = a })
   api.stats().then((s) => { stats.value = s }).catch(() => {})
   startPoll()
@@ -232,8 +254,8 @@ onMounted(() => {
 onUnmounted(stopPoll)
 watch(() => route.params.pid, () => {
   live.value = false; menu.value = false; pickerOpen.value = false
-  showBrief.value = false; showStruct.value = false
-  load()
+  showBrief.value = false; showStruct.value = false; showMembers.value = false
+  load(); loadMembers()
 })
 </script>
 
@@ -244,6 +266,41 @@ watch(() => route.params.pid, () => {
     <span v-if="batonHere" class="live-baton"><i class="pulse"></i>{{ batonHere }} 작업 중</span>
     <span v-else-if="live" class="muted" style="font-size:11.5px" title="자동 갱신 중">실시간 보기</span>
     <div class="baton">
+      <div class="ch-members">
+        <button class="members-btn" :class="{ on: showMembers }" title="멤버 · 친구 초대" aria-label="멤버" @click="toggleMembers">
+          <span v-if="members.length" class="mstack">
+            <span v-for="m in members.slice(0, 3)" :key="m.handle" class="mav xs" :style="{ background: mbg(m) }">{{ mini(m) }}</span>
+          </span>
+          <Icon v-else name="userPlus" :size="16" />
+          <span v-if="members.length" class="mc">{{ members.length }}</span>
+        </button>
+        <template v-if="showMembers">
+          <div class="menu-back" @click="showMembers = false"></div>
+          <div class="members-pop">
+            <div class="mp-sec">멤버 {{ members.length }}</div>
+            <div class="mp-list">
+              <div v-for="m in members" :key="m.handle" class="mp-row">
+                <span class="mav" :style="{ background: mbg(m) }">{{ mini(m) }}</span>
+                <div class="mp-meta"><div class="mp-n">{{ m.name }}</div><div class="mp-h">@{{ m.handle }}</div></div>
+                <span v-if="m.role === 'lead'" class="lead-pill">리드</span>
+              </div>
+              <div v-if="!members.length" class="mp-empty">아직 멤버가 없어요. 친구를 초대해 함께 만들어보세요.</div>
+            </div>
+            <template v-if="!isGuest()">
+              <div class="mp-sec">친구 초대</div>
+              <div class="mp-list">
+                <div v-for="f in invitable" :key="f.handle" class="mp-row">
+                  <span class="mav" :style="{ background: mbg(f) }">{{ mini(f) }}</span>
+                  <div class="mp-meta"><div class="mp-n">{{ f.name }}</div><div class="mp-h">@{{ f.handle }}</div></div>
+                  <button class="btn sm" @click="invite(f.handle)">초대</button>
+                </div>
+                <div v-if="!invitable.length" class="mp-empty">초대할 친구가 없어요. <router-link to="/friends" class="mp-link">친구 추가 →</router-link></div>
+              </div>
+            </template>
+            <div v-else class="mp-empty">왼쪽 아래에서 프로필을 만들면 친구를 초대할 수 있어요.</div>
+          </div>
+        </template>
+      </div>
       <button class="iconbtn" :class="{ on: showStruct }" title="협업 한눈에" aria-label="협업 한눈에" @click="showStruct = !showStruct"><Icon name="network" /></button>
       <button class="iconbtn" :class="{ on: showBrief }" title="AI 요약" aria-label="AI 요약" @click="loadBrief"><Icon name="spark" /></button>
       <div class="ch-menu">

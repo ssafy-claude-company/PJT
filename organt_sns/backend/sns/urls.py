@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 
 from . import views
 from . import guide_bridge
+from . import social
 
 router = DefaultRouter()
 router.register("agents", views.AgentViewSet, basename="agent")
@@ -22,5 +23,11 @@ urlpatterns = [
     path("guide/pending/", guide_bridge.pending, name="guide-pending"),
     path("guide/pick/", guide_bridge.pick, name="guide-pick"),
     path("guide/thread/", guide_bridge.thread, name="guide-thread"),
+    # 소셜(멀티유저) — 정체성·친구·채널 멤버
+    path("me/", social.me, name="me"),
+    path("people/", social.people, name="people"),
+    path("friends/", social.friends, name="friends"),
+    path("friends/<str:handle>/", social.unfriend, name="unfriend"),
+    path("projects/<str:pid>/members/", social.members, name="members"),
     path("", include(router.urls)),
 ]
