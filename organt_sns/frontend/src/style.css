@@ -82,6 +82,25 @@ a.cmsg-name:hover{text-decoration:underline}
   background:var(--elevated);border:1px solid var(--line);color:var(--text);border-radius:20px;padding:7px 13px;
   font:inherit;font-size:12.5px;font-weight:550;cursor:pointer;box-shadow:var(--shadow);z-index:5}
 .to-bottom:hover{border-color:var(--accent-line)}
+/* 프로젝트 한눈에 띠 */
+.proj-ctx{flex:none;padding:11px 20px;border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(123,120,240,.05),transparent),var(--surface)}
+.ctx-bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.ctx-status{font-size:11px;font-weight:700;color:var(--warn);background:rgba(217,164,74,.12);border:1px solid rgba(217,164,74,.3);border-radius:20px;padding:2px 10px}
+.ctx-status.done{color:var(--ok);background:var(--ok-soft);border-color:rgba(82,183,136,.3)}
+.ctx-meta{font-size:12px;color:var(--text2)}
+.ctx-grow{flex:1;min-width:8px}
+.ctx-link{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ok);border:1px solid rgba(82,183,136,.3);border-radius:20px;padding:3px 11px;text-decoration:none}
+.ctx-link:hover{background:var(--ok-soft)}
+.ctx-goal{font-size:12.5px;color:var(--text2);line-height:1.55;margin-top:9px;display:flex;gap:8px;align-items:flex-start}
+.ctx-goal:not(.open) .ctx-goal-t{overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}
+.ctx-goal-k{flex:none;font-size:10px;font-weight:700;color:var(--accent2);background:var(--accent-soft);border-radius:5px;padding:2px 7px}
+.ctx-more{background:none;border:0;color:var(--accent2);font:inherit;font-size:11.5px;cursor:pointer;padding:5px 0 0;font-weight:550}
+.ctx-more:hover{text-decoration:underline}
+/* 긴 메시지 접기 */
+.cmsg-line .clamp{max-height:9em;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 74%,transparent);mask-image:linear-gradient(180deg,#000 74%,transparent)}
+.more-btn{background:none;border:0;color:var(--accent2);font:inherit;font-size:12px;cursor:pointer;padding:4px 0 0;font-weight:550}
+.more-btn:hover{text-decoration:underline}
 .work-fold{padding:1px 12px 1px 54px}
 .work-toggle{display:inline-flex;align-items:center;gap:6px;background:none;border:0;color:var(--text3);font:inherit;font-size:11.5px;cursor:pointer;padding:3px 8px;border-radius:6px}
 .work-toggle:hover{color:var(--text2);background:rgba(255,255,255,.03)}

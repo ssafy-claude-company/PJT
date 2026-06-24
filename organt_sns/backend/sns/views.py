@@ -222,9 +222,28 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
         pending = sum(1 for g in gms if g.sender_id == 0 and g.msg_type == "request"
                       and not (g.payload or {}).get("picked") and g.msg_id not in responded)
+        # 프로젝트 한눈에 — 목표·상태·산출물(라이브 링크). 채팅 안 읽어도 맥락 파악.
+        import re as _re
+        goal = ""
+        ge = proj.events.filter(kind="goal_set").order_by("-seq").first()
+        if ge:
+            goal = (ge.payload or {}).get("goal") or (ge.payload or {}).get("body") or ge.summary
+        if not goal:
+            t0 = proj.tasks.first()
+            goal = (t0.goal or t0.purpose) if t0 else ""
+        links = []
+        for e in proj.events.filter(kind="task_complete"):
+            for u in _re.findall(r"https?://[^\s)>\]]+", (e.payload or {}).get("result") or ""):
+                if u not in links:
+                    links.append(u)
+        done = proj.events.filter(kind="task_complete").exists()
+        deploys = proj.events.filter(kind="deploy").count()
+        status = "완료" if done else ("진행 중" if msgs else "시작 전")
+        context = {"goal": (goal or "").strip()[:400], "status": status,
+                   "deploys": deploys, "links": links[:4]}
         return Response({"pid": proj.pid, "name": proj.name, "messages": msgs, "pending_count": pending,
                          "leader_id": str(proj.leader.bot_id) if proj.leader else None,
-                         "leader_role": proj.leader.role if proj.leader else None})
+                         "leader_role": proj.leader.role if proj.leader else None, "context": context})
 
     @action(detail=True, methods=["post"], url_path="request")
     def make_request(self, request, pid=None):

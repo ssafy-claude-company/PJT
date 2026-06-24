@@ -109,6 +109,11 @@ function workItem(s) {
 }
 const openWork = ref(new Set())
 function toggleWork(key) { const s = new Set(openWork.value); s.has(key) ? s.delete(key) : s.add(key); openWork.value = s }
+// 긴 메시지 접기 + 프로젝트 맥락 띠 펼침
+const ctxOpen = ref(false)
+const longOpen = ref(new Set())
+const isLong = (t) => (t || '').length > 360
+function toggleLong(k) { const s = new Set(longOpen.value); s.has(k) ? s.delete(k) : s.add(k); longOpen.value = s }
 // 가벼운 마크다운 — 코드블록·인라인코드·굵게·링크·줄바꿈. HTML 이스케이프 후 적용.
 function renderMd(s) {
   s = String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -255,6 +260,21 @@ watch(() => route.params.pid, () => {
     </div>
   </div>
 
+  <!-- 프로젝트 한눈에: 채팅 안 읽어도 목표·상태·산출물 파악 -->
+  <div v-if="data?.context && (data.context.goal || data.context.links?.length)" class="proj-ctx">
+    <div class="ctx-bar">
+      <span class="ctx-status" :class="{ done: data.context.status === '완료' }">{{ data.context.status }}</span>
+      <span v-if="data.leader_role" class="ctx-meta">리더 · {{ data.leader_role }}</span>
+      <span v-if="data.context.deploys" class="ctx-meta">배포 {{ data.context.deploys }}회</span>
+      <span class="ctx-grow"></span>
+      <a v-for="l in data.context.links" :key="l" :href="l" target="_blank" rel="noopener" class="ctx-link"><Icon name="link" :size="13" />{{ l.replace(/^https?:\/\//, '').slice(0, 32) }}</a>
+    </div>
+    <div v-if="data.context.goal" class="ctx-goal" :class="{ open: ctxOpen }">
+      <span class="ctx-goal-k">목표</span><span class="ctx-goal-t">{{ data.context.goal }}</span>
+    </div>
+    <button v-if="data.context.goal && data.context.goal.length > 84" class="ctx-more" @click="ctxOpen = !ctxOpen">{{ ctxOpen ? '접기' : '더 보기' }}</button>
+  </div>
+
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />
 
   <div v-if="data && data.pending_count" class="pending-bar">
@@ -303,7 +323,10 @@ watch(() => route.params.pid, () => {
               <span class="cmsg-time">{{ timeFmt(g.ts) }}</span>
             </div>
             <div v-for="ln in g.lines" :key="ln.key" class="cmsg-line">
-              <span v-if="ln.to" class="cmsg-to">@{{ ln.to }}</span><span v-html="renderMd(ln.text)"></span>
+              <div :class="{ clamp: isLong(ln.text) && !longOpen.has(ln.key) }">
+                <span v-if="ln.to" class="cmsg-to">@{{ ln.to }}</span><span v-html="renderMd(ln.text)"></span>
+              </div>
+              <button v-if="isLong(ln.text)" class="more-btn" @click="toggleLong(ln.key)">{{ longOpen.has(ln.key) ? '접기 ▴' : '더 보기 ▾' }}</button>
             </div>
           </div>
         </div>
