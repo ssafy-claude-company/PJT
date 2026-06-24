@@ -1,11 +1,17 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { me, signIn } from '../user'
+import { me, signIn, signOut } from '../user'
 import { AVATAR_COLORS } from '../avatar'
 
 const props = defineProps({ open: Boolean, force: Boolean })
 const emit = defineEmits(['close'])
 const handle = ref(''); const name = ref(''); const color = ref(AVATAR_COLORS[0]); const saving = ref(false); const err = ref('')
+
+// 계정 전환 — 한 브라우저에서 여러 유저를 시연(친구·초대·공동 리드). 로그아웃 후 새 핸들로 가입.
+function switchUser() {
+  signOut()
+  handle.value = ''; name.value = ''; color.value = AVATAR_COLORS[0]; err.value = ''
+}
 
 watch(() => props.open, (o) => {
   if (o) { handle.value = me.handle || ''; name.value = me.name || ''; color.value = me.color || AVATAR_COLORS[0]; err.value = '' }
@@ -36,7 +42,9 @@ async function submit() {
         <div><label>이름</label><input v-model="name" placeholder="표시 이름 (예: 도진)" @keyup.enter="submit" /></div>
         <div><label>핸들</label><div class="hwrap"><span>@</span><input v-model="handle" :disabled="!!me.handle" placeholder="dojin — 영문·숫자·_" @keyup.enter="submit" /></div></div>
         <div v-if="err" class="err">{{ err }}</div>
-        <div class="flex" style="gap:8px;justify-content:flex-end">
+        <div class="flex" style="gap:8px;align-items:center">
+          <button v-if="me.handle" type="button" class="linkbtn" @click="switchUser" title="로그아웃하고 다른 핸들로 가입">계정 전환</button>
+          <span style="flex:1"></span>
           <button v-if="!force" class="btn ghost" @click="emit('close')">취소</button>
           <button class="btn" @click="submit" :disabled="saving">{{ saving ? '…' : me.handle ? '저장' : '시작하기' }}</button>
         </div>
@@ -61,4 +69,6 @@ async function submit() {
 .sw:hover { transform: scale(1.1) } .sw.on { border-color: var(--text); outline-color: var(--text) }
 .hwrap { display: flex; align-items: center; gap: 6px } .hwrap span { color: var(--text3); font-size: 15px }
 .err { color: var(--danger); font-size: 12.5px }
+.linkbtn { background: none; border: 0; color: var(--text3); font: inherit; font-size: 12.5px; cursor: pointer; padding: 4px 2px }
+.linkbtn:hover { color: var(--text2); text-decoration: underline }
 </style>

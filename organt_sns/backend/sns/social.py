@@ -117,5 +117,5 @@ def members(request, pid):
         if not other:
             return Response({"detail": "그 핸들의 유저가 없어요."}, status=404)
         Membership.objects.get_or_create(person=other, project=proj, defaults={"role": "member"})
-    ms = proj.members.select_related("person")
+    ms = proj.members.select_related("person").order_by("role", "created_at")  # 리드 먼저(lead<member)
     return Response({"members": [{**_pub(m.person), "role": m.role} for m in ms]})
