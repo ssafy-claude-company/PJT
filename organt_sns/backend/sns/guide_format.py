@@ -60,3 +60,15 @@ def collab_kind(text):
         if rx.match(s):
             return kind, rx.sub("", s, count=1).strip()
     return None, s
+
+
+_MEET_ROUND = re.compile(r"^\s*\[회의\s*(\d+)\s*R\]")
+
+
+def collab_round(text):
+    """회의 발언의 라운드 번호(int) 또는 None — SNS가 회의 블록을 라운드로 분절하게.
+    라벨 N을 버리지 않고 구조화 필드로 살린다(브레인 emit은 그대로, 표시만 네이티브). to_native 후 호출."""
+    if not text:
+        return None
+    m = _MEET_ROUND.match(str(text))
+    return int(m.group(1)) if m else None

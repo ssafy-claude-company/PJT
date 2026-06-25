@@ -77,6 +77,7 @@ class MeetingVisibilityTest(TestCase):
         self.assertEqual(len(meet), 1, "회의 메시지가 표시 안 됨(아까처럼 숨김)")
         self.assertNotIn("[회의", meet[0]["summary"])       # 프로토콜 라벨 제거됨
         self.assertIn("서버 권위", meet[0]["summary"])
+        self.assertEqual(meet[0]["round"], 1)               # 라운드 N 보존(블록을 라운드로 분절)
 
 
 class DeniedFeedTest(TestCase):

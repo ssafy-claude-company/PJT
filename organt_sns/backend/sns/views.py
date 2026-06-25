@@ -227,7 +227,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         evs = list(proj.events.exclude(kind="denied").select_related("actor", "target").order_by("-seq")[:limit])
         evs.reverse()
         # 본문은 payload(body/result/goal)에 전체가 있다 — summary는 100자 컷 요약이라 표시엔 전체 본문을 쓴다.
-        from .guide_format import to_native, collab_kind   # 디스코드 마크업·협업 라벨(회의/표결) → SNS-네이티브
+        from .guide_format import to_native, collab_kind, collab_round   # 디스코드 마크업·협업 라벨(회의/표결) → SNS-네이티브
 
         def _full(e):
             p = e.payload or {}
@@ -272,14 +272,16 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                     last_agent_id = gm.sender_id
                     a = ag.get(gm.sender_id); ta = ag.get(gm.to_id) if gm.to_id else None
                     # 회의/표결 발언(_say)이면 네이티브 kind로 승격 + 라벨 접두 제거 — 협업이 채널에 보이게
-                    ck, body = collab_kind(to_native(gm.body))
+                    native = to_native(gm.body)
+                    ck, body = collab_kind(native)
                     kind = ck or ("consultation" if (gm.msg_type == "request" and gm.kind == "I") else _km.get(gm.msg_type, "work"))
                     msgs.append({"type": "agent", "key": f"g{gm.msg_id}", "ts": gm.ts, "kind": kind,
                                  "actor_role": a.role if a else None,
                                  "actor_name": a.name if a else None,
                                  "actor_id": str(a.bot_id) if a else None,
                                  "target_role": ta.role if ta else None,
-                                 "target_name": ta.name if ta else None, "summary": body})
+                                 "target_name": ta.name if ta else None, "summary": body,
+                                 "round": collab_round(native) if ck == "meeting" else None})
             if live_status and live_status.get("state") == "working" and last_agent_id:
                 a = ag.get(last_agent_id)            # 진행 중이면 최근 활동 직원
                 if a:

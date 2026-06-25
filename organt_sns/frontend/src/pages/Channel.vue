@@ -95,7 +95,7 @@ const groups = computed(() => {
       cur = null
       const entry = { key: m.key, actorId: m.actor_id || null, author: m.actor_name || m.actor_role || '직원',
         role: m.actor_name ? m.actor_role : null, seed: m.actor_id || m.actor_name || m.actor_role,
-        text: cleanLine(m.body || m.summary || '', m.kind), ts: m.ts }
+        text: cleanLine(m.body || m.summary || '', m.kind), ts: m.ts, round: m.round || null }
       if (collab && collab.kind === m.kind) { collab.entries.push(entry) }
       else { collab = { type: 'collab', kind: m.kind, key: 'k' + m.key, label: kindMeta(m.kind), ts: m.ts, entries: [entry] }; out.push(collab) }
       continue
@@ -495,14 +495,17 @@ watch(() => route.params.pid, () => {
             <span class="cb-time">{{ timeFmt(g.ts) }}</span>
           </div>
           <div class="cb-body">
-            <div v-for="e in g.entries" :key="e.key" class="cb-row">
-              <router-link v-if="e.actorId" :to="`/agents/${e.actorId}`" class="cb-av" :style="{ background: avatarColor(e.seed) }">{{ monogram(e.author) }}</router-link>
-              <span v-else class="cb-av" :style="{ background: avatarColor(e.seed) }">{{ monogram(e.author) }}</span>
-              <div class="cb-rbd">
-                <div class="cb-rhead"><span class="cb-rname">{{ e.author }}</span><span v-if="e.role" class="cb-rrole">{{ e.role }}</span></div>
-                <div class="cb-rtext" v-html="renderMd(e.text)"></div>
+            <template v-for="(e, i) in g.entries" :key="e.key">
+              <div v-if="e.round && e.round !== (i ? g.entries[i - 1].round : null)" class="cb-round"><span>{{ e.round }}라운드</span></div>
+              <div class="cb-row">
+                <router-link v-if="e.actorId" :to="`/agents/${e.actorId}`" class="cb-av" :style="{ background: avatarColor(e.seed) }">{{ monogram(e.author) }}</router-link>
+                <span v-else class="cb-av" :style="{ background: avatarColor(e.seed) }">{{ monogram(e.author) }}</span>
+                <div class="cb-rbd">
+                  <div class="cb-rhead"><span class="cb-rname">{{ e.author }}</span><span v-if="e.role" class="cb-rrole">{{ e.role }}</span></div>
+                  <div class="cb-rtext" v-html="renderMd(e.text)"></div>
+                </div>
               </div>
-            </div>
+            </template>
           </div>
         </div>
         <!-- 메시지 묶음: 사람·직원 동일 레이아웃 -->
