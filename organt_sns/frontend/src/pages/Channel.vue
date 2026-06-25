@@ -154,23 +154,30 @@ async function load() {
 // 라이브 폴링 — 새 메시지를 새로고침 없이. 바닥에 있을 때만 자동스크롤, 탭 숨김 시 정지.
 async function refresh() {
   if (document.hidden) return
-  // 사용자가 텍스트를 선택 중이면(복사하려는 중) 갱신을 건너뛴다 — 선택이 지워지지 않게.
-  const sel = window.getSelection && window.getSelection()
-  if (sel && String(sel).length > 0) return
   const pid = route.params.pid                 // 채널 전환 레이스 방지: 응답이 늦게 와도 현재 채널만 반영
+  let fresh
   try {
-    const fresh = await api.channelMessages(pid)
+    fresh = await api.channelMessages(pid)
     if (pid !== route.params.pid) return        // 그새 채널이 바뀌었으면 버린다
-    const prev = data.value?.messages || []
-    const nm = fresh.messages || []
-    // 바뀐 게 없으면 재렌더 안 함 — 매번 통째로 교체하면 텍스트 선택이 지워져 복사가 안 됐다.
-    const changed = prev.length !== nm.length || (nm.length && prev[prev.length - 1]?.key !== nm[nm.length - 1]?.key)
-    if (changed) {
-      data.value = fresh
+  } catch (e) { api.stats().then((s) => { stats.value = s }).catch(() => {}); return }
+  live.value = true
+  if (!data.value) {
+    data.value = fresh
+  } else {
+    // append-only: 기존 메시지 배열은 보존하고 '새 메시지만' 덧붙인다 — 매번 통째 교체하면
+    // DOM이 다시 그려져 드래그한 텍스트 선택이 지워지고 복사가 안 됐다. 메타데이터만 갱신.
+    const cur = data.value
+    cur.name = fresh.name; cur.context = fresh.context; cur.live_status = fresh.live_status
+    cur.pending_count = fresh.pending_count; cur.leader_id = fresh.leader_id; cur.leader_role = fresh.leader_role
+    cur.visibility = fresh.visibility; cur.owner_handle = fresh.owner_handle
+    cur.is_owner = fresh.is_owner; cur.is_member = fresh.is_member
+    const have = new Set((cur.messages || []).map((m) => m.key))
+    const add = (fresh.messages || []).filter((m) => !have.has(m.key))
+    if (add.length) {
+      cur.messages.push(...add)
       if (atBottom.value) { await nextTick(); scrollBottom() }
     }
-    live.value = true
-  } catch (e) { /* 직전 상태 유지 */ }
+  }
   api.stats().then((s) => { stats.value = s }).catch(() => {})
 }
 function startPoll() { stopPoll(); poll = setInterval(refresh, 4000) }
