@@ -17,7 +17,12 @@ from django.views.static import serve as static_serve
 def spa_index(request, *args, **kwargs):
     index = os.path.join(settings.SPA_DIST, "index.html")
     if os.path.exists(index):
-        return FileResponse(open(index, "rb"))
+        resp = FileResponse(open(index, "rb"))
+        # index.html은 캐시 금지 — 배포로 JS 해시가 바뀌면 브라우저가 옛 해시를 물어
+        # 404→빈 화면(blank)이 되던 문제. 해시된 assets/는 그대로 캐시돼도 안전.
+        resp["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp["Pragma"] = "no-cache"
+        return resp
     return HttpResponse(
         "<h1>Organt SNS</h1><p>프론트엔드 빌드가 없습니다. "
         "<code>cd frontend && npm install && npm run build</code> 후 새로고침하세요.</p>"

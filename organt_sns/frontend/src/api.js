@@ -10,6 +10,20 @@ http.interceptors.request.use((cfg) => {
   return cfg
 })
 
+// 토큰이 무효(예: DB 전환으로 계정 사라짐)면 401 → 깨끗이 로그아웃하고 로그인으로.
+// 빈 화면/먹통 상태로 남지 않게. 로그인·가입 요청의 401(비번 오류 등)은 제외.
+http.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    const url = err.config?.url || ''
+    if (err.response?.status === 401 && !url.includes('/auth/')) {
+      localStorage.removeItem('organt_token')
+      if (!location.pathname.startsWith('/login')) location.replace('/login')
+    }
+    return Promise.reject(err)
+  },
+)
+
 // DRF 페이지네이션 봉투({count, results}) 또는 순수 배열 모두 안전 처리.
 const list = (data) => (Array.isArray(data) ? data : (data?.results ?? []))
 
