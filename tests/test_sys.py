@@ -5079,3 +5079,31 @@ def test_회로차단기_경보후_검증보류_S1a():
     # ③ 경보 ON이어도 owner(12, 비검증자) 수정 Work는 안 막음 — 고치는 길은 열려 있어야(데드락 방지)
     r2 = asyncio.run(t["request"].handler({"to_id": "12", "kind": "Work", "body": "고쳐줘"}))
     assert UNIQ not in r2["content"][0]["text"]
+
+
+class _FakeTask:
+    """request_cancel 테스트용 — 이벤트루프 없이 task.done()/cancel() 흉내."""
+    def __init__(self):
+        self._cancelled = False
+        self._done = False
+
+    def done(self):
+        return self._done
+
+    def cancel(self):
+        self._cancelled = True
+
+
+def test_request_cancel_사용자_작업중지():
+    """사용자 '작업 중지' — 해당 채널 활성 흐름을 협조적 취소(cancelled 세팅 + 진행 턴 인터럽트).
+    매체-중립: 매체/러너가 사용자 트리거로 Sys.request_cancel(channel)을 부른다."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L"})
+    f = _flow(s.guide, leader=11)          # user_channel=500
+    ft = _FakeTask(); f._run_task = ft
+    s.active_flows[500] = f                  # 활성 흐름 등록
+    assert s.request_cancel(500) is True
+    assert f.cancelled is True               # 이어가기 루프·워치독이 협조적으로 멈춘다
+    assert ft._cancelled is True             # 진행 중인 리더 턴 즉시 인터럽트
+    assert s.request_cancel(999) is False    # 활성 흐름 없는 채널 → False
+    f.done = True
+    assert s.request_cancel(500) is False    # 이미 끝난 흐름은 취소 대상 아님

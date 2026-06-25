@@ -1080,6 +1080,9 @@ class Sys:
         async def _wd():
             while not task.done():
                 await asyncio.sleep(poll)
+                if getattr(flow, "cancelled", False) and not task.done():
+                    task.cancel()              # [사용자 작업 중지] 안전망 — 보통은 request_cancel이 즉시 취소
+                    return
                 idle = time.monotonic() - getattr(flow, "last_activity", time.monotonic())
                 if idle > self.idle_timeout and not task.done():
                     self._log("flow_idle_abort", idle=int(idle), timeout=self.idle_timeout)
@@ -1980,7 +1983,7 @@ class Sys:
             # 같은 세션으로 이어서 완료까지 재호출한다 — '턴 한도 = 무조건 中断' 결함 해소.
             cont = 0
             while ((flow.current is not None or "턴 한도 도달" in (result or ""))
-                   and cont < self.max_continue):
+                   and cont < self.max_continue and not flow.cancelled):   # [사용자 중지] 이어가기 멈춤
                 # [단일활성 복원] 리더 턴이 끝났는데 위임이 아직 '완주 중'이면(CLI가 도구 호출을 포기해
                 # detach됐거나, 턴 한도로 끊겼지만 deliver 태스크는 살아 있음) — 그 위임을 죽이지 않고
                 # **끝까지 기다린다**. 일하는 owner를 드레인으로 자르던 것(작업 유실·재위임 churn·'오유진
@@ -2057,6 +2060,7 @@ class Sys:
             return result
 
         leader_task = asyncio.create_task(_run_leader())
+        flow._run_task = leader_task   # [사용자 작업 중지] request_cancel이 즉시 인터럽트할 핸들
         try:
             # 무진행(행) 워치독: idle_timeout 동안 진행이 0이면 리더 턴 취소(리더-행 구멍 메움). 진행 중이면 무제한.
             result = await self._await_with_idle_watchdog(leader_task, flow)
@@ -2064,10 +2068,15 @@ class Sys:
             for t in list(getattr(flow, "inflight_tasks", ())):   # 흐름 중단 시 완주 태스크도 정리(누수 방지)
                 if not t.done():
                     t.cancel()
-            result = (f"(흐름 자동 중단: 약 {self.idle_timeout // 60}분간 아무 진행(요청·파일작성·실행)이 없어 '행'으로 "
-                      f"판단했습니다 — 리더/동료 서브프로세스가 멈춘 듯합니다(환경 불안정). 지금까지 산출물은 작업공간에 "
-                      f"남아 있습니다. 다시 시도하거나 반복되면 잠시 뒤 재요청하세요.)")
-            self._log("flow_idle_aborted")
+            if getattr(flow, "cancelled", False):   # [사용자 작업 중지] — 무진행 타임아웃과 구분
+                result = ("(사용자가 작업을 중지했습니다 — 진행 중이던 흐름을 멈췄습니다. 지금까지 산출물은 "
+                          "작업공간에 남아 있고, 미완 작업은 다음에 이어갈 수 있습니다.)")
+                self._log("flow_user_stopped", project=flow.project_channel is not None)
+            else:
+                result = (f"(흐름 자동 중단: 약 {self.idle_timeout // 60}분간 아무 진행(요청·파일작성·실행)이 없어 '행'으로 "
+                          f"판단했습니다 — 리더/동료 서브프로세스가 멈춘 듯합니다(환경 불안정). 지금까지 산출물은 작업공간에 "
+                          f"남아 있습니다. 다시 시도하거나 반복되면 잠시 뒤 재요청하세요.)")
+                self._log("flow_idle_aborted")
         except Exception as e:                     # 리더가 죽어도 흐름은 닫고 보고한다
             result = f"(리더 처리 중 오류: {e})"
         # 배포 강제: 배포 가능한 산출물인데 deploy를 안 불렀으면 리더에게 '배포만' 한 번 더(누락 방지).
@@ -2165,6 +2174,21 @@ class Sys:
                 self._save_projects()   # [큐 영속] 소비 즉시 디스크 — 재시작 시 같은 요청 중복 처리 방지
                 return item
         return None
+
+    def request_cancel(self, channel_id) -> bool:
+        """사용자 '작업 중지' — 해당 채널의 활성 흐름을 협조적으로 취소한다(매체/러너가 사용자 트리거로 호출).
+        진행 중인 리더 턴을 즉시 인터럽트(task.cancel→CancelledError, 깨끗한 중단 경로 재사용)하고
+        이어가기 루프를 멈춘다. 활성 흐름이 없으면 False. 단일 이벤트루프 가정(러너가 같은 루프에서 호출)."""
+        cid = int(channel_id)
+        for f in list(self.active_flows.values()):
+            if getattr(f, "user_channel", None) == cid and not f.done:
+                f.cancelled = True
+                t = getattr(f, "_run_task", None)
+                if t is not None and not t.done():
+                    t.cancel()
+                self._log("cancel_requested", channel=cid)
+                return True
+        return False
 
     # --- 진짜 입구: 채널의 유저 형식 Request를 읽어 라우팅 ---
 

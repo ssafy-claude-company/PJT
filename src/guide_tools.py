@@ -548,6 +548,8 @@ class Flow:
         self._base = time.strftime("%H%M%S")
         self._n = 0
         self.done = False
+        self.cancelled = False   # [사용자 작업 중지] 매체가 set하면 워치독·이어가기 루프가 협조적으로 중단
+        self._run_task = None     #   이 흐름의 리더 태스크(SYS가 주입) — 진행 턴을 즉시 인터럽트하는 핸들
         self.final: Optional[str] = None
         self.root_id: Optional[str] = None
         self.advice = []

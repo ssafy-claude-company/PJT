@@ -266,6 +266,17 @@ async function sendRequest() {
     await nextTick(); scrollBottom()
   } finally { reqSending.value = false }
 }
+// 작업 중지 — 진행 중인 협업 흐름을 멈춤(소유자/멤버). 러너가 신호를 받아 SYS.request_cancel.
+const stopping = ref(false)
+async function doStop() {
+  stopping.value = true
+  try {
+    await api.stopWork(route.params.pid)
+    toast('작업 중지를 요청했어요 — 곧 멈춥니다')
+  } catch (e) { toast(e?.response?.data?.detail || '중지하지 못했어요', 'err') }
+  finally { stopping.value = false }
+}
+
 // 멎은 요청 다시 맡기기 — 처리하던 러너가 죽어 '작업 중'으로 박제된 요청을 큐로 되돌림(소유자/멤버).
 const requeuing = ref(false)
 async function doRequeue() {
@@ -450,6 +461,7 @@ watch(() => route.params.pid, () => {
   <div v-if="liveStatus" class="live-strip" :class="{ done: liveStatus.state === 'done' }">
     <Icon v-if="liveStatus.state === 'done'" name="check" :size="14" class="ls-ic" /><i v-else class="pulse"></i>
     <span class="live-strip-t"><b>{{ liveStatus.state === 'done' ? '완료' : (liveStatus.actor || '직원') + ' 작업 중' }}</b><span v-if="liveStatus.goal" class="ls-goal"> · {{ liveStatus.goal }}</span></span>
+    <button v-if="liveStatus.state === 'working' && (data?.is_owner || data?.is_member)" class="ls-stop" :disabled="stopping" @click="doStop" title="진행 중인 작업을 멈춥니다">{{ stopping ? '…' : '중지' }}</button>
   </div>
 
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />

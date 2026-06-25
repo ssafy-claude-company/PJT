@@ -135,3 +135,25 @@ def heartbeat(request):
     from .models import EngineHeartbeat
     EngineHeartbeat.beat(note=(request.data.get("note") or "remote"))
     return Response({"ok": True})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def stops(request):
+    """러너 폴 — '작업 중지' 신호 조회+소거(처리 위임). `?channel=`이면 그 채널만(진행 중인 흐름 단위),
+    없으면 전체 목록(디버그/일괄). 원격 배치용. 멱등(재클릭 가능)."""
+    if not _authed(request):
+        return _deny()
+    from .models import StopSignal
+    ch = request.query_params.get("channel")
+    if ch:
+        try:
+            ch = int(ch)
+        except (TypeError, ValueError):
+            return Response({"detail": "channel이 올바르지 않습니다."}, status=status.HTTP_400_BAD_REQUEST)
+        n = StopSignal.objects.filter(channel_id=ch).delete()[0]
+        return Response({"stopped": n > 0})
+    chans = list(StopSignal.objects.values_list("channel_id", flat=True))
+    if chans:
+        StopSignal.objects.filter(channel_id__in=chans).delete()
+    return Response({"channels": chans})

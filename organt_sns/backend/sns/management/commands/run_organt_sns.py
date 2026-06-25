@@ -83,6 +83,12 @@ def _local_pick(msg_id, done=False):
     GuideMessage.objects.filter(msg_id=msg_id).update(payload=p)
 
 
+def _local_stop_pending(channel_id):
+    """이 채널에 '작업 중지' 신호가 있으면 소거하고 True(러너 로컬 모드)."""
+    from sns.models import StopSignal
+    return StopSignal.objects.filter(channel_id=channel_id).delete()[0] > 0
+
+
 class Command(BaseCommand):
     help = "Organt SYS를 SnsGuide로 띄워 채널 요청을 라이브 협업으로 처리한다(디스코드 비의존)."
 
@@ -126,6 +132,10 @@ class Command(BaseCommand):
 
             async def _beat():
                 await guide._post("/api/guide/heartbeat/", {"note": "remote"})
+
+            async def _check_stop(ch):
+                d = await guide._get(f"/api/guide/stops/?channel={ch}")
+                return bool(d.get("stopped"))
             where = f"원격 {remote}"
         else:
             guide = SnsGuide()
@@ -140,6 +150,9 @@ class Command(BaseCommand):
             async def _beat():
                 from sns.models import EngineHeartbeat
                 await sync_to_async(EngineHeartbeat.beat)("local")
+
+            async def _check_stop(ch):
+                return await sync_to_async(_local_stop_pending)(ch)
             where = "로컬 ORM"
 
         if not bot_info:
@@ -184,9 +197,23 @@ class Command(BaseCommand):
                     await mark_pick(mid)
                     self.stdout.write(f"▶ 요청 처리: ch={m['channel_id']} to={to_id} kind={m['kind']} body={m['body'][:46]!r}")
                     # 협업을 '요청이 온 채널'에 라우팅 — 위임·작업이 사용자 채널에 보이게.
-                    setattr(guide, "_origin_channel", int(m["channel_id"]))
+                    ch = int(m["channel_id"])
+                    setattr(guide, "_origin_channel", ch)
                     try:
-                        await sysm.route_channel_request(int(m["channel_id"]), req)
+                        # 흐름을 태스크로 돌리며 '작업 중지' 신호를 폴 — 사용자 트리거를 진행 중 흐름에
+                        # 협조적 취소(SYS.request_cancel)로 잇는다(러너=두뇌와 같은 이벤트루프).
+                        flow_task = asyncio.create_task(sysm.route_channel_request(ch, req))
+                        while not flow_task.done():
+                            d, _ = await asyncio.wait({flow_task}, timeout=2)
+                            if flow_task in d:
+                                break
+                            try:
+                                if await _check_stop(ch):
+                                    sysm.request_cancel(ch)
+                                    self.stdout.write(f"■ 작업 중지 요청 수신 — ch={ch}")
+                            except Exception:
+                                pass
+                        await flow_task
                         await mark_pick(mid, done=True)
                         self.stdout.write(f"✓ 처리 완료: msg_id={mid}")
                     except Exception as e:

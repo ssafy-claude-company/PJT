@@ -181,3 +181,31 @@ class ClassifyKindTest(TestCase):
                                 {"kind": "auto", "body": "이거 어떻게 해요?"}).data["kind"], "I")
         self.assertEqual(c.post(f"/api/projects/{proj.pid}/request/",
                                 {"kind": "W", "body": "이거 어떻게 해요?"}).data["kind"], "W")  # override
+
+
+class StopWorkTest(TestCase):
+    """작업 중지 — 소유자/멤버가 신호 기록 → 러너가 폴해 SYS.request_cancel(진행 흐름 협조적 취소)."""
+
+    def _setup(self):
+        from sns.models import Project, Person, Membership
+        proj = Project.objects.create(pid="S-9300", name="중지 채널", visibility="public")
+        Person.objects.create(handle="st", name="중지", token="tok_stop")
+        Membership.objects.create(person=Person.objects.get(handle="st"), project=proj, status="active")
+        return proj
+
+    def test_멤버는_중지신호_기록(self):
+        from sns.models import StopSignal
+        proj = self._setup()
+        c = APIClient()
+        c.credentials(HTTP_AUTHORIZATION="Token tok_stop")
+        self.assertEqual(c.post(f"/api/projects/{proj.pid}/stop/").status_code, 200)
+        self.assertTrue(StopSignal.objects.filter(channel_id=proj.id).exists())
+
+    def test_권한_비로그인401_비멤버403(self):
+        from sns.models import Person
+        proj = self._setup()
+        self.assertEqual(APIClient().post(f"/api/projects/{proj.pid}/stop/").status_code, 401)
+        Person.objects.create(handle="out2", name="남", token="tok_out2")
+        c = APIClient()
+        c.credentials(HTTP_AUTHORIZATION="Token tok_out2")
+        self.assertEqual(c.post(f"/api/projects/{proj.pid}/stop/").status_code, 403)

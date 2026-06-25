@@ -415,6 +415,24 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         return Response({"requeued": n})
 
     @action(detail=True, methods=["post"])
+    def stop(self, request, pid=None):
+        """작업 중지 — 이 채널에서 진행 중인 협업 흐름을 멈추도록 러너에 신호(소유자/멤버).
+        러너가 폴해 Sys.request_cancel(channel)을 부르면 진행 턴이 협조적으로 취소된다.
+        POST /api/projects/{pid}/stop/"""
+        import time
+        from .social import current_person, is_owner, is_member
+        from .models import StopSignal
+        cur = current_person(request)
+        if not cur:
+            return Response({"detail": "로그인이 필요해요."}, status=401)
+        proj = self.get_object()
+        if not (is_owner(proj, cur) or is_member(proj, cur)):
+            return Response({"detail": "이 채널의 멤버만 할 수 있어요."}, status=403)
+        StopSignal.objects.update_or_create(
+            channel_id=proj.id, defaults={"requested_at": time.time(), "requested_by": cur.handle[:30]})
+        return Response({"ok": True})
+
+    @action(detail=True, methods=["post"])
     def say(self, request, pid=None):
         """사람이 채널에 메시지를 남긴다 — F1303 유저 소통(Discord 자체가 커뮤니티). 인증 필요."""
         from .social import current_person

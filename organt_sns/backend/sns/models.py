@@ -238,3 +238,11 @@ class EngineHeartbeat(models.Model):
     def beat(cls, note=""):
         import time
         cls.objects.update_or_create(pk=1, defaults={"last_beat": time.time(), "note": note[:80]})
+
+
+class StopSignal(models.Model):
+    """사용자 '작업 중지' 신호 — 웹이 기록, 러너가 폴해 Sys.request_cancel(channel)을 부른 뒤 삭제.
+    채널당 1건(중복 클릭은 갱신). 협업 두뇌의 깨끗한 취소 경로(CancelledError)를 사용자 경로로 연다."""
+    channel_id = models.BigIntegerField(unique=True, db_index=True)
+    requested_at = models.FloatField(default=0.0)
+    requested_by = models.CharField(max_length=30, blank=True)

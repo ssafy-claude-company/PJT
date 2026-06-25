@@ -239,6 +239,10 @@ a.cmsg-name:hover{text-decoration:underline}
 .live-strip b{font-weight:650}.live-strip .ls-goal{color:var(--text2)}
 .live-strip.done{background:var(--accent-soft);border-color:var(--accent-line)}
 .live-strip.done .ls-ic{color:var(--accent2)}
+.ls-stop{flex:none;background:none;border:1px solid rgba(233,105,107,.4);color:#e89a9b;font:inherit;font-size:11.5px;
+  font-weight:600;padding:3px 11px;border-radius:20px;cursor:pointer;transition:.12s}
+.ls-stop:hover{background:rgba(233,105,107,.12);border-color:rgba(233,105,107,.6)}
+.ls-stop:disabled{opacity:.5;cursor:default}
 @media(max-width:760px){ .live-strip,.pending-bar{margin:10px 14px 0} }
 .recs{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:8px}
 .recchip{background:var(--surface);border:1px solid var(--line);border-radius:20px;color:var(--text);
