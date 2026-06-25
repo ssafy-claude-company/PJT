@@ -27,7 +27,7 @@ def _fmt_time(unix, style):
     return dt.strftime("%H:%M")
 
 
-_PROTO = re.compile(r"^\[(?:Response|Request)\][^\n]*?Body:\s*")
+_PROTO = re.compile(r"^\s*\[(?:Response|Request)\][\s\S]*?Body:\s*")   # 줄바꿈 포함 — [Response]\nBody:
 
 
 def to_native(text):
