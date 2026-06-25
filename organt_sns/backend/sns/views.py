@@ -48,7 +48,9 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True)
     def events(self, request, bot_id=None):
-        return Response(EventSerializer(self.get_object().events.all()[:60], many=True).data)
+        # 'denied'(게이트 거부)는 SYS 안전장치가 '리더 독식/권한 밖 도구' 등을 막은 내부 기록 —
+        # 직원이 '한 일'이 아니라 '못 하게 막힌 시도'다. 활동 피드엔 제외(거부가 도배돼 보이던 문제).
+        return Response(EventSerializer(self.get_object().events.exclude(kind="denied")[:60], many=True).data)
 
     @action(detail=True, methods=["patch"])
     def edit(self, request, bot_id=None):
@@ -122,7 +124,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True)
     def events(self, request, pid=None):
-        return Response(EventSerializer(self.get_object().events.all()[:80], many=True).data)
+        return Response(EventSerializer(self.get_object().events.exclude(kind="denied")[:80], many=True).data)
 
     @action(detail=True)
     def collab(self, request, pid=None):
@@ -221,7 +223,8 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             limit = min(int(request.query_params.get("limit") or 160), 400)
         except (TypeError, ValueError):
             limit = 160
-        evs = list(proj.events.select_related("actor", "target").order_by("-seq")[:limit])
+        # 'denied'(게이트 거부)는 내부 안전장치 기록 — 채널 타임라인엔 노이즈라 제외(아래 활동만 표시).
+        evs = list(proj.events.exclude(kind="denied").select_related("actor", "target").order_by("-seq")[:limit])
         evs.reverse()
         # 본문은 payload(body/result/goal)에 전체가 있다 — summary는 100자 컷 요약이라 표시엔 전체 본문을 쓴다.
         from .guide_format import to_native, collab_kind   # 디스코드 마크업·협업 라벨(회의/표결) → SNS-네이티브

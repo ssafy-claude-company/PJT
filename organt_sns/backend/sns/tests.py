@@ -77,3 +77,18 @@ class MeetingVisibilityTest(TestCase):
         self.assertEqual(len(meet), 1, "회의 메시지가 표시 안 됨(아까처럼 숨김)")
         self.assertNotIn("[회의", meet[0]["summary"])       # 프로토콜 라벨 제거됨
         self.assertIn("서버 권위", meet[0]["summary"])
+
+
+class DeniedFeedTest(TestCase):
+    """게이트 거부(denied)는 내부 안전장치 기록 — 활동 피드에 도배되면 안 된다(회귀 가드)."""
+
+    def test_거부는_직원_활동피드에서_제외(self):
+        from sns.models import Agent, Event
+        a = Agent.objects.create(bot_id=900100, role="게임 기획자", name="박서연", visibility="public")
+        Event.objects.create(seq=9001, ts=1.0, kind="work", actor=a, summary="서버 구현")
+        Event.objects.create(seq=9002, ts=2.0, kind="denied", actor=a, summary="거부(리더 독식)")
+        res = APIClient().get(f"/api/agents/{a.bot_id}/events/")
+        self.assertEqual(res.status_code, 200)
+        kinds = [e["kind"] for e in res.data]
+        self.assertIn("work", kinds)
+        self.assertNotIn("denied", kinds)   # 게이트 거부는 '한 일'이 아니라 '막힌 시도' — 피드 제외
