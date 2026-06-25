@@ -8,3 +8,5 @@ python backend/manage.py migrate --noinput
 python backend/manage.py seed_if_empty
 # 이름 없는 봇에 고유 이름 배정(직군≠이름). 멱등.
 python backend/manage.py name_agents
+# 공개 쇼케이스를 지정 3개 채널만 유지(멱등). 사용자 채널·직원은 보존.
+python backend/manage.py prune_showcase

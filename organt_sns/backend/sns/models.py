@@ -202,9 +202,11 @@ class Person(models.Model):
 
 
 class Friendship(models.Model):
-    """친구 관계(데모: 추가 즉시 양방향). a가 b를 추가."""
-    a = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="friendships")
-    b = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="friend_of")
+    """친구 관계 — a가 b에게 요청(pending), b가 수락하면 accepted(양방향 친구)."""
+    STATUS = [("pending", "요청됨"), ("accepted", "수락됨")]
+    a = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="friendships")   # 요청 보낸 사람
+    b = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="friend_of")      # 요청 받은 사람
+    status = models.CharField(max_length=10, choices=STATUS, default="pending", db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -212,11 +214,13 @@ class Friendship(models.Model):
 
 
 class Membership(models.Model):
-    """프로젝트(채널) 멤버 — 여러 사람이 한 채널에서 협업·리드."""
+    """프로젝트(채널) 멤버 — 초대(invited)를 받은 사람이 수락하면 active(실제 멤버)."""
     ROLES = [("lead", "리드"), ("member", "멤버")]
+    STATUS = [("invited", "초대됨"), ("active", "참여중")]
     person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="memberships")
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="members")
     role = models.CharField(max_length=10, choices=ROLES, default="member")
+    status = models.CharField(max_length=10, choices=STATUS, default="active", db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

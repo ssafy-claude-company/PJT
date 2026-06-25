@@ -28,10 +28,15 @@ export default {
   workspace: () => http.get('/workspace/').then((r) => r.data.channels),
   people: (q) => http.get('/people/', { params: { q } }).then((r) => r.data.people),
   friends: () => http.get('/friends/').then((r) => r.data.friends),
-  addFriend: (handle) => http.post('/friends/', { handle }).then((r) => r.data.friends),
-  removeFriend: (handle) => http.delete(`/friends/${handle}/`).then((r) => r.data),
-  members: (pid) => http.get(`/projects/${pid}/members/`).then((r) => r.data.members),
-  invite: (pid, handle) => http.post(`/projects/${pid}/members/`, { handle }).then((r) => r.data.members),
+  addFriend: (handle) => http.post('/friends/', { handle }).then((r) => r.data),     // 친구 '요청' 보내기
+  friendRequests: () => http.get('/friends/requests/').then((r) => r.data),          // {incoming, outgoing}
+  acceptFriend: (handle) => http.post(`/friends/requests/${handle}/accept/`).then((r) => r.data),
+  removeFriend: (handle) => http.delete(`/friends/${handle}/`).then((r) => r.data),  // 삭제/취소/거절
+  members: (pid) => http.get(`/projects/${pid}/members/`).then((r) => r.data),       // {members, invited}
+  invite: (pid, handle) => http.post(`/projects/${pid}/members/`, { handle }).then((r) => r.data),
+  invites: () => http.get('/invites/').then((r) => r.data.invites),                  // 내가 받은 채널 초대
+  acceptInvite: (pid) => http.post(`/invites/${pid}/`).then((r) => r.data),
+  declineInvite: (pid) => http.delete(`/invites/${pid}/`).then((r) => r.data),
 
   agents: (params) => http.get('/agents/', { params }).then((r) => list(r.data)),
   agent: (botId) => http.get(`/agents/${botId}/`).then((r) => r.data),

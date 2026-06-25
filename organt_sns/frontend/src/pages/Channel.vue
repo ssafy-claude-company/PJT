@@ -208,14 +208,16 @@ async function sendRequest() {
 }
 // 멤버(멀티유저) — 채널을 함께 쓰는 사람들. 친구를 초대해 공동 리드.
 const members = ref([])
+const invitedPending = ref([])     // 초대했지만 아직 수락 안 한 사람
 const showMembers = ref(false)
 const myFriends = ref([])
 const mbg = (m) => m.color || avatarColor(m.handle || m.name)
 const mini = (m) => (m.name || m.handle || '?').slice(0, 1)
-const memberHandles = computed(() => new Set(members.value.map((m) => m.handle)))
+const memberHandles = computed(() => new Set([...members.value.map((m) => m.handle), ...invitedPending.value.map((m) => m.handle)]))
 const invitable = computed(() => myFriends.value.filter((f) => !memberHandles.value.has(f.handle)))
 async function loadMembers() {
-  try { members.value = await api.members(route.params.pid) } catch (e) { members.value = [] }
+  try { const r = await api.members(route.params.pid); members.value = r.members || []; invitedPending.value = r.invited || [] }
+  catch (e) { members.value = []; invitedPending.value = [] }
 }
 async function toggleMembers() {
   showMembers.value = !showMembers.value
@@ -224,7 +226,8 @@ async function toggleMembers() {
   }
 }
 async function invite(handle) {
-  try { members.value = await api.invite(route.params.pid, handle) } catch (e) { /* 권한·중복 무시 */ }
+  try { const r = await api.invite(route.params.pid, handle); members.value = r.members || []; invitedPending.value = r.invited || [] }
+  catch (e) { /* 권한·중복 무시 */ }
 }
 
 // 채널 관리·접근(소유자/멤버 기반)
@@ -298,6 +301,16 @@ watch(() => route.params.pid, () => {
               </div>
               <div v-if="!members.length" class="mp-empty">아직 멤버가 없어요. 친구를 초대해 함께 만들어보세요.</div>
             </div>
+            <template v-if="invitedPending.length">
+              <div class="mp-sec">초대됨 · 대기 {{ invitedPending.length }}</div>
+              <div class="mp-list">
+                <div v-for="m in invitedPending" :key="m.handle" class="mp-row">
+                  <span class="mav" :style="{ background: mbg(m), opacity: .6 }">{{ mini(m) }}</span>
+                  <div class="mp-meta"><div class="mp-n">{{ m.name }}</div><div class="mp-h">@{{ m.handle }}</div></div>
+                  <span class="wait-pill">수락 대기</span>
+                </div>
+              </div>
+            </template>
             <template v-if="canInvite">
               <div class="mp-sec">친구 초대</div>
               <div class="mp-list">

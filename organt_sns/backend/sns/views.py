@@ -107,7 +107,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             message_count=Coalesce(Subquery(self._msg_sq, output_field=IntegerField()), 0)
         ).order_by("-event_count", "-id")
         if cur:
-            return qs.filter(Q(visibility="public") | Q(members__person=cur)).distinct()
+            return qs.filter(Q(visibility="public") | Q(members__person=cur, members__status="active")).distinct()
         return qs.filter(visibility="public")
 
     def get_serializer_class(self):
@@ -241,7 +241,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             for gm in gms:
                 if gm.sender_id == 0 and gm.msg_type == "request":
                     msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
-                                 "author": "나", "body": gm.body})
+                                 "author": (gm.payload or {}).get("requester_name") or "사람", "body": gm.body})
                 else:
                     a = ag.get(gm.sender_id); ta = ag.get(gm.to_id) if gm.to_id else None
                     kind = "consultation" if (gm.msg_type == "request" and gm.kind == "I") else _km.get(gm.msg_type, "work")
@@ -292,7 +292,8 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         """채널에 봇 요청(작업/질문)을 맡긴다 — 협업 엔진이 픽업해 처리. 지금은 큐 적재+표시. 인증 필요."""
         import time
         from .social import current_person
-        if not current_person(request):
+        cur = current_person(request)
+        if not cur:
             return Response({"detail": "로그인이 필요해요."}, status=401)
         proj = self.get_object()
         body = (request.data.get("body") or "").strip()
@@ -310,7 +311,8 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                 return Response({"detail": "대상 봇을 찾을 수 없습니다."}, status=400)
         m = GuideMessage.objects.create(
             channel_id=proj.id, thread_id=proj.id, sender_id=0, msg_type="request",
-            to_id=to_int, kind=kind, body=body[:4000], ts=time.time())
+            to_id=to_int, kind=kind, body=body[:4000], ts=time.time(),
+            payload={"requester_name": cur.name, "requester_handle": cur.handle})  # 작성자 실명 표시용
         return Response({"msg_id": m.msg_id, "kind": kind, "queued": True}, status=201)
 
     @action(detail=True, methods=["post"])
@@ -563,12 +565,17 @@ class StatsView(APIView):
         # 직원·채널 수는 '내가 볼 수 있는 것'으로(공개 + 내 것) — 남의 비공개 수 비노출.
         from .social import current_person
         from django.db.models import Q
+        from .models import Friendship, Membership
         cur = current_person(request)
+        pending = {
+            "friend_requests": Friendship.objects.filter(b=cur, status="pending").count() if cur else 0,
+            "invites": Membership.objects.filter(person=cur, status="invited").count() if cur else 0,
+        }
         agent_q = Agent.objects.exclude(bot_id=0)
         proj_q = Project.objects.all()
         if cur:
             agent_q = agent_q.filter(Q(owner__isnull=True) | Q(owner=cur))
-            proj_q = proj_q.filter(Q(visibility="public") | Q(members__person=cur)).distinct()
+            proj_q = proj_q.filter(Q(visibility="public") | Q(members__person=cur, members__status="active")).distinct()
         else:
             agent_q = agent_q.filter(owner__isnull=True)
             proj_q = proj_q.filter(visibility="public")
@@ -580,4 +587,5 @@ class StatsView(APIView):
             "threads": Thread.objects.count(),
             "by_kind": by_kind,
             "baton": baton,
+            "pending": pending,
         })

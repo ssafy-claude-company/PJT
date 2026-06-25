@@ -32,8 +32,12 @@ urlpatterns = [
     path("me/", social.me, name="me"),
     path("people/", social.people, name="people"),
     path("friends/", social.friends, name="friends"),
+    path("friends/requests/", social.friend_requests, name="friend-requests"),
+    path("friends/requests/<str:handle>/accept/", social.accept_friend, name="accept-friend"),
     path("friends/<str:handle>/", social.unfriend, name="unfriend"),
     path("projects/<str:pid>/members/", social.members, name="members"),
+    path("invites/", social.invites, name="invites"),
+    path("invites/<str:pid>/", social.invite_respond, name="invite-respond"),
     path("workspace/", social.workspace, name="workspace"),
     path("", include(router.urls)),
 ]

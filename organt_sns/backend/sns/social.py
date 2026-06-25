@@ -163,15 +163,15 @@ def people(request):
 
 
 def _friend_ids(person):
-    a = Friendship.objects.filter(a=person).values_list("b_id", flat=True)
-    b = Friendship.objects.filter(b=person).values_list("a_id", flat=True)
+    a = Friendship.objects.filter(a=person, status="accepted").values_list("b_id", flat=True)
+    b = Friendship.objects.filter(b=person, status="accepted").values_list("a_id", flat=True)
     return set(a) | set(b)
 
 
 @api_view(["GET", "POST"])
 @permission_classes([AllowAny])
 def friends(request):
-    """GET: 내 친구. POST {handle}: 친구 추가(즉시 양방향). 인증 필요."""
+    """GET: 내 친구(수락된). POST {handle}: 친구 '요청' 보내기(상대 수락 필요). 인증 필요."""
     cur = current_person(request)
     if not cur:
         return Response({"detail": "로그인이 필요해요."}, status=401)
@@ -182,15 +182,54 @@ def friends(request):
             return Response({"detail": "그 핸들의 유저가 없어요."}, status=404)
         if other.id == cur.id:
             return Response({"detail": "자기 자신은 추가할 수 없어요."}, status=400)
-        if not Friendship.objects.filter(Q(a=cur, b=other) | Q(a=other, b=cur)).exists():
-            Friendship.objects.create(a=cur, b=other)
+        existing = Friendship.objects.filter(Q(a=cur, b=other) | Q(a=other, b=cur)).first()
+        if existing and existing.status == "accepted":
+            return Response({"status": "friends", "detail": "이미 친구예요."})
+        if existing:
+            if existing.b_id == cur.id:           # 상대가 먼저 보낸 요청 → 바로 수락
+                existing.status = "accepted"
+                existing.save(update_fields=["status"])
+                return Response({"status": "accepted", "detail": "친구가 됐어요."})
+            return Response({"status": "requested", "detail": "이미 요청을 보냈어요."})
+        Friendship.objects.create(a=cur, b=other, status="pending")
+        return Response({"status": "requested", "detail": "친구 요청을 보냈어요."})
     fr = Person.objects.filter(id__in=_friend_ids(cur)).order_by("handle")
     return Response({"friends": [_pub(p) for p in fr]})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def friend_requests(request):
+    """받은/보낸 친구 요청(대기 중). 인증 필요."""
+    cur = current_person(request)
+    if not cur:
+        return Response({"detail": "로그인이 필요해요."}, status=401)
+    incoming = Friendship.objects.filter(b=cur, status="pending").select_related("a")
+    outgoing = Friendship.objects.filter(a=cur, status="pending").select_related("b")
+    return Response({"incoming": [_pub(f.a) for f in incoming],
+                     "outgoing": [_pub(f.b) for f in outgoing]})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def accept_friend(request, handle):
+    """받은 친구 요청 수락. 인증 필요."""
+    cur = current_person(request)
+    if not cur:
+        return Response({"detail": "로그인이 필요해요."}, status=401)
+    other = Person.objects.filter(handle=str(handle).lower()).first()
+    fr = Friendship.objects.filter(a=other, b=cur, status="pending").first() if other else None
+    if not fr:
+        return Response({"detail": "받은 요청이 없어요."}, status=404)
+    fr.status = "accepted"
+    fr.save(update_fields=["status"])
+    return Response({"ok": True})
 
 
 @api_view(["DELETE"])
 @permission_classes([AllowAny])
 def unfriend(request, handle):
+    """친구 삭제 / 보낸 요청 취소 / 받은 요청 거절 — 그 핸들과의 관계 행 제거. 인증 필요."""
     cur = current_person(request)
     if not cur:
         return Response({"detail": "로그인이 필요해요."}, status=401)
@@ -200,11 +239,11 @@ def unfriend(request, handle):
     return Response({"ok": True})
 
 
-# ── 채널 멤버·워크스페이스 ──────────────────────────────
+# ── 채널 멤버·초대·워크스페이스 ──────────────────────────────
 @api_view(["GET", "POST"])
 @permission_classes([AllowAny])
 def members(request, pid):
-    """GET: 채널 멤버. POST {handle}: 친구를 채널에 초대. 멤버만(비공개 비노출)."""
+    """GET: 참여중 멤버 + 초대중(대기). POST {handle}: 친구를 채널에 '초대'(상대 수락 필요). 멤버만."""
     cur = current_person(request)
     if not cur:
         return Response({"detail": "로그인이 필요해요."}, status=401)
@@ -218,19 +257,55 @@ def members(request, pid):
         other = Person.objects.filter(handle=h).first()
         if not other:
             return Response({"detail": "그 핸들의 유저가 없어요."}, status=404)
-        Membership.objects.get_or_create(person=other, project=proj, defaults={"role": "member"})
-    ms = proj.members.select_related("person").order_by("role", "created_at")  # 리드 먼저(lead<member)
-    return Response({"members": [{**_pub(m.person), "role": m.role} for m in ms]})
+        Membership.objects.get_or_create(person=other, project=proj,
+                                         defaults={"role": "member", "status": "invited"})
+    ms = proj.members.select_related("person").order_by("role", "created_at")  # 리드 먼저
+    active = [{**_pub(m.person), "role": m.role} for m in ms if m.status == "active"]
+    invited = [_pub(m.person) for m in ms if m.status == "invited"]
+    return Response({"members": active, "invited": invited})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def invites(request):
+    """내가 받은 채널 초대(대기 중). 인증 필요."""
+    cur = current_person(request)
+    if not cur:
+        return Response({"detail": "로그인이 필요해요."}, status=401)
+    ms = (Membership.objects.filter(person=cur, status="invited").select_related("project")
+          .order_by("-created_at"))
+    out = [{"pid": m.project.pid, "name": m.project.name, "visibility": m.project.visibility,
+            "owner_handle": m.project.owner.handle if m.project.owner else None} for m in ms]
+    return Response({"invites": out})
+
+
+@api_view(["POST", "DELETE"])
+@permission_classes([AllowAny])
+def invite_respond(request, pid):
+    """채널 초대 수락(POST)/거절(DELETE). 인증 필요."""
+    cur = current_person(request)
+    if not cur:
+        return Response({"detail": "로그인이 필요해요."}, status=401)
+    proj = Project.objects.filter(pid=pid).first()
+    m = Membership.objects.filter(person=cur, project=proj, status="invited").first() if proj else None
+    if not m:
+        return Response({"detail": "받은 초대가 없어요."}, status=404)
+    if request.method == "DELETE":
+        m.delete()
+        return Response({"ok": True, "declined": True})
+    m.status = "active"
+    m.save(update_fields=["status"])
+    return Response({"ok": True, "pid": proj.pid})
 
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def workspace(request):
-    """내 워크스페이스 — 내가 멤버/리드인 채널 목록. 인증 필요."""
+    """내 워크스페이스 — 내가 '참여중'인 채널. 인증 필요."""
     cur = current_person(request)
     if not cur:
         return Response({"detail": "로그인이 필요해요."}, status=401)
-    ms = (Membership.objects.filter(person=cur).select_related("project")
+    ms = (Membership.objects.filter(person=cur, status="active").select_related("project")
           .order_by("role", "-project__pid"))
     chans = [{"pid": m.project.pid, "name": m.project.name, "status": m.project.status,
               "role": m.role, "visibility": m.project.visibility} for m in ms]

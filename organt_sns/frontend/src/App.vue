@@ -77,6 +77,7 @@ const batonLive = computed(() => {
   return b && b.ts && (Date.now() / 1000 - b.ts) < 300 ? b : null
 })
 const isLive = computed(() => !!batonLive.value)
+const pendingCount = computed(() => (stats.value?.pending?.friend_requests || 0) + (stats.value?.pending?.invites || 0))
 const meBg = computed(() => me.color || avatarColor(me.handle || 'guest'))
 const activeChan = (pid) => !!batonLive.value && batonLive.value.project === pid
 async function doLogout() { await logout(); router.replace('/login') }
@@ -103,6 +104,7 @@ async function doLogout() { await logout(); router.replace('/login') }
       <div class="sb-scroll">
         <router-link to="/friends" class="sb-item" :class="{ active: route.path === '/friends' }">
           <Icon class="ic" name="user" /><span class="nm">친구</span>
+          <span v-if="pendingCount" class="sb-badge">{{ pendingCount }}</span>
         </router-link>
         <router-link to="/studio" class="sb-item" :class="{ active: route.path === '/studio' }">
           <Icon class="ic" name="sliders" /><span class="nm">직원 만들기</span>
