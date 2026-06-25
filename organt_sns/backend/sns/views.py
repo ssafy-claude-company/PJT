@@ -7,7 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Agent, RoleProfile, Project, Event, Thread, Comment, Like, GuideMessage
+from .models import Agent, RoleProfile, Project, CollabTask, Event, Thread, Comment, Like, GuideMessage
 from .recommend import score_candidates
 from .insights import project_briefing
 from .serializers import (
@@ -91,7 +91,13 @@ class RoleProfileViewSet(viewsets.ReadOnlyModelViewSet):
 
 class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
     """프로젝트 목록·상세. /api/projects/ , /api/projects/P-032/ , /api/projects/P-032/events/"""
-    # GuideMessage는 Project FK가 아니라 channel_id(=proj.id)로 묶인다 — 서브쿼리로 메시지 수 집계.
+    # 카운트는 '독립 서브쿼리'로 — Count(distinct) 다중 어노테이션은 events×tasks 크로스조인이라
+    # 쇼케이스(이벤트 수천)에서 폭증(8s). 서브쿼리는 관계별 독립 집계라 빠르다.
+    _ev_sq = (Event.objects.filter(project=OuterRef("pk"))
+              .values("project").annotate(c=Count("pk")).values("c"))
+    _task_sq = (CollabTask.objects.filter(project=OuterRef("pk"))
+                .values("project").annotate(c=Count("pk")).values("c"))
+    # GuideMessage는 Project FK가 아니라 channel_id(=proj.id)로 묶인다.
     _msg_sq = (GuideMessage.objects.filter(channel_id=OuterRef("id")).exclude(msg_type="status")
                .values("channel_id").annotate(c=Count("msg_id")).values("c"))
     lookup_field = "pid"
@@ -103,8 +109,9 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         from django.db.models import Q
         cur = current_person(self.request)
         qs = Project.objects.annotate(
-            event_count=Count("events", distinct=True), task_count=Count("tasks", distinct=True),
-            message_count=Coalesce(Subquery(self._msg_sq, output_field=IntegerField()), 0)
+            event_count=Coalesce(Subquery(self._ev_sq, output_field=IntegerField()), 0),
+            task_count=Coalesce(Subquery(self._task_sq, output_field=IntegerField()), 0),
+            message_count=Coalesce(Subquery(self._msg_sq, output_field=IntegerField()), 0),
         ).order_by("-event_count", "-id")
         if cur:
             return qs.filter(Q(visibility="public") | Q(members__person=cur, members__status="active")).distinct()
