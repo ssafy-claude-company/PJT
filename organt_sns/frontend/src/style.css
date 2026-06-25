@@ -297,7 +297,7 @@ a.cmsg-name:hover{text-decoration:underline}
 input,textarea,select{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);color:var(--text);padding:10px 13px;font:inherit;width:100%;transition:border-color .12s}
 input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent-line)}
 textarea{resize:vertical;line-height:1.55}
-.btn{background:var(--accent);border:1px solid transparent;color:#fff;border-radius:var(--r);padding:10px 16px;font:inherit;font-weight:600;font-size:13.5px;cursor:pointer;transition:.12s;display:inline-flex;align-items:center;gap:7px;justify-content:center}
+.btn{background:var(--accent);border:1px solid transparent;color:#fff;border-radius:var(--r);padding:10px 16px;font:inherit;font-weight:600;font-size:13.5px;cursor:pointer;transition:.12s;display:inline-flex;align-items:center;gap:7px;justify-content:center;white-space:nowrap}
 .btn:hover{background:var(--accent2)}
 .btn.ghost{background:transparent;border-color:var(--line);color:var(--text2)}
 .btn.ghost:hover{border-color:var(--accent-line);color:var(--text);background:var(--surface)}

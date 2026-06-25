@@ -120,7 +120,7 @@ class RequeueStuckTest(TestCase):
     def test_멎은요청은_멤버가_다시맡기면_재큐된다(self):
         from sns.models import GuideMessage
         proj = self._setup()
-        gm = self._stuck(proj, 300)                     # 5분 전 픽, 무응답·미완
+        gm = self._stuck(proj, 360)                     # 작업창(5분) 넘게 무응답·미완 = 멎음
         res = self._client("tok_requeue_1").post(f"/api/projects/{proj.pid}/requeue/")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["requeued"], 1)
@@ -133,6 +133,26 @@ class RequeueStuckTest(TestCase):
         res = self._client("tok_requeue_1").post(f"/api/projects/{proj.pid}/requeue/")
         self.assertEqual(res.data["requeued"], 0)
         self.assertTrue((GuideMessage.objects.get(msg_id=gm.msg_id).payload or {}).get("picked"))
+
+    def test_작업중인_최신픽은_멎음아님_옛픽만_재큐(self):
+        # 순차 러너: 가장 최근 픽이 '활성 작업'이라 멎음에서 제외 — 그보다 앞서 픽돼 버려진 것만 재큐.
+        from sns.models import GuideMessage
+        proj = self._setup()
+        old = self._stuck(proj, 400)                    # 옛 픽(버려짐) — 최신이 아니므로 멎음
+        live = self._stuck(proj, 30)                    # 방금 픽(작업 중) — 멎음 아님
+        res = self._client("tok_requeue_1").post(f"/api/projects/{proj.pid}/requeue/")
+        self.assertEqual(res.data["requeued"], 1)       # 옛 픽 하나만
+        self.assertFalse((GuideMessage.objects.get(msg_id=old.msg_id).payload or {}).get("picked"))
+        self.assertTrue((GuideMessage.objects.get(msg_id=live.msg_id).payload or {}).get("picked"))
+
+    def test_messages_작업중인_요청은_멎음에_안잡힘(self):
+        # 표시(messages)의 stuck_count와 live_status가 같은 helper를 써 같은 요청을 동시에 '작업 중·멎음'으로 안 잡음.
+        proj = self._setup()
+        self._stuck(proj, 400)                          # 옛 픽 → 멎음 1
+        self._stuck(proj, 30)                           # 최신 픽 → 작업 중(live_status)
+        data = self._client("tok_requeue_1").get(f"/api/projects/{proj.pid}/messages/").data
+        self.assertEqual(data["stuck_count"], 1)        # 옛 픽만 멎음(최신은 작업 중이라 제외)
+        self.assertEqual(data["live_status"]["state"], "working")
 
     def test_권한_비로그인401_비멤버403(self):
         from sns.models import Person

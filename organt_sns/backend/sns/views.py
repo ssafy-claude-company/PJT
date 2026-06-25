@@ -39,6 +39,42 @@ def classify_kind(body):
     return "W"
 
 
+# 픽된 사용자 요청의 '작업 중' vs '멎음' 판별 — 한 곳에서 정의해 표시(messages)·복구(requeue)가 어긋나지 않게.
+# 순차 러너 가정: 가장 최근에 픽된(picked_ts 최대) 요청이 '활성 작업'이고, 그보다 앞서 픽된 채
+# 미해결로 남은 요청은 버려진(멎은) 것. 활성 작업은 live_status로 '작업 중' 표시되므로 멎음에서 빼
+# 같은 요청이 '작업 중'과 '멎음'에 동시에 잡히던 모순(작업 중 5분창 vs 멎음 2분창 불일치)을 없앤다.
+_WORK_GRACE = 300   # 픽 후 이 시간(초)까진 '작업 중'으로 본다(프론트 live_status 창과 동일)
+_STUCK_AFTER = 120  # 활성 작업이 아닌 픽 요청이 이 시간 넘게 무응답이면 '멎음'
+
+
+def _open_picks(gms, responded):
+    """픽됐지만 응답·완료 없이 열려 있는 사용자 요청들."""
+    return [g for g in gms if g.sender_id == 0 and g.msg_type == "request"
+            and (g.payload or {}).get("picked") and not (g.payload or {}).get("done_ts")
+            and g.msg_id not in responded]
+
+
+def _picked_ts(g):
+    return (g.payload or {}).get("picked_ts") or g.ts or 0
+
+
+def live_pick_mid(gms, now, responded):
+    """현재 '작업 중'인 요청의 msg_id — 가장 최근 픽이 WORK_GRACE 이내면 그 id, 아니면 None."""
+    picks = _open_picks(gms, responded)
+    if not picks:
+        return None
+    newest = max(picks, key=_picked_ts)
+    return newest.msg_id if (now - _picked_ts(newest)) <= _WORK_GRACE else None
+
+
+def stuck_requests(gms, now):
+    """멎은 요청 목록 — 픽·무응답·미완이며 '활성 작업'이 아니고 STUCK_AFTER 초 경과한 사용자 요청."""
+    responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
+    live = live_pick_mid(gms, now, responded)
+    return [g for g in _open_picks(gms, responded)
+            if g.msg_id != live and (now - _picked_ts(g)) > _STUCK_AFTER]
+
+
 class AgentViewSet(viewsets.ReadOnlyModelViewSet):
     """AI 직원 목록·상세. /api/agents/ , /api/agents/{bot_id}/ , /api/agents/{bot_id}/events/
     공개 식별자 bot_id로 조회(피드·추천이 모두 bot_id로 참조)."""
@@ -295,7 +331,9 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                     if p.get("done_ts"):
                         live_status = {"state": "done", "ts": p["done_ts"], "goal": to_native(gm.body)[:80]}
                     elif p.get("picked"):
-                        live_status = {"state": "working", "ts": gm.ts, "goal": to_native(gm.body)[:80]}
+                        # ts는 픽 시각(picked_ts) 기준 — '작업 중' 창을 사용자 전송이 아닌 실제 착수부터 잼.
+                        live_status = {"state": "working", "ts": p.get("picked_ts") or gm.ts,
+                                       "goal": to_native(gm.body)[:80]}
                     else:
                         live_status = None           # 대기 — 상태 없음(요청만 표시)
                 else:
@@ -321,17 +359,18 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                 msgs.append({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),
                              "author": c.author_name, "body": c.body})
         msgs.sort(key=lambda m: m["ts"])
-        # 미처리 요청 수(러너 꺼짐/대기 가시화) — sender_id=0 요청 중 픽업 안 됐고 응답도 없는 것
-        responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
-        pending = sum(1 for g in gms if g.sender_id == 0 and g.msg_type == "request"
-                      and not (g.payload or {}).get("picked") and g.msg_id not in responded)
-        # 멎은 요청 — 픽됐지만 응답·완료 없이 120초+ 경과(러너가 죽으면 영영 '작업 중'으로 박제).
         import time as _t
         _now = _t.time()
-        stuck = sum(1 for g in gms if g.sender_id == 0 and g.msg_type == "request"
-                    and (g.payload or {}).get("picked") and not (g.payload or {}).get("done_ts")
-                    and g.msg_id not in responded
-                    and (_now - ((g.payload or {}).get("picked_ts") or g.ts or 0)) > 120)
+        responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
+        # 미처리 요청 수(러너 꺼짐/대기 가시화) — 픽업 안 됐고 응답도 없는 사용자 요청
+        pending = sum(1 for g in gms if g.sender_id == 0 and g.msg_type == "request"
+                      and not (g.payload or {}).get("picked") and g.msg_id not in responded)
+        # '작업 중'(live_status)은 '활성 픽'(가장 최근 픽·5분 이내)일 때만 — 멎음과 상호배타.
+        if live_status and live_status.get("state") == "working" \
+                and live_pick_mid(gms, _now, responded) is None:
+            live_status = None                       # 5분 넘게 무응답이면 '작업 중' 아님 → 멎음으로 잡힘
+        # 멎은 요청 — 픽·무응답·미완이며 활성 작업도 아닌 채 멈춘 것(러너 사망 등). 한 helper로 일관.
+        stuck = len(stuck_requests(gms, _now))
         # 프로젝트 한눈에 — 목표·상태·산출물(라이브 링크). 채팅 안 읽어도 맥락 파악.
         import re as _re
         goal = ""
@@ -408,18 +447,13 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         if not (is_owner(proj, cur) or is_member(proj, cur)):
             return Response({"detail": "이 채널의 멤버만 할 수 있어요."}, status=403)
         gms = list(GuideMessage.objects.filter(channel_id=proj.id))
-        responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
         now = time.time()
         n = 0
-        for g in gms:                                  # 픽됐지만 무응답·미완·120초+ 경과 = 멎음
-            p = g.payload or {}
-            if (g.sender_id == 0 and g.msg_type == "request" and p.get("picked")
-                    and not p.get("done_ts") and g.msg_id not in responded
-                    and (now - (p.get("picked_ts") or g.ts or 0)) > 120):
-                np = dict(p)
-                np.pop("picked", None); np.pop("done_ts", None); np.pop("picked_ts", None)
-                GuideMessage.objects.filter(msg_id=g.msg_id).update(payload=np)
-                n += 1
+        for g in stuck_requests(gms, now):             # 멎음 판정은 messages 표시와 동일 helper로 — 활성 작업은 안 건드림
+            np = dict(g.payload or {})
+            np.pop("picked", None); np.pop("done_ts", None); np.pop("picked_ts", None)
+            GuideMessage.objects.filter(msg_id=g.msg_id).update(payload=np)
+            n += 1
         return Response({"requeued": n})
 
     @action(detail=True, methods=["post"])

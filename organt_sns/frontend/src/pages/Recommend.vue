@@ -39,7 +39,7 @@ function ex(e) { q.value = e; run() }
       종합한 것이고, <b>왜 추천했는지 근거</b>도 함께 보여줍니다.
     </div>
 
-    <div class="flex" style="margin-bottom:10px">
+    <div class="flex search-row" style="margin-bottom:10px">
       <input v-model="q" placeholder="예: 실시간 협동 웹게임 서버 동기화" @keyup.enter="run" />
       <button class="btn" @click="run" :disabled="loading">{{ loading ? '추천 중…' : '추천' }}</button>
     </div>
@@ -86,6 +86,9 @@ function ex(e) { q.value = e; run() }
 </template>
 
 <style scoped>
+/* 검색줄: 입력은 늘고 버튼은 자연폭 유지(좁은 화면에서 '추천' 세로로 깨지던 문제) */
+.search-row input { flex: 1; min-width: 0 }
+.search-row .btn { flex-shrink: 0 }
 .ex-chip { background: var(--surface2); border: 1px solid var(--line); border-radius: 20px; color: var(--text2);
   padding: 5px 13px; font: inherit; font-size: 12.5px; cursor: pointer; transition: .12s }
 .ex-chip:hover { color: var(--text); border-color: var(--accent-line) }
