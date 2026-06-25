@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
-import { kindMeta, timeFmt } from '../kinds'
+import { kindMeta, timeFmt, dayKey, dayLabel } from '../kinds'
 import CollabPanel from '../components/CollabPanel.vue'
 import Icon from '../components/Icon.vue'
 import { monogram, avatarColor, avatarBg } from '../avatar'
@@ -72,9 +72,7 @@ const collabSpeakers = (g) => {
 // 디스코드식: 사람·직원 구분 없이 한 흐름. 같은 사람 연속 메시지는 한 묶음(머리글 1번).
 const groups = computed(() => {
   const out = []
-  let cur = null, work = null, collab = null, lastDay = null
-  const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getFullYear()}.${d.getMonth()}.${d.getDate()}` }
-  const dayLabel = (ts) => new Date(ts * 1000).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })
+  let cur = null, work = null, collab = null, lastDay = null   // dayKey/dayLabel은 kinds.js 공용(중복 제거)
   const flushWork = () => { if (work) { out.push(work); work = null } }
   const flushCollab = () => { collab = null }      // 블록은 생성 시 바로 out에 넣고 entries만 누적
   const maybeDay = (ts) => {
