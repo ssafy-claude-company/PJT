@@ -89,4 +89,6 @@ function ex(e) { q.value = e; run() }
 .ex-chip { background: var(--surface2); border: 1px solid var(--line); border-radius: 20px; color: var(--text2);
   padding: 5px 13px; font: inherit; font-size: 12.5px; cursor: pointer; transition: .12s }
 .ex-chip:hover { color: var(--text); border-color: var(--accent-line) }
+/* 좁은 화면: 이름줄과 점수 배지가 겹치지 않게 줄바꿈 */
+@media(max-width:520px){ .card .between { flex-wrap: wrap; gap: 8px } }
 </style>
