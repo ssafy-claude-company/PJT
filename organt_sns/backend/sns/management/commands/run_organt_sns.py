@@ -210,6 +210,12 @@ class Command(BaseCommand):
                     ch = int(m["channel_id"])
                     setattr(guide, "_origin_channel", ch)
                     try:
+                        # [stale stop 방지] 픽 직전 잔여(이전 흐름의) 중지 신호를 소거 — 짧은 흐름이 폴 전에
+                        # 끝나 신호가 남았다가, 같은 채널의 새 흐름을 시작하자마자 죽이는 것 차단.
+                        try:
+                            await _check_stop(ch)
+                        except Exception:
+                            pass
                         # 흐름을 태스크로 돌리며 '작업 중지' 신호를 폴 — 사용자 트리거를 진행 중 흐름에
                         # 협조적 취소(SYS.request_cancel)로 잇는다(러너=두뇌와 같은 이벤트루프).
                         flow_task = asyncio.create_task(sysm.route_channel_request(ch, req))

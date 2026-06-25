@@ -5127,3 +5127,64 @@ def test_per_agent_모델이_organt_옵션까지_도달():
     assert builder(222, {}, "QA").options.model == "sonnet"       # 미지정 봇 → 전역
     base = _make_builder(cfg, audit, {111: "백엔드"})              # model_map 미전달(디스코드 경로)
     assert base(111, {}, "백엔드").options.model == "sonnet"       # 동작 불변
+
+
+def test_request_cancel_흐름닫고_점유해제_큐드레인():
+    """[안전성] 사용자 중지(request_cancel)는 진행 흐름을 워치독과 같은 취소 경로로 깨끗이 닫는다 —
+    점유 해제·active_flows pop·큐 드레인까지. 즉 중지는 ① 리더를 영구 점유로 박제하지 않고
+    ② 대기열을 멈추지 않는다(중지=이 흐름만, 다음 큐는 계속 처리). 교착도 없다."""
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"}, workspace="/tmp/ws-cancel")
+    gate = asyncio.Event()
+    ran = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        ran.append(body)
+        if len(ran) == 1:
+            await gate.wait()          # 첫 흐름: 매달림(취소 대상) — gate는 끝까지 안 set
+        flow.current = None
+        return "ok"
+    s.run_turn = fake_run_turn
+
+    async def scenario():
+        t1 = asyncio.ensure_future(s.handle_user_input(500, 11, "긴 작업", root_id="r1"))
+        await asyncio.sleep(0.05)
+        out2 = await s.handle_user_input(500, 11, "다음 질문", root_id="r2")
+        assert out2["mode"] == "queued"                       # 같은 리더 점유 → 큐
+        assert s.request_cancel(500) is True                  # 사용자 중지
+        await asyncio.wait_for(t1, timeout=2)                 # 취소 흐름이 예외·교착 없이 닫힘
+        assert not s.engaged.busy_elsewhere(11, "zzz")        # ① 점유 해제(리더 자유)
+        assert all(f.done for f in s.active_flows.values())   # active_flows 정리
+        assert "다음 질문" in ran                              # ② 큐 드레인됨(중지가 큐를 안 멈춤)
+    asyncio.run(scenario())
+
+
+def test_사용자요청_Info도_리더점유시_큐_유실없음():
+    """[안전성/큐] 사용자 요청은 Work든 Info(단순 질문)든 동일하게 큐 게이트를 거친다 —
+    route_channel_request가 request.kind를 routing에 쓰지 않아(handle_user_input은 to_id·body만 받음)
+    Info가 진행 흐름에 끼어들 경로가 없다. 대상 리더가 점유 중이면 Info도 바로 큐에 걸리고,
+    흐름 종료 후 드레인되어 결국 처리된다(유실 없음)."""
+    from src.protocol import Request, Kind
+    g = FakeGuide()
+    s = Sys(g, guild_id=1, organt_builder=None, bot_info={11: "L"}, workspace="/tmp/ws-info")
+    gate = asyncio.Event()
+    ran = []
+
+    async def fake_run_turn(flow, oid, body, kind, role):
+        ran.append(body)
+        if len(ran) == 1:
+            await gate.wait()
+        flow.current = None
+        return "답"
+    s.run_turn = fake_run_turn
+
+    async def scenario():
+        t1 = asyncio.ensure_future(s.handle_user_input(500, 11, "긴 작업", root_id="r1"))
+        await asyncio.sleep(0.05)
+        out = await s.route_channel_request(                      # '진짜 입구'로 Info 질문
+            500, Request(to_id=11, kind=Kind.INFO, body="이거 왜 이래요?", from_id=0, message_id="r2"))
+        assert out["mode"] == "queued"                            # Info도 리더 점유 → 큐(바로 걸림)
+        gate.set()
+        await asyncio.wait_for(t1, timeout=2)
+        assert "이거 왜 이래요?" in ran                            # 큐 드레인 — 질문도 결국 처리
+    asyncio.run(scenario())
