@@ -111,14 +111,16 @@ const groups = computed(() => {
     // 사람: 직접 보낸 메시지 + 행위자 없는 사용자 요청·개입(과거 디스코드 기록)
     const userOrigin = (m.kind === 'user_request' || m.kind === 'intervention') && !m.actor_id
     const isHuman = m.type === 'human' || userOrigin
+    const isInterject = m.type === 'human' && m.interject       // 진행 중 개입 — 구분 표시
     const author = m.type === 'human' ? (m.author || '나') : isHuman ? '사람' : (m.actor_name || m.actor_role || '직원')
-    const id = isHuman ? 'h:' + author : (m.actor_id || m.actor_role || '?')
+    // 개입은 단독 그룹(인접 사람 메시지와 안 섞이게) — 흐름 중 끼어든 신호라 따로 보이게
+    const id = isInterject ? 'ij:' + m.key : isHuman ? 'h:' + author : (m.actor_id || m.actor_role || '?')
     const raw = m.body || m.summary || ''
     const line = { key: m.key, text: isHuman ? cleanLine(raw, null) : cleanLine(raw, m.kind), kind: m.kind, ts: m.ts,
       to: (!isHuman && (m.target_name || m.target_role)) || null }
     if (cur && cur.id === id) { cur.lines.push(line) }
     else {
-      cur = { type: 'group', key: 'g' + m.key, id, author, isHuman,
+      cur = { type: 'group', key: 'g' + m.key, id, author, isHuman, interject: isInterject,
         role: isHuman ? null : (m.actor_name ? m.actor_role : null),
         seed: isHuman ? author : (m.actor_id || m.actor_name || m.actor_role),
         actorId: isHuman ? null : m.actor_id, lines: [line], ts: m.ts }
@@ -564,7 +566,7 @@ watch(() => route.params.pid, () => {
           </div>
         </div>
         <!-- 메시지 묶음: 사람·직원 동일 레이아웃 -->
-        <div v-else class="cmsg">
+        <div v-else class="cmsg" :class="{ interject: g.interject }">
           <router-link v-if="g.actorId" :to="`/agents/${g.actorId}`" class="cmsg-av" :style="{ background: g.isHuman ? 'var(--accent)' : avatarColor(g.seed) }">{{ monogram(g.author) }}</router-link>
           <div v-else class="cmsg-av" :style="{ background: g.isHuman ? 'var(--accent)' : avatarColor(g.seed) }">{{ monogram(g.author) }}</div>
           <div class="cmsg-bd">
@@ -572,6 +574,7 @@ watch(() => route.params.pid, () => {
               <router-link v-if="g.actorId" :to="`/agents/${g.actorId}`" class="cmsg-name">{{ g.author }}</router-link>
               <span v-else class="cmsg-name">{{ g.author }}</span>
               <span v-if="g.role" class="cmsg-role">{{ g.role }}</span>
+              <span v-if="g.interject" class="ij-tag">개입</span>
               <span v-if="g.actorId && g.actorId === data?.leader_id" class="lead-pill">리더</span>
               <span v-else-if="!g.isHuman" class="ai-tag">AI</span>
               <span class="cmsg-time">{{ timeFmt(g.ts) }}</span>
