@@ -156,3 +156,28 @@ class EngineHeartbeatTest(TestCase):
         from sns.models import EngineHeartbeat
         EngineHeartbeat.objects.update_or_create(pk=1, defaults={"last_beat": time.time() - 60})
         self.assertFalse(APIClient().get("/api/stats/").data["engine"]["live"])   # 60초 전 > 30초 임계 → 꺼짐
+
+
+class ClassifyKindTest(TestCase):
+    """Work/Info 자동 분류 — 질문은 Info(자문), 지시는 Work(위임). 토글은 override."""
+
+    def test_질문은_Info(self):
+        from sns.views import classify_kind
+        for q in ["이거 어떻게 만들어?", "배포 됐나요", "왜 안 되지", "무슨 색이 좋을까요", "가능한가?"]:
+            self.assertEqual(classify_kind(q), "I", q)
+
+    def test_지시는_Work(self):
+        from sns.views import classify_kind
+        for w in ["로그인 페이지 만들어줘", "서버에 캐시 붙여", "2인 협동 게임 제작", "버튼 색을 보라색으로 바꿔"]:
+            self.assertEqual(classify_kind(w), "W", w)
+
+    def test_make_request_auto는_본문분류_명시는_override(self):
+        from sns.models import Project, Person
+        proj = Project.objects.create(pid="S-9200", name="분류 채널", visibility="public")
+        Person.objects.create(handle="cu", name="씨유", token="tok_cls")
+        c = APIClient()
+        c.credentials(HTTP_AUTHORIZATION="Token tok_cls")
+        self.assertEqual(c.post(f"/api/projects/{proj.pid}/request/",
+                                {"kind": "auto", "body": "이거 어떻게 해요?"}).data["kind"], "I")
+        self.assertEqual(c.post(f"/api/projects/{proj.pid}/request/",
+                                {"kind": "W", "body": "이거 어떻게 해요?"}).data["kind"], "W")  # override

@@ -16,6 +16,28 @@ from .serializers import (
     ThreadSerializer, ThreadDetailSerializer, CommentSerializer,
 )
 
+# Work(작업·위임/구현) vs Info(자문·질문) 자동 분류 — 질문이면 Info, 아니면 Work.
+# Rule상 Info=자문(구현금지)·Work=위임(구현)으로 게이트 의미가 다르나, 오분류는 게이트가 흡수(저위험).
+_Q_WORDS = ("뭐", "무엇", "무슨", "어떻게", "어떡", "어째", "왜", "언제", "어디", "누가", "누구",
+            "얼마", "어느", "어떤", "몇", "가능한가", "가능해", "되나", "될까", "맞나", "맞아")
+_Q_ENDINGS = ("나요", "까요", "을까", "ㄹ까", "는가", "은가", "인가", "ㄴ가", "냐", "니", "래", "지요", "죠")
+
+
+def classify_kind(body):
+    """본문으로 W/I 자동 분류. 토글이 명시(W/I)면 그쪽을 쓰고, 'auto'/미지정일 때만 호출."""
+    b = (body or "").strip()
+    if not b:
+        return "W"
+    if "?" in b or "？" in b:
+        return "I"
+    head = b[:24]
+    if any(head.startswith(w) or (" " + w) in head for w in _Q_WORDS):
+        return "I"
+    last = b.rstrip(" .!~…").splitlines()[-1].strip() if b else b
+    if any(last.endswith(e) for e in _Q_ENDINGS):
+        return "I"
+    return "W"
+
 
 class AgentViewSet(viewsets.ReadOnlyModelViewSet):
     """AI 직원 목록·상세. /api/agents/ , /api/agents/{bot_id}/ , /api/agents/{bot_id}/events/
@@ -343,7 +365,13 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         body = (request.data.get("body") or "").strip()
         if not body:
             return Response({"detail": "내용은 필수입니다."}, status=400)
-        kind = "W" if str(request.data.get("kind", "W")).upper().startswith("W") else "I"
+        raw = str(request.data.get("kind", "auto")).upper()
+        if raw.startswith("W"):
+            kind = "W"
+        elif raw.startswith("I"):
+            kind = "I"
+        else:                                   # 'auto'/미지정 → 본문으로 자동 분류(토글은 override)
+            kind = classify_kind(body)
         to_id = request.data.get("to_id")
         to_int = None
         if to_id:

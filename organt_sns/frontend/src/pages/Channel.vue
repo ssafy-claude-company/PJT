@@ -26,7 +26,7 @@ const msgsEl = ref(null)
 const mode = ref('msg')
 const agents = ref([])
 const reqTo = ref('')
-const reqKind = ref('W')
+const reqKind = ref('auto')     // 자동 분류(본문으로 W/I) 기본, 작업/질문은 수동 override
 const reqBody = ref('')
 const reqSending = ref(false)
 // 적임자 추천(F1301) — 요청 작성 중 누구에게 맡길지 제안
@@ -252,7 +252,8 @@ async function sendRequest() {
   recs.value = []
   reqSending.value = true
   try {
-    await api.makeRequest(route.params.pid, { to_id: reqTo.value || undefined, kind: reqKind.value, body })
+    const r = await api.makeRequest(route.params.pid, { to_id: reqTo.value || undefined, kind: reqKind.value, body })
+    if (reqKind.value === 'auto') toast(r?.kind === 'I' ? '질문으로 분류했어요' : '작업으로 분류했어요')
     reqBody.value = ''; reqTo.value = ''       // 다음 요청은 기본(리더)으로 리셋
     data.value = await api.channelMessages(route.params.pid)
     await nextTick(); scrollBottom()
@@ -573,7 +574,8 @@ watch(() => route.params.pid, () => {
             </div>
           </template>
         </div>
-        <div class="seg">
+        <div class="seg" title="자동: 본문을 보고 작업/질문을 가립니다. 직접 고르면 그대로 따릅니다.">
+          <button :class="{ on: reqKind === 'auto' }" @click="reqKind = 'auto'">자동</button>
           <button :class="{ on: reqKind === 'W' }" @click="reqKind = 'W'">작업</button>
           <button :class="{ on: reqKind === 'I' }" @click="reqKind = 'I'">질문</button>
         </div>
@@ -589,7 +591,7 @@ watch(() => route.params.pid, () => {
         </button>
       </div>
       <div class="row">
-        <input class="field" v-model="reqBody" :placeholder="reqKind === 'W' ? '무엇을 만들지 / 할지' : '무엇을 물어볼지'" @keyup.enter="sendRequest" :disabled="reqSending" />
+        <input class="field" v-model="reqBody" :placeholder="reqKind === 'I' ? '무엇을 물어볼지' : reqKind === 'W' ? '무엇을 만들지 / 할지' : '무엇을 맡길지 — 자동으로 작업·질문을 가립니다'" @keyup.enter="sendRequest" :disabled="reqSending" />
         <button class="btn" @click="sendRequest" :disabled="reqSending || !reqBody.trim()"><Icon name="send" :size="15" />{{ reqSending ? '…' : '요청' }}</button>
       </div>
     </template>
