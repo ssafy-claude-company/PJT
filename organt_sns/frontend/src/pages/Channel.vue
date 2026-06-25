@@ -256,6 +256,18 @@ async function sendRequest() {
     await nextTick(); scrollBottom()
   } finally { reqSending.value = false }
 }
+// 멎은 요청 다시 맡기기 — 처리하던 러너가 죽어 '작업 중'으로 박제된 요청을 큐로 되돌림(소유자/멤버).
+const requeuing = ref(false)
+async function doRequeue() {
+  requeuing.value = true
+  try {
+    const r = await api.requeueStuck(route.params.pid)
+    toast(r.requeued ? `${r.requeued}건 다시 맡겼어요` : '다시 맡길 요청이 없어요')
+    if (r.requeued) data.value = await api.channelMessages(route.params.pid)
+  } catch (e) { toast(e?.response?.data?.detail || '다시 맡기지 못했어요', 'err') }
+  finally { requeuing.value = false }
+}
+
 // 멤버(멀티유저) — 채널을 함께 쓰는 사람들. 친구를 초대해 공동 리드.
 const members = ref([])
 const invitedPending = ref([])     // 초대했지만 아직 수락 안 한 사람
@@ -434,6 +446,13 @@ watch(() => route.params.pid, () => {
 
   <div v-if="data && data.pending_count" class="pending-bar">
     대기 중인 요청 <b>{{ data.pending_count }}건</b> — 정상 접수됐습니다. 실제 작업은 <b>협업 엔진이 켜져 있을 때</b> 직원들이 처리합니다.
+  </div>
+
+  <!-- 멎은 요청 — 처리하던 러너가 멈춰 '작업 중'으로 박제된 것. 소유자/멤버가 다시 큐로. -->
+  <div v-if="data && data.stuck_count" class="stuck-bar">
+    <span>멎은 요청 <b>{{ data.stuck_count }}건</b> — 처리하던 직원이 응답을 멈췄어요. 다시 맡겨 큐로 되돌릴 수 있어요.</span>
+    <span class="sb-grow"></span>
+    <button class="btn ghost sm" :disabled="requeuing" @click="doRequeue">{{ requeuing ? '…' : '다시 맡기기' }}</button>
   </div>
 
   <div v-if="showBrief && briefErr" class="pending-bar">브리핑을 불러오지 못했습니다. 잠시 후 다시 시도하세요.</div>

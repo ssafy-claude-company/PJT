@@ -98,10 +98,13 @@ def pick(request):
     if request.data.get("unpick"):                    # 재처리용 — picked 해제(중단된 요청 다시 큐로)
         p.pop("picked", None)
         p.pop("done_ts", None)
+        p.pop("picked_ts", None)
     else:
         p["picked"] = True
         if request.data.get("done"):
             p["done_ts"] = time.time()
+        else:
+            p.setdefault("picked_ts", time.time())    # 멎은 요청 판정(픽 후 무응답 경과)용
     GuideMessage.objects.filter(msg_id=mid).update(payload=p)
     return Response({"ok": True})
 

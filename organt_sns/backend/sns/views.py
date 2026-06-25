@@ -293,6 +293,13 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
         pending = sum(1 for g in gms if g.sender_id == 0 and g.msg_type == "request"
                       and not (g.payload or {}).get("picked") and g.msg_id not in responded)
+        # 멎은 요청 — 픽됐지만 응답·완료 없이 120초+ 경과(러너가 죽으면 영영 '작업 중'으로 박제).
+        import time as _t
+        _now = _t.time()
+        stuck = sum(1 for g in gms if g.sender_id == 0 and g.msg_type == "request"
+                    and (g.payload or {}).get("picked") and not (g.payload or {}).get("done_ts")
+                    and g.msg_id not in responded
+                    and (_now - ((g.payload or {}).get("picked_ts") or g.ts or 0)) > 120)
         # 프로젝트 한눈에 — 목표·상태·산출물(라이브 링크). 채팅 안 읽어도 맥락 파악.
         import re as _re
         goal = ""
@@ -315,6 +322,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         from .social import current_person, is_owner, is_member
         cur = current_person(request)
         return Response({"pid": proj.pid, "name": proj.name, "messages": msgs, "pending_count": pending,
+                         "stuck_count": stuck,
                          "leader_id": str(proj.leader.bot_id) if proj.leader else None,
                          "leader_role": proj.leader.role if proj.leader else None, "context": context,
                          "visibility": proj.visibility, "owner_handle": proj.owner.handle if proj.owner else None,
@@ -348,6 +356,33 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             to_id=to_int, kind=kind, body=body[:4000], ts=time.time(),
             payload={"requester_name": cur.name, "requester_handle": cur.handle})  # 작성자 실명 표시용
         return Response({"msg_id": m.msg_id, "kind": kind, "queued": True}, status=201)
+
+    @action(detail=True, methods=["post"])
+    def requeue(self, request, pid=None):
+        """멎은 요청 다시 맡기기 — 픽됐지만 응답·완료 없이 멈춘 요청의 picked를 해제해 큐로 되돌린다.
+        러너가 죽어 영영 '작업 중'으로 박제된 경우 소유자/멤버가 복구. POST /api/projects/{pid}/requeue/"""
+        import time
+        from .social import current_person, is_owner, is_member
+        cur = current_person(request)
+        if not cur:
+            return Response({"detail": "로그인이 필요해요."}, status=401)
+        proj = self.get_object()
+        if not (is_owner(proj, cur) or is_member(proj, cur)):
+            return Response({"detail": "이 채널의 멤버만 할 수 있어요."}, status=403)
+        gms = list(GuideMessage.objects.filter(channel_id=proj.id))
+        responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
+        now = time.time()
+        n = 0
+        for g in gms:                                  # 픽됐지만 무응답·미완·120초+ 경과 = 멎음
+            p = g.payload or {}
+            if (g.sender_id == 0 and g.msg_type == "request" and p.get("picked")
+                    and not p.get("done_ts") and g.msg_id not in responded
+                    and (now - (p.get("picked_ts") or g.ts or 0)) > 120):
+                np = dict(p)
+                np.pop("picked", None); np.pop("done_ts", None); np.pop("picked_ts", None)
+                GuideMessage.objects.filter(msg_id=g.msg_id).update(payload=np)
+                n += 1
+        return Response({"requeued": n})
 
     @action(detail=True, methods=["post"])
     def say(self, request, pid=None):

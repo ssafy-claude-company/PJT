@@ -92,3 +92,51 @@ class DeniedFeedTest(TestCase):
         kinds = [e["kind"] for e in res.data]
         self.assertIn("work", kinds)
         self.assertNotIn("denied", kinds)   # 게이트 거부는 '한 일'이 아니라 '막힌 시도' — 피드 제외
+
+
+class RequeueStuckTest(TestCase):
+    """멎은 요청(픽됐지만 응답·완료 없이 멈춤) 다시 맡기기 — 소유자/멤버 세션인증 복구."""
+
+    def _setup(self):
+        from sns.models import Project, Person, Membership
+        proj = Project.objects.create(pid="S-9100", name="멎은 채널", visibility="public")
+        Person.objects.create(handle="tester", name="테스터", token="tok_requeue_1")
+        Membership.objects.create(person=Person.objects.get(handle="tester"), project=proj, status="active")
+        return proj
+
+    def _stuck(self, proj, picked_ago):
+        from sns.models import GuideMessage
+        t = time.time() - picked_ago
+        return GuideMessage.objects.create(
+            channel_id=proj.id, thread_id=proj.id, sender_id=0, msg_type="request",
+            kind="W", body="게임 만들어줘", ts=t, payload={"picked": True, "picked_ts": t})
+
+    def _client(self, tok):
+        c = APIClient()
+        c.credentials(HTTP_AUTHORIZATION=f"Token {tok}")
+        return c
+
+    def test_멎은요청은_멤버가_다시맡기면_재큐된다(self):
+        from sns.models import GuideMessage
+        proj = self._setup()
+        gm = self._stuck(proj, 300)                     # 5분 전 픽, 무응답·미완
+        res = self._client("tok_requeue_1").post(f"/api/projects/{proj.pid}/requeue/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["requeued"], 1)
+        self.assertFalse((GuideMessage.objects.get(msg_id=gm.msg_id).payload or {}).get("picked"))
+
+    def test_방금_픽한_요청은_재큐_안됨(self):                  # staleness 가드: 작업 중을 끊지 않음
+        from sns.models import GuideMessage
+        proj = self._setup()
+        gm = self._stuck(proj, 5)
+        res = self._client("tok_requeue_1").post(f"/api/projects/{proj.pid}/requeue/")
+        self.assertEqual(res.data["requeued"], 0)
+        self.assertTrue((GuideMessage.objects.get(msg_id=gm.msg_id).payload or {}).get("picked"))
+
+    def test_권한_비로그인401_비멤버403(self):
+        from sns.models import Person
+        proj = self._setup()
+        self._stuck(proj, 300)
+        self.assertEqual(APIClient().post(f"/api/projects/{proj.pid}/requeue/").status_code, 401)
+        Person.objects.create(handle="outsider", name="남", token="tok_out")
+        self.assertEqual(self._client("tok_out").post(f"/api/projects/{proj.pid}/requeue/").status_code, 403)

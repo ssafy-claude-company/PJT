@@ -28,6 +28,9 @@ const TEMPLATES = [
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''))
 const baton = computed(() => (stats.value?.baton?.project ? stats.value.baton : null))
 const isLiveNow = computed(() => baton.value?.ts && (Date.now() / 1000 - baton.value.ts) < 300)
+// 내/공개 섹션 분리 — 평면 더미 대신 '내 워크스페이스 vs 둘러볼 공개'로.
+const myChannels = computed(() => channels.value.filter((c) => mine.value.has(c.pid)))
+const publicChannels = computed(() => channels.value.filter((c) => !mine.value.has(c.pid)))
 
 const showNew = ref(false)
 const pendingTpl = ref(null)
@@ -101,16 +104,36 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- 채널 -->
-    <section class="block">
-      <div class="sec-h">채널 <span class="cnt">{{ channels.length }}</span></div>
-      <div v-if="loading" class="empty"><span class="spin"></span></div>
-      <div v-else-if="!channels.length" class="empty">아직 채널이 없어요. 위에서 새로 시작해보세요.</div>
-      <div v-else class="chan-list">
-        <router-link v-for="c in channels" :key="c.pid" class="chan-row" :to="`/channels/${c.pid}`">
+    <!-- 내 채널 -->
+    <section v-if="myChannels.length" class="block">
+      <div class="sec-h">내 채널 <span class="cnt">{{ myChannels.length }}</span></div>
+      <div class="chan-list">
+        <router-link v-for="c in myChannels" :key="c.pid" class="chan-row" :to="`/channels/${c.pid}`">
           <span class="hash-av" :class="{ active: stats?.baton?.project === c.pid }"><Icon name="hash" :size="16" /></span>
           <div class="chan-meta">
-            <div class="chan-name">{{ c.name || c.pid }}<span v-if="mine.has(c.pid)" class="mine-tag">내 채널</span></div>
+            <div class="chan-name">{{ c.name || c.pid }}</div>
+            <div class="chan-sub"><template v-if="c.leader_role">리더 {{ c.leader_role }}</template><template v-else-if="!c.name">{{ c.pid }}</template><template v-else>채팅 채널</template></div>
+          </div>
+          <div class="chan-right">
+            <span v-if="stats?.baton?.project === c.pid" class="live-baton" style="padding:3px 9px"><i class="pulse"></i>활동</span>
+            <span class="cact">{{ ((c.event_count || 0) + (c.message_count || 0)).toLocaleString() }}</span>
+            <Icon name="chevron" :size="16" class="chev-r" />
+          </div>
+        </router-link>
+      </div>
+    </section>
+
+    <!-- 공개 채널 -->
+    <section class="block">
+      <div class="sec-h">공개 채널 <span class="cnt">{{ publicChannels.length }}</span></div>
+      <div v-if="loading" class="empty"><span class="spin"></span></div>
+      <div v-else-if="!channels.length" class="empty">아직 채널이 없어요. 위에서 새로 시작해보세요.</div>
+      <div v-else-if="!publicChannels.length" class="empty">공개된 채널이 없어요. 내 채널에서 이어가 보세요.</div>
+      <div v-else class="chan-list">
+        <router-link v-for="c in publicChannels" :key="c.pid" class="chan-row" :to="`/channels/${c.pid}`">
+          <span class="hash-av" :class="{ active: stats?.baton?.project === c.pid }"><Icon name="hash" :size="16" /></span>
+          <div class="chan-meta">
+            <div class="chan-name">{{ c.name || c.pid }}</div>
             <div class="chan-sub"><template v-if="c.leader_role">리더 {{ c.leader_role }}</template><template v-else-if="!c.name">{{ c.pid }}</template><template v-else>채팅 채널</template></div>
           </div>
           <div class="chan-right">

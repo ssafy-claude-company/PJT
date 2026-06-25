@@ -78,6 +78,8 @@ def _local_pick(msg_id, done=False):
     p["picked"] = True
     if done:
         p["done_ts"] = time.time()
+    else:
+        p.setdefault("picked_ts", time.time())   # 멎은 요청 판정(픽 후 무응답 경과)용
     GuideMessage.objects.filter(msg_id=msg_id).update(payload=p)
 
 
