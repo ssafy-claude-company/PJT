@@ -91,6 +91,9 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
                 a.avatar = v if _re.fullmatch(r"#[0-9a-fA-F]{3,8}", v) else ""
             else:
                 setattr(a, f, v[:200] if f == "persona" else v[:60])
+        if "model" in request.data:                  # per-agent 모델 — 허용값만(그 외/빈값=러너 전역 기본)
+            mv = str(request.data["model"]).strip().lower()
+            a.model = mv if mv in ("opus", "sonnet", "haiku") else ""
         a.save()
         return Response(AgentSerializer(a, context=self.get_serializer_context()).data)
 

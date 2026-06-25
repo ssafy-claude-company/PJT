@@ -209,3 +209,30 @@ class StopWorkTest(TestCase):
         c = APIClient()
         c.credentials(HTTP_AUTHORIZATION="Token tok_out2")
         self.assertEqual(c.post(f"/api/projects/{proj.pid}/stop/").status_code, 403)
+
+
+class PerAgentModelTest(TestCase):
+    """per-agent 모델 — 편집으로 직원별 LLM 지정(소유자만, 허용값만). 러너가 model_map을 빌더에 전달해
+    그 봇만 build_options에 model override를 싣는다(전체 체인은 tests/test_sys 의 _make_builder 검증)."""
+
+    def test_edit_모델_허용값만_소유자만(self):
+        from sns.models import Agent, Person
+        owner = Person.objects.create(handle="own", name="주인", token="tok_own")
+        a = Agent.objects.create(bot_id=920001, role="백엔드", owner=owner, visibility="public")
+        c = APIClient()
+        c.credentials(HTTP_AUTHORIZATION="Token tok_own")
+        self.assertEqual(c.patch(f"/api/agents/{a.bot_id}/edit/", {"model": "opus"}).data["model"], "opus")
+        self.assertEqual(c.patch(f"/api/agents/{a.bot_id}/edit/", {"model": "gpt-9"}).data["model"], "")  # 허용 외 → 전역
+        Person.objects.create(handle="other", name="남", token="tok_other")
+        c2 = APIClient()
+        c2.credentials(HTTP_AUTHORIZATION="Token tok_other")
+        self.assertEqual(c2.patch(f"/api/agents/{a.bot_id}/edit/", {"model": "opus"}).status_code, 403)  # 남의 직원
+
+    def test_local_models_지정봇만(self):
+        from sns.models import Agent
+        from sns.management.commands.run_organt_sns import _local_models
+        Agent.objects.create(bot_id=920010, role="백엔드", model="opus")
+        Agent.objects.create(bot_id=920011, role="QA", model="")          # 미지정 → 전역
+        mm = _local_models()
+        self.assertEqual(mm.get(920010), "opus")
+        self.assertNotIn(920011, mm)

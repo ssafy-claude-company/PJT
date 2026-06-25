@@ -18,6 +18,8 @@ class Agent(models.Model):
     is_leader = models.BooleanField(default=False)
     persona = models.TextField(blank=True, help_text="[커스텀] 봇 인격(시스템 프롬프트)")
     avatar = models.CharField(max_length=8, blank=True, help_text="[커스텀] 아바타 색(hex) 또는 비움(이름 모노그램)")
+    model = models.CharField(max_length=20, blank=True,
+                             help_text="[per-agent 모델] 이 직원이 쓸 LLM(opus/sonnet/haiku). 비우면 러너 전역 기본")
     created_via = models.CharField(max_length=10, default="discord",
                                    help_text="discord(두뇌 채용) | sns(스튜디오 채용)")
     owner = models.ForeignKey("Person", null=True, blank=True, on_delete=models.SET_NULL,

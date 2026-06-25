@@ -209,9 +209,13 @@ async def _connect(token: str, message_content: bool = False,
     raise last
 
 
-def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
-    """role에 맞는 도구·권한·훅·State를 갖춘 Organt를 만드는 빌더를 돌려준다."""
+def _make_builder(cfg: Config, audit: AuditLog, bot_info=None, model_map=None):
+    """role에 맞는 도구·권한·훅·State를 갖춘 Organt를 만드는 빌더를 돌려준다.
+    model_map({organt_id: model})이 주어지면 그 봇만 build_options에 model override를 싣는다
+    (per-agent 모델 — 매체가 직원별 LLM 지정. 디스코드 경로는 model_map 미전달이라 동작 불변).
+    Config가 frozen이라 전역 cfg.model을 못 바꾸므로, override 인자로 봇별 모델을 통과시킨다."""
     bot_info = bot_info or {}
+    model_map = model_map or {}
     def organt_builder(organt_id, server, role, flow=None, state_tag=None):
         # 리더도 한 명의 직원 — 구현 도구(Write/Edit)를 그대로 갖는다. 차이는 권한이 아니라
         # 역할: 목표는 팀 합의로 정하고(set_goal), Work 위임 본문은 '스펙'이 아니라
@@ -252,13 +256,18 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None):
         # 세션이 안 깨진다(카빙 폴더는 원 cwd의 하위라 파일 쓰기 범위는 동일, run은 flow.workspace 사용).
         # 라이브 관측: cwd가 바뀐 리더 이어가기가 'No conversation found'로 12회 전부 헛돈 뒤 미완 종료.
         cwd = pinned_cwd(state_path) or cwd
-        return Organt(cfg, build_options(
-            cfg, cwd=cwd, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
+        _bopts = dict(
+            cwd=cwd, allowed_tools=allowed, mcp_servers={"guide": server}, max_turns=turns,
             hooks={
                 "PreToolUse": [HookMatcher(hooks=[make_pre_tool_use_hook(audit, allowed, actor=organt_id, role=label, flow=flow)])],
                 "PostToolUse": [HookMatcher(hooks=[make_post_tool_use_hook(audit, actor=organt_id, role=label, flow=flow)])],
             },
-        ), state_path=str(state_path), on_activity=heartbeat)
+        )
+        _m = model_map.get(organt_id)
+        if _m:                                   # [per-agent 모델] 지정 봇만 override(없으면 cfg.model=전역)
+            _bopts["model"] = _m
+        return Organt(cfg, build_options(cfg, **_bopts),
+                      state_path=str(state_path), on_activity=heartbeat)
     return organt_builder
 
 

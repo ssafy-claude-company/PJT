@@ -13,7 +13,7 @@ class AgentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Agent
-        fields = ["id", "bot_id", "name", "role", "is_leader", "persona", "avatar",
+        fields = ["id", "bot_id", "name", "role", "is_leader", "persona", "avatar", "model",
                   "created_via", "event_count", "distill_count", "owner_handle", "visibility", "joined_at"]
 
     def get_bot_id(self, obj):

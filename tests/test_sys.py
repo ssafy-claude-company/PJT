@@ -5107,3 +5107,23 @@ def test_request_cancel_사용자_작업중지():
     assert s.request_cancel(999) is False    # 활성 흐름 없는 채널 → False
     f.done = True
     assert s.request_cancel(500) is False    # 이미 끝난 흐름은 취소 대상 아님
+
+
+def test_per_agent_모델이_organt_옵션까지_도달():
+    """per-agent 모델(매체가 직원별 LLM 지정) — _make_builder(model_map)이 지정 봇에만 build_options
+    model override를 실어 Organt 옵션까지 도달하고, 미지정 봇·디스코드 경로는 전역 cfg.model 그대로.
+    Config가 frozen이라 전역 스왑 불가 → override 인자로 봇별 모델을 통과시키는 경로의 회귀 가드."""
+    import tempfile
+    from pathlib import Path
+    from src.config import Config
+    from src.audit import AuditLog
+    from src.main import _make_builder
+    tmp = Path(tempfile.mkdtemp()); (tmp / "logs").mkdir(exist_ok=True)
+    cfg = Config(system_bot_token="x", channel_id=1, model="sonnet",
+                 workspace_dir=tmp, audit_log_path=tmp / "logs" / "audit.jsonl")
+    audit = AuditLog(cfg.audit_log_path)
+    builder = _make_builder(cfg, audit, {111: "백엔드", 222: "QA"}, {111: "opus"})
+    assert builder(111, {}, "백엔드").options.model == "opus"     # 지정 봇 → per-agent override
+    assert builder(222, {}, "QA").options.model == "sonnet"       # 미지정 봇 → 전역
+    base = _make_builder(cfg, audit, {111: "백엔드"})              # model_map 미전달(디스코드 경로)
+    assert base(111, {}, "백엔드").options.model == "sonnet"       # 동작 불변

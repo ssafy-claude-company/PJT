@@ -27,7 +27,7 @@ const profile = ref(null)
 const loading = ref(true)
 const editing = ref(false)
 const saving = ref(false)
-const form = ref({ name: '', role: '', avatar: '', persona: '' })
+const form = ref({ name: '', role: '', avatar: '', persona: '', model: '' })
 
 const error = ref(false)
 async function load() {
@@ -42,7 +42,7 @@ async function load() {
   finally { loading.value = false }
 }
 function startEdit() {
-  form.value = { name: agent.value.name || '', role: agent.value.role || '', avatar: agent.value.avatar || '', persona: agent.value.persona || '' }
+  form.value = { name: agent.value.name || '', role: agent.value.role || '', avatar: agent.value.avatar || '', persona: agent.value.persona || '', model: agent.value.model || '' }
   editing.value = true
 }
 async function saveEdit() {
@@ -86,6 +86,7 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
               <span v-if="isMine" class="badge accent">내 직원</span>
               <span v-else class="badge">공개 직원</span>
               <span v-if="isMine" class="badge" :class="{ ok: isPublic }">{{ isPublic ? '공유됨 · 공개' : '비공개' }}</span>
+              <span v-if="agent.model" class="badge" :title="'이 직원이 쓰는 LLM'">{{ agent.model }}</span>
             </div>
           </div>
           <div v-if="isMine && !editing" class="flex" style="gap:7px">
@@ -130,6 +131,16 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
             <button class="sw" :class="{ on: !form.avatar }" :style="{ background: avatarBg({ name: form.name, role: form.role }) }" title="자동" @click="form.avatar = ''"></button>
             <button v-for="c in AVATAR_COLORS" :key="c" class="sw" :class="{ on: form.avatar === c }" :style="{ background: c }" @click="form.avatar = c"></button>
           </div>
+        </div>
+        <div>
+          <label class="lbl">LLM 모델</label>
+          <div class="seg">
+            <button type="button" :class="{ on: !form.model }" @click="form.model = ''">기본</button>
+            <button type="button" :class="{ on: form.model === 'opus' }" @click="form.model = 'opus'">Opus</button>
+            <button type="button" :class="{ on: form.model === 'sonnet' }" @click="form.model = 'sonnet'">Sonnet</button>
+            <button type="button" :class="{ on: form.model === 'haiku' }" @click="form.model = 'haiku'">Haiku</button>
+          </div>
+          <div class="muted" style="font-size:11.5px;margin-top:6px">이 직원이 쓸 LLM. ‘기본’이면 러너 전역 모델을 따릅니다(협업 엔진 가동 시 적용).</div>
         </div>
         <div>
           <label class="lbl">성격</label>

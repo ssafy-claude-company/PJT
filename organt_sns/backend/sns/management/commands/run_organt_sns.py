@@ -60,6 +60,11 @@ def _local_roster():
     return bot_info, leader
 
 
+def _local_models():
+    """{bot_id: model} — per-agent 모델이 지정된 봇만(빈값=러너 전역 기본)."""
+    return {int(a.bot_id): a.model.strip() for a in Agent.objects.exclude(model="") if a.model.strip()}
+
+
 def _local_pending(seen):
     out = []
     for m in GuideMessage.objects.filter(msg_type="request", sender_id=0).order_by("msg_id"):
@@ -121,7 +126,7 @@ class Command(BaseCommand):
                 self.stderr.write("--remote 에는 토큰이 필요합니다(--token 또는 ORGANT_GUIDE_TOKEN). 종료.")
                 return
             guide = HttpSnsGuide(remote, token)
-            bot_info, leader = await self._remote_roster(guide)
+            bot_info, leader, model_map = await self._remote_roster(guide)
 
             async def fetch_pending(seen):
                 data = await guide._get("/api/guide/pending/")
@@ -140,6 +145,7 @@ class Command(BaseCommand):
         else:
             guide = SnsGuide()
             bot_info, leader = await sync_to_async(_local_roster)()
+            model_map = await sync_to_async(_local_models)()
 
             async def fetch_pending(seen):
                 return await sync_to_async(_local_pending)(seen)
@@ -159,13 +165,17 @@ class Command(BaseCommand):
             self.stderr.write("로스터가 비어 있습니다 — 봇을 먼저 채용하세요(스튜디오). 종료.")
             return
 
+        # per-agent 모델 — 빌더 팩토리에 model_map을 넘겨 봇별 LLM 주입(빈 맵이면 디스코드 경로와 동일).
         sysm = Sys(
-            guide, SNS_GUILD_ID, _make_builder(cfg, audit, bot_info), bot_info=bot_info,
+            guide, SNS_GUILD_ID, _make_builder(cfg, audit, bot_info, model_map), bot_info=bot_info,
             workspace=str(cfg.workspace_dir), projects_path=str(_STATE / "projects.json"),
             session_dir=str(_STATE), jobs_path=str(_STATE / "jobs.json"), seed_path=None)
 
         self.stdout.write(f"[SnsGuide 러너 · {where}] 직원 {len(bot_info)}명 · 리더={bot_info.get(leader)}({leader})")
-        self.stdout.write(f"  상태(라이브 SYS와 분리): {_STATE} · 모델: {cfg.model or '(SDK 기본)'}")
+        self.stdout.write(f"  상태(라이브 SYS와 분리): {_STATE} · 전역 모델: {cfg.model or '(SDK 기본)'}")
+        if model_map:
+            self.stdout.write(f"  per-agent 모델 {len(model_map)}명: " +
+                              ", ".join(f"{bot_info.get(b, b)}={m}" for b, m in list(model_map.items())[:8]))
 
         if opts["bootstrap_check"]:
             pend = await fetch_pending(set())
@@ -231,18 +241,20 @@ class Command(BaseCommand):
             await asyncio.sleep(opts["poll"])
 
     async def _remote_roster(self, guide):
-        """원격 /api/agents/ → bot_info({bot_id: role})와 리더."""
+        """원격 /api/agents/ → bot_info({bot_id: role}), 리더, model_map({bot_id: model})."""
         data = await guide._get("/api/agents/")
         rows = data if isinstance(data, list) else data.get("results", [])
-        bot_info, leader = {}, None
+        bot_info, leader, model_map = {}, None, {}
         best = -1
         for a in rows:
             bid = int(a["bot_id"])
             bot_info[bid] = a.get("role") or "예비"
+            if (a.get("model") or "").strip():
+                model_map[bid] = a["model"].strip()
             if a.get("is_leader"):
                 leader = bid
             if (a.get("event_count") or 0) > best:
                 best, _fallback = a.get("event_count") or 0, bid
         if leader is None and rows:
             leader = int(rows[0]["bot_id"])
-        return bot_info, leader
+        return bot_info, leader, model_map
