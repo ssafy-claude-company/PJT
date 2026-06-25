@@ -5,27 +5,32 @@ import api from './api'
 import Icon from './components/Icon.vue'
 import Dialog from './components/Dialog.vue'
 import SignIn from './components/SignIn.vue'
-import { askPrompt } from './dialog'
+import NewChannel from './components/NewChannel.vue'
 import { me, isAuthed, logout } from './user'
 import { avatarColor } from './avatar'
 
 const route = useRoute()
 const router = useRouter()
 const myChannels = ref([])      // 내 워크스페이스(내가 멤버/리드인 채널)
-const explore = ref([])         // 둘러보기(AI 쇼케이스 채널)
+const explore = ref([])         // 둘러보기(공개 채널)
 const stats = ref(null)
 const drawer = ref(false)
 const q = ref('')
 const showProfile = ref(false)
+const showNew = ref(false)
+const creatingChan = ref(false)
 let timer = null
 
-async function newChannel() {
-  const name = await askPrompt({ title: '새 채널', placeholder: '채널 이름 (예: 포트폴리오 사이트)' })
-  if (!name) return
-  const c = await api.createChannel({ name })
-  await load()
-  drawer.value = false
-  router.push(`/channels/${c.pid}`)
+function newChannel() { showNew.value = true }
+async function onCreateChannel(payload) {
+  creatingChan.value = true
+  try {
+    const c = await api.createChannel(payload)
+    showNew.value = false
+    drawer.value = false
+    await load()
+    router.push(`/channels/${c.pid}`)
+  } finally { creatingChan.value = false }
 }
 
 async function load() {
@@ -138,5 +143,6 @@ async function doLogout() { await logout(); router.replace('/login') }
     <main class="main"><router-view /></main>
     <Dialog />
     <SignIn :open="showProfile" @close="showProfile = false" />
+    <NewChannel :open="showNew" :busy="creatingChan" @create="onCreateChannel" @close="showNew = false" />
   </div>
 </template>

@@ -9,11 +9,12 @@ class AgentSerializer(serializers.ModelSerializer):
     bot_id = serializers.SerializerMethodField()
     event_count = serializers.IntegerField(read_only=True, required=False)
     distill_count = serializers.SerializerMethodField()
+    owner_handle = serializers.CharField(source="owner.handle", default=None, read_only=True)
 
     class Meta:
         model = Agent
         fields = ["id", "bot_id", "name", "role", "is_leader", "persona", "avatar",
-                  "created_via", "event_count", "distill_count"]
+                  "created_via", "event_count", "distill_count", "owner_handle"]
 
     def get_bot_id(self, obj):
         return str(obj.bot_id)
@@ -66,11 +67,12 @@ class ProjectSerializer(serializers.ModelSerializer):
     event_count = serializers.IntegerField(read_only=True, required=False)
     task_count = serializers.IntegerField(read_only=True, required=False)
     message_count = serializers.IntegerField(read_only=True, required=False)
+    owner_handle = serializers.CharField(source="owner.handle", default=None, read_only=True)
 
     class Meta:
         model = Project
         fields = ["id", "pid", "name", "leader", "leader_role", "status",
-                  "event_count", "task_count", "message_count"]
+                  "event_count", "task_count", "message_count", "owner_handle", "visibility"]
 
 
 class ProjectDetailSerializer(ProjectSerializer):

@@ -3,14 +3,14 @@ import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import Icon from '../components/Icon.vue'
+import NewChannel from '../components/NewChannel.vue'
 import { monogram, avatarColor } from '../avatar'
-import { askPrompt } from '../dialog'
 
 const router = useRouter()
 const channels = ref([])
 const stats = ref(null)
 const loading = ref(true)
-const creating = ref('')
+const creating = ref(false)
 const mine = ref(new Set())     // 내 워크스페이스 pid(멤버십 기준)
 
 const TEMPLATES = [
@@ -29,16 +29,18 @@ const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''))
 const baton = computed(() => (stats.value?.baton?.project ? stats.value.baton : null))
 const isLiveNow = computed(() => baton.value?.ts && (Date.now() / 1000 - baton.value.ts) < 300)
 
-async function createFromTemplate(t) {
-  if (creating.value) return
-  creating.value = t.key
+const showNew = ref(false)
+const pendingTpl = ref(null)
+function createFromTemplate(t) { pendingTpl.value = t; showNew.value = true }
+async function onCreate({ name, visibility }) {
+  creating.value = true
   try {
-    const name = await askPrompt({ title: '새 프로젝트', placeholder: '채널 이름', value: t.name })
-    if (!name) return
-    const c = await api.createChannel({ name })
-    if (t.goal) { try { await api.makeRequest(c.pid, { kind: 'W', body: t.goal }) } catch (e) { /* 채널은 생성됨 */ } }
+    const c = await api.createChannel({ name, visibility })
+    const t = pendingTpl.value
+    if (t && t.goal) { try { await api.makeRequest(c.pid, { kind: 'W', body: t.goal }) } catch (e) { /* 채널은 생성됨 */ } }
+    showNew.value = false
     router.push(`/channels/${c.pid}`)
-  } finally { creating.value = '' }
+  } finally { creating.value = false }
 }
 
 onMounted(async () => {
@@ -92,7 +94,7 @@ onMounted(async () => {
         <button v-for="t in TEMPLATES" :key="t.key" class="tpl" :disabled="creating" @click="createFromTemplate(t)">
           <span class="tpl-plus"><Icon name="plus" :size="15" /></span>
           <span class="tpl-bd">
-            <span class="l">{{ creating === t.key ? '만드는 중…' : t.label }}</span>
+            <span class="l">{{ t.label }}</span>
             <span class="d">{{ t.desc }}</span>
           </span>
         </button>
@@ -119,6 +121,7 @@ onMounted(async () => {
         </router-link>
       </div>
     </section>
+    <NewChannel :open="showNew" :initial-name="pendingTpl ? pendingTpl.name : ''" :busy="creating" @create="onCreate" @close="showNew = false" />
   </div>
 </template>
 

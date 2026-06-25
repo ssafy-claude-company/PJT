@@ -20,6 +20,9 @@ class Agent(models.Model):
     avatar = models.CharField(max_length=8, blank=True, help_text="[커스텀] 아바타 색(hex) 또는 비움(이름 모노그램)")
     created_via = models.CharField(max_length=10, default="discord",
                                    help_text="discord(두뇌 채용) | sns(스튜디오 채용)")
+    owner = models.ForeignKey("Person", null=True, blank=True, on_delete=models.SET_NULL,
+                              related_name="owned_agents",
+                              help_text="소유자(사용자가 채용한 '나만의 직원'). null=공개 쇼케이스 직원")
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -46,11 +49,17 @@ class RoleProfile(models.Model):
 
 class Project(models.Model):
     """프로젝트(P-번호) — 한 작품의 협업 공간."""
+    VISIBILITY = [("public", "공개"), ("private", "비공개")]
     pid = models.CharField(max_length=20, unique=True, help_text="P-032 등")
     name = models.CharField(max_length=200, blank=True)
     leader = models.ForeignKey(Agent, null=True, blank=True, on_delete=models.SET_NULL,
                                related_name="led_projects")
     status = models.CharField(max_length=40, blank=True)
+    owner = models.ForeignKey("Person", null=True, blank=True, on_delete=models.SET_NULL,
+                              related_name="owned_projects",
+                              help_text="채널 소유자(만든 사람). null=공개 쇼케이스 채널")
+    # 기본 public: 시드(쇼케이스)는 공개 유지. 사용자 생성은 뷰에서 명시적으로 private 지정.
+    visibility = models.CharField(max_length=10, choices=VISIBILITY, default="public", db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

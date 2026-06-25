@@ -40,6 +40,20 @@ def _pub(p):
     return {"handle": p.handle, "name": p.name, "color": p.color, "bio": p.bio, "is_guest": p.is_guest}
 
 
+# ── 접근 제어(소유·멤버십) — 멀티유저 프라이버시의 핵심 ──────────
+def is_member(proj, person):
+    return bool(person) and Membership.objects.filter(project=proj, person=person).exists()
+
+
+def is_owner(proj, person):
+    return bool(person) and proj.owner_id == person.id
+
+
+def can_read(proj, person):
+    """공개 채널은 누구나, 비공개 채널은 멤버만 읽는다."""
+    return proj.visibility == "public" or is_member(proj, person)
+
+
 def _clean_color(c):
     return c if _HEX.fullmatch(c or "") else ""
 
@@ -190,14 +204,16 @@ def unfriend(request, handle):
 @api_view(["GET", "POST"])
 @permission_classes([AllowAny])
 def members(request, pid):
-    """GET: 채널 멤버. POST {handle}: 친구를 채널에 초대. 인증 필요."""
+    """GET: 채널 멤버. POST {handle}: 친구를 채널에 초대. 멤버만(비공개 비노출)."""
     cur = current_person(request)
     if not cur:
         return Response({"detail": "로그인이 필요해요."}, status=401)
     proj = Project.objects.filter(pid=pid).first()
-    if not proj:
+    if not proj or not can_read(proj, cur):     # 비공개 채널은 멤버 아니면 존재조차 숨김
         return Response({"detail": "채널 없음"}, status=404)
     if request.method == "POST":
+        if not is_member(proj, cur):
+            return Response({"detail": "이 채널의 멤버만 초대할 수 있어요."}, status=403)
         h = (request.data.get("handle") or "").strip().lower()
         other = Person.objects.filter(handle=h).first()
         if not other:

@@ -1,13 +1,15 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
 import EventItem from '../components/EventItem.vue'
 import Icon from '../components/Icon.vue'
 import { monogram, avatarBg, AVATAR_COLORS } from '../avatar'
+import { me } from '../user'
 
 const route = useRoute()
 const agent = ref(null)
+const isMine = computed(() => agent.value && agent.value.owner_handle && agent.value.owner_handle === me.handle)
 const events = ref([])
 const profile = ref(null)
 const loading = ref(true)
@@ -55,10 +57,11 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
             <div class="flex" style="gap:7px;margin-top:4px">
               <span class="muted" style="font-size:14px">{{ agent.role || '대기 중' }}</span>
               <span v-if="agent.is_leader" class="badge lead">리더</span>
-              <span v-if="agent.created_via === 'sns'" class="badge accent">내가 만든</span>
+              <span v-if="isMine" class="badge accent">내 직원</span>
+              <span v-else class="badge">공개 직원</span>
             </div>
           </div>
-          <button v-if="!editing" class="btn ghost sm" @click="startEdit"><Icon name="edit" :size="15" />정보 수정</button>
+          <button v-if="!editing && isMine" class="btn ghost sm" @click="startEdit"><Icon name="edit" :size="15" />정보 수정</button>
         </div>
         <div class="muted mono" style="font-size:12px;margin-top:8px">활동 {{ agent.event_count }}<span v-if="agent.distill_count"> · 성장 {{ agent.distill_count }}</span></div>
         <div v-if="agent.persona && !editing" class="persona">{{ agent.persona }}</div>

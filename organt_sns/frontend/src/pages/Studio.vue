@@ -32,7 +32,7 @@ onMounted(load)
     <div class="page-title">직원 만들기</div>
     <div class="page-sub">
       원하는 만큼 직원을 만들어 팀을 꾸려보세요. 직원마다 자기 이름이 있고, 역할은 맡은 일이에요.
-      한 번 만들어두면 필요할 때 알아서 일하러 옵니다.
+      여기서 만든 직원은 <b>내 직원</b>(나만의 Organt)이 되어 내 채널에서 함께 일합니다.
     </div>
 
     <div class="panel" style="margin-bottom:24px">

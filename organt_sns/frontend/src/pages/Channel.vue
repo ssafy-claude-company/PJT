@@ -225,8 +225,15 @@ async function invite(handle) {
   try { members.value = await api.invite(route.params.pid, handle) } catch (e) { /* 권한·중복 무시 */ }
 }
 
-// 채널 관리(관리 기능)
-const isMine = computed(() => !/^P-/.test(route.params.pid))
+// 채널 관리·접근(소유자/멤버 기반)
+const isOwner = computed(() => !!data.value?.is_owner)
+const canInvite = computed(() => !!data.value?.is_member && !me.is_guest)
+const isPublic = computed(() => data.value?.visibility === 'public')
+async function doVisibility() {
+  menu.value = false
+  const r = await api.setChannelVisibility(route.params.pid)
+  if (data.value) data.value.visibility = r.visibility
+}
 async function doRename() {
   menu.value = false
   const name = await askPrompt({ title: '채널 이름 변경', placeholder: '새 이름', value: data.value?.name || '' })
@@ -262,6 +269,9 @@ watch(() => route.params.pid, () => {
 <template>
   <div class="chan-head">
     <span class="h">{{ data?.name || route.params.pid }}</span>
+    <span v-if="data" class="vis-badge" :class="{ pub: isPublic }" :title="isPublic ? '공개 채널 — 누구나 열람' : '비공개 채널 — 멤버만'">
+      <Icon :name="isPublic ? 'globe' : 'lock'" :size="12" />{{ isPublic ? '공개' : '비공개' }}
+    </span>
     <span class="cid">{{ route.params.pid }}</span>
     <span v-if="batonHere" class="live-baton"><i class="pulse"></i>{{ batonHere }} 작업 중</span>
     <span v-else-if="live" class="muted" style="font-size:11.5px" title="자동 갱신 중">실시간 보기</span>
@@ -286,7 +296,7 @@ watch(() => route.params.pid, () => {
               </div>
               <div v-if="!members.length" class="mp-empty">아직 멤버가 없어요. 친구를 초대해 함께 만들어보세요.</div>
             </div>
-            <template v-if="!me.is_guest">
+            <template v-if="canInvite">
               <div class="mp-sec">친구 초대</div>
               <div class="mp-list">
                 <div v-for="f in invitable" :key="f.handle" class="mp-row">
@@ -297,7 +307,8 @@ watch(() => route.params.pid, () => {
                 <div v-if="!invitable.length" class="mp-empty">초대할 친구가 없어요. <router-link to="/friends" class="mp-link">친구 추가 →</router-link></div>
               </div>
             </template>
-            <div v-else class="mp-empty">왼쪽 아래에서 프로필을 만들면 친구를 초대할 수 있어요.</div>
+            <div v-else-if="!me.is_guest" class="mp-empty">이 채널의 멤버만 친구를 초대할 수 있어요.</div>
+            <div v-else class="mp-empty">체험 계정은 초대할 수 없어요. 회원가입하면 함께 협업할 수 있어요.</div>
           </div>
         </template>
       </div>
@@ -307,11 +318,14 @@ watch(() => route.params.pid, () => {
         <button class="iconbtn" title="채널 관리" aria-label="채널 관리" @click="menu = !menu"><Icon name="more" /></button>
         <div v-if="menu" class="menu-back" @click="menu = false"></div>
         <div v-if="menu" class="menu-pop">
-          <button @click="doRename"><Icon class="ic" name="edit" :size="15" />이름 변경</button>
-          <button @click="doArchive"><Icon class="ic" name="archive" :size="15" />보관 / 복원</button>
-          <template v-if="isMine"><div class="menu-sep"></div>
-            <button @click="doRemove" class="danger"><Icon class="ic" name="trash" :size="15" />삭제</button></template>
-          <div v-else class="menu-note">디스코드 쇼케이스 채널은 삭제 불가</div>
+          <template v-if="isOwner">
+            <button @click="doVisibility"><Icon class="ic" :name="isPublic ? 'lock' : 'globe'" :size="15" />{{ isPublic ? '비공개로 전환' : '공개로 전환' }}</button>
+            <button @click="doRename"><Icon class="ic" name="edit" :size="15" />이름 변경</button>
+            <button @click="doArchive"><Icon class="ic" name="archive" :size="15" />보관 / 복원</button>
+            <div class="menu-sep"></div>
+            <button @click="doRemove" class="danger"><Icon class="ic" name="trash" :size="15" />삭제</button>
+          </template>
+          <div v-else class="menu-note">채널 소유자만 관리할 수 있어요.</div>
         </div>
       </div>
     </div>

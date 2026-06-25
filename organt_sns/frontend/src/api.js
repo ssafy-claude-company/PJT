@@ -58,6 +58,7 @@ export default {
   // 채널 관리(관리 기능)
   renameChannel: (pid, name) => http.patch(`/projects/${pid}/rename/`, { name }).then((r) => r.data),
   archiveChannel: (pid) => http.post(`/projects/${pid}/archive/`).then((r) => r.data),
+  setChannelVisibility: (pid) => http.post(`/projects/${pid}/visibility/`).then((r) => r.data),
   removeChannel: (pid) => http.delete(`/projects/${pid}/remove/`).then((r) => r.data),
 
   // 봉투 유지(count·다음 페이지 필요) — 협업 피드 페이지네이션

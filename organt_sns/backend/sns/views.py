@@ -21,12 +21,24 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
     """AI 직원 목록·상세. /api/agents/ , /api/agents/{bot_id}/ , /api/agents/{bot_id}/events/
     공개 식별자 bot_id로 조회(피드·추천이 모두 bot_id로 참조)."""
     # bot_id=0은 system/user 센티넬과 충돌하는 유령 행 — 직원 목록·상세·선택에서 제외.
-    queryset = Agent.objects.exclude(bot_id=0).annotate(event_count=Count("events"))
     serializer_class = AgentSerializer
     lookup_field = "bot_id"
     lookup_value_regex = "[0-9]+"
     ordering_fields = ["event_count", "role", "bot_id"]
     ordering = ["-event_count"]
+
+    def get_queryset(self):
+        """공개 직원(owner=null) + 내 직원(owner=me). ?scope=mine|public 로 좁힘."""
+        from .social import current_person
+        from django.db.models import Q
+        cur = current_person(self.request)
+        qs = Agent.objects.exclude(bot_id=0).annotate(event_count=Count("events"))
+        scope = self.request.query_params.get("scope")
+        if scope == "mine":
+            return qs.filter(owner=cur) if cur else qs.none()
+        if scope == "public":
+            return qs.filter(owner__isnull=True)
+        return qs.filter(Q(owner__isnull=True) | Q(owner=cur)) if cur else qs.filter(owner__isnull=True)
 
     def get_serializer_context(self):
         ctx = super().get_serializer_context()
@@ -39,9 +51,13 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["patch"])
     def edit(self, request, bot_id=None):
-        """봇 편집(관리 기능) — 이름·인격·아바타색·직군 수정. PATCH /api/agents/{bot_id}/edit/"""
+        """직원 편집 — 이름·인격·아바타색·직군. 내 직원만(공개 쇼케이스 직원은 읽기전용)."""
         import re as _re
+        from .social import current_person
         a = self.get_object()
+        cur = current_person(request)
+        if a.owner_id is None or not cur or a.owner_id != cur.id:
+            return Response({"detail": "내 직원만 편집할 수 있어요."}, status=403)
         for f in ("name", "persona", "avatar", "role"):
             if f not in request.data:
                 continue
@@ -65,12 +81,21 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
     # GuideMessage는 Project FK가 아니라 channel_id(=proj.id)로 묶인다 — 서브쿼리로 메시지 수 집계.
     _msg_sq = (GuideMessage.objects.filter(channel_id=OuterRef("id")).exclude(msg_type="status")
                .values("channel_id").annotate(c=Count("msg_id")).values("c"))
-    queryset = Project.objects.annotate(
-        event_count=Count("events", distinct=True), task_count=Count("tasks", distinct=True),
-        message_count=Coalesce(Subquery(_msg_sq, output_field=IntegerField()), 0)
-    ).order_by("-event_count", "-id")
     lookup_field = "pid"
     lookup_value_regex = "[A-Za-z]+-[0-9]+"   # P-(디스코드)·S-(SnsGuide)·U-(스튜디오) 모두
+
+    def get_queryset(self):
+        """공개 채널 + 내가 멤버인 채널만. 비공개는 멤버 아니면 안 보임(목록·상세 공통)."""
+        from .social import current_person
+        from django.db.models import Q
+        cur = current_person(self.request)
+        qs = Project.objects.annotate(
+            event_count=Count("events", distinct=True), task_count=Count("tasks", distinct=True),
+            message_count=Coalesce(Subquery(self._msg_sq, output_field=IntegerField()), 0)
+        ).order_by("-event_count", "-id")
+        if cur:
+            return qs.filter(Q(visibility="public") | Q(members__person=cur)).distinct()
+        return qs.filter(visibility="public")
 
     def get_serializer_class(self):
         return ProjectDetailSerializer if self.action == "retrieve" else ProjectSerializer
@@ -241,9 +266,13 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         status = "완료" if done else ("진행 중" if msgs else "시작 전")
         context = {"goal": (goal or "").strip()[:400], "status": status,
                    "deploys": deploys, "links": links[:4]}
+        from .social import current_person, is_owner, is_member
+        cur = current_person(request)
         return Response({"pid": proj.pid, "name": proj.name, "messages": msgs, "pending_count": pending,
                          "leader_id": str(proj.leader.bot_id) if proj.leader else None,
-                         "leader_role": proj.leader.role if proj.leader else None, "context": context})
+                         "leader_role": proj.leader.role if proj.leader else None, "context": context,
+                         "visibility": proj.visibility, "owner_handle": proj.owner.handle if proj.owner else None,
+                         "is_owner": is_owner(proj, cur), "is_member": is_member(proj, cur)})
 
     @action(detail=True, methods=["post"], url_path="request")
     def make_request(self, request, pid=None):
@@ -287,12 +316,20 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         return Response({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),
                          "author": c.author_name, "body": c.body}, status=201)
 
+    def _owner_or_403(self, proj, request):
+        """채널 소유자만 관리(이름·보관·삭제·공개전환). 공개 쇼케이스(owner=null)는 누구도 못 건드림."""
+        from .social import current_person, is_owner
+        if not is_owner(proj, current_person(request)):
+            return Response({"detail": "채널 소유자만 할 수 있어요."}, status=403)
+        return None
+
     @action(detail=True, methods=["patch"])
     def rename(self, request, pid=None):
-        """채널 이름 변경(관리 기능). PATCH /api/projects/{pid}/rename/ — 기본 제공(P-) 채널은 보호."""
+        """채널 이름 변경 — 소유자만. PATCH /api/projects/{pid}/rename/"""
         proj = self.get_object()
-        if proj.pid.startswith("P-"):
-            return Response({"detail": "기본 제공(데모) 채널은 변경할 수 없습니다."}, status=403)
+        err = self._owner_or_403(proj, request)
+        if err:
+            return err
         name = (request.data.get("name") or "").strip()
         if not name:
             return Response({"detail": "이름은 필수입니다."}, status=400)
@@ -302,20 +339,33 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"])
     def archive(self, request, pid=None):
-        """채널 보관/복원 토글(status). POST /api/projects/{pid}/archive/ — 기본 제공(P-) 채널은 보호."""
+        """채널 보관/복원 토글 — 소유자만. POST /api/projects/{pid}/archive/"""
         proj = self.get_object()
-        if proj.pid.startswith("P-"):
-            return Response({"detail": "기본 제공(데모) 채널은 보관할 수 없습니다."}, status=403)
+        err = self._owner_or_403(proj, request)
+        if err:
+            return err
         proj.status = "" if proj.status == "archived" else "archived"
         proj.save(update_fields=["status"])
         return Response({"pid": proj.pid, "status": proj.status, "archived": proj.status == "archived"})
 
+    @action(detail=True, methods=["post"])
+    def visibility(self, request, pid=None):
+        """공개/비공개 전환 — 소유자만. POST /api/projects/{pid}/visibility/"""
+        proj = self.get_object()
+        err = self._owner_or_403(proj, request)
+        if err:
+            return err
+        proj.visibility = "private" if proj.visibility == "public" else "public"
+        proj.save(update_fields=["visibility"])
+        return Response({"pid": proj.pid, "visibility": proj.visibility})
+
     @action(detail=True, methods=["delete"])
     def remove(self, request, pid=None):
-        """채널 삭제 — 내가 만든 채널(U-/S-)만. 기본 제공(P-) 채널은 보호. DELETE /api/projects/{pid}/remove/"""
+        """채널 삭제 — 소유자만. DELETE /api/projects/{pid}/remove/"""
         proj = self.get_object()
-        if proj.pid.startswith("P-"):
-            return Response({"detail": "기본 제공(데모) 채널은 삭제할 수 없습니다."}, status=403)
+        err = self._owner_or_403(proj, request)
+        if err:
+            return err
         GuideMessage.objects.filter(channel_id=proj.id).delete()
         pid_ = proj.pid
         proj.delete()
@@ -379,9 +429,14 @@ class RecommendView(APIView):
             top = min(max(int(request.query_params.get("top") or 5), 1), 20)
         except (TypeError, ValueError):
             top = 5
+        from .social import current_person
+        from django.db.models import Q
+        cur = current_person(request)
         profiles = {p.role: p for p in RoleProfile.objects.all()}
-        agents = (Agent.objects.annotate(event_count=Count("events"))
+        agents = (Agent.objects.exclude(bot_id=0).annotate(event_count=Count("events"))
                   .exclude(role="").exclude(role__isnull=True))
+        # 공개 직원 + 내 직원만 추천(남의 비공개 직원 제외)
+        agents = agents.filter(Q(owner__isnull=True) | Q(owner=cur)) if cur else agents.filter(owner__isnull=True)
         candidates = []
         for a in agents:
             p = profiles.get(a.role)
@@ -410,6 +465,10 @@ class RecruitView(APIView):
         import random
         import re as _re
         from django.db import IntegrityError
+        from .social import current_person
+        person = current_person(request)       # 채용한 직원은 '나만의 직원'(owner=me)
+        if not person:
+            return Response({"detail": "로그인이 필요해요."}, status=401)
         role = (request.data.get("role") or "").strip()
         if not role:
             return Response({"detail": "직군(role)은 필수입니다."}, status=400)
@@ -426,7 +485,7 @@ class RecruitView(APIView):
                 a = Agent.objects.create(
                     bot_id=bot_id, role=role[:60], name=name[:100],
                     persona=(request.data.get("persona") or "")[:5000],
-                    avatar=avatar, created_via="sns")
+                    avatar=avatar, created_via="sns", owner=person)
                 break
             except IntegrityError:
                 continue
@@ -458,15 +517,17 @@ class ChannelCreateView(APIView):
                 leader = Agent.objects.filter(bot_id=int(lb)).first()
             except (TypeError, ValueError):
                 return Response({"detail": "리더 봇 지정이 올바르지 않습니다."}, status=400)
-        p = Project.objects.create(pid=pid, name=name[:200], status="live", leader=leader)
-        from .social import current_person          # 만든 사람을 채널 리드 멤버로
-        from .models import Membership
-        person = current_person(request)
-        if person:
-            Membership.objects.get_or_create(person=person, project=p, defaults={"role": "lead"})
+        # 공개/비공개 — 기본 비공개('나만의 채널'). 체험 계정은 공개 불가(둘러보기 오염 방지).
+        vis = "public" if request.data.get("visibility") == "public" else "private"
+        if person.is_guest:
+            vis = "private"
+        p = Project.objects.create(pid=pid, name=name[:200], status="live", leader=leader,
+                                   owner=person, visibility=vis)
+        from .models import Membership                # 만든 사람을 채널 리드 멤버로
+        Membership.objects.get_or_create(person=person, project=p, defaults={"role": "lead"})
         return Response({"pid": p.pid, "name": p.name, "status": p.status,
-                         "leader_role": leader.role if leader else None,
-                         "event_count": 0, "task_count": 0}, status=201)
+                         "leader_role": leader.role if leader else None, "visibility": p.visibility,
+                         "owner_handle": person.handle, "event_count": 0, "task_count": 0}, status=201)
 
 
 class StatsView(APIView):
@@ -486,10 +547,22 @@ class StatsView(APIView):
                      "project": last.project.pid if last.project else None,
                      "project_name": last.project.name if last.project else None,
                      "summary": last.summary, "ts": last.ts}
+        # 직원·채널 수는 '내가 볼 수 있는 것'으로(공개 + 내 것) — 남의 비공개 수 비노출.
+        from .social import current_person
+        from django.db.models import Q
+        cur = current_person(request)
+        agent_q = Agent.objects.exclude(bot_id=0)
+        proj_q = Project.objects.all()
+        if cur:
+            agent_q = agent_q.filter(Q(owner__isnull=True) | Q(owner=cur))
+            proj_q = proj_q.filter(Q(visibility="public") | Q(members__person=cur)).distinct()
+        else:
+            agent_q = agent_q.filter(owner__isnull=True)
+            proj_q = proj_q.filter(visibility="public")
         return Response({
             "events": Event.objects.count(),
-            "agents": Agent.objects.exclude(bot_id=0).count(),
-            "projects": Project.objects.count(),
+            "agents": agent_q.count(),
+            "projects": proj_q.count(),
             "profiles": RoleProfile.objects.count(),
             "threads": Thread.objects.count(),
             "by_kind": by_kind,
