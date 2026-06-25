@@ -5,7 +5,8 @@ services:
     region: singapore
     plan: free
     buildCommand: bash build.sh
-    startCommand: gunicorn config.wsgi:application --chdir backend --bind 0.0.0.0:$PORT
+    # --timeout: 먹통 워커 자동 재시작 / --workers 2: 한 워커가 막혀도 서비스 지속
+    startCommand: gunicorn config.wsgi:application --chdir backend --bind 0.0.0.0:$PORT --workers 2 --timeout 60 --graceful-timeout 30
     envVars:
       - key: DJANGO_DEBUG
         value: "0"
