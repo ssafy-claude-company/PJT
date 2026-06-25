@@ -240,3 +240,55 @@ organt_sns/
 - 협업 엔진: FPS 요청("1대1 1인칭 fps 게임 만들어줘", ch=31)을 처리 중 — 라이브-스트립 "게임 기획자
   작업 중". 끝까지 돌릴지/흐름만 보고 멈출지는 사용자 판단. (러너는 외부 supervisor로 띄운 것이라
   이 세션이 끝나도 호스트가 살아있으면 계속 돈다. 자체 서버 이전 후엔 systemd로 상시화.)
+
+---
+
+## 10. 검수 백로그 (2026-06-25, 우선순위순) — 새 세션 작업거리
+
+핸드오프 전 3축(서버 안정성·디자인·사용성) 검수에서 나온 항목. **회의 표시 픽스는 검증 완료**
+(`sns/tests.py::MeetingVisibilityTest` 통과 — 라우팅 + messages 액션 end-to-end). 아래는 미착수.
+
+### A. 서버 안정성 — 자체 서버 이전 **전에** 권장 (production 안전)
+- **[CRIT] DEBUG/SECRET_KEY/ALLOWED_HOSTS** — `config/settings.py:17-22`. 현재 `.env`가 `DEBUG=1`·
+  `ALLOWED_HOSTS=*`·SECRET_KEY 미설정(→ 하드코딩 insecure 키 사용). 자체서버는 `DEBUG=0`, 구체
+  ALLOWED_HOSTS, SECRET_KEY 미설정 시 **기동 실패**로. `CORS_ALLOW_ALL_ORIGINS=DEBUG` 결합도 분리(`:116`).
+  → 상당부분 `SELF_HOST.md` 1)에 이미 명시. 코드 가드만 추가하면 됨.
+- **[HIGH] 무한 쿼리** — `views.py:246`(messages가 채널 GuideMessage 전량 로드, 3회 순회), `:183-184`
+  (collab도 동일 + 전체 Agent dict). `.order_by("-msg_id")[:limit]`로 캡 + pending/responded는 DB 집계로.
+- **[HIGH] AI 작업 무제한 큐잉 = 토큰 폭주** — `views.py:321-347` make_request에 throttle 없음, 게스트
+  무제한 생성(`social.py`). DRF throttling(유저·IP) + 게스트 제한.
+- **[HIGH] pick 레이스** — `guide_bridge.py:94-105` payload read-modify-write 비원자 → 중복 처리(이중 과금).
+  `filter(...).exclude(payload__picked=True).update(...)` 조건부 + `transaction.atomic`.
+- **[HIGH] 러너 무타임아웃** — `run_organt_sns.py:172` `route_channel_request`에 `asyncio.wait_for` 없음 →
+  멎은 에이전트 1개가 러너 전체 정지. 타임아웃 + 실패 시 unpick.
+- **[MED] guide_bridge 입력 한계** — ingest body 무제한·thread limit 무제한(`guide_bridge.py:58-63,120`).
+  body 길이 캡, limit clamp + ORM 슬라이스. 토큰 비교 `hmac.compare_digest`(`:32`).
+- **[MED] `_thread_channel` 무한 증가** — `http_sns_guide.py:39`/`sns_guide.py:43` open_task마다 적재, 축출 없음.
+  장수 러너 메모리 누수. LRU/배치별 clear. (단일 러너 가정도 문서화/강제.)
+
+### B. 사용성 — **운영자→사용자** 기능화 (사용자가 직접 하게)
+- **[작업 중지]** — *지금은 SNS에서 멈출 방법 없음.* 채팅 "멈춰"는 Comment만 생성(두뇌 안 봄,
+  `views.py:349-363`), "부탁"은 오히려 일 추가(개입/큐잉, `sys_core.py:1674-1687,1854-1875`). 필요한 것:
+  사용자 트리거(버튼→세션인증 엔드포인트)→`flow.cancelled` 플래그를 흐름 루프가 협조적으로 체크 +
+  inflight `task.cancel()`. 취소 인프라(watchdog)는 있음(`sys_core.py:1073-1093`), 사용자 경로만 없음.
+- **[Work/Info 자동분류]** — 지금은 사용자가 토글 수동 선택(기본 Work, `Channel.vue:28,492`). 구조적
+  의미는 있음(Info=자문·구현금지 `permissions.py:136-153` / Work=위임·구현). 단일 choke point
+  `views.py:333`에서 본문 보고 자동 분류, 토글은 override로. (오분류는 게이트가 흡수 — 저위험.)
+- **[에이전트 모델 per-agent]** — 지금 `ORGANT_MODEL` 전역 1개(`run_organt_sns.py:48`→`organt.py:104`).
+  Agent에 `model` 필드 없음. 추가(마이그레이션) → 로스터 dict + 에이전트 편집 UI(`AgentViewSet.edit` 존재) →
+  `build_options(cfg, model=…)`(이미 override 받음). 일부 Opus 지정 가능해짐.
+- **[멎은 요청 재시도]** *(저비용·고가치)* — 러너가 pick 후 죽으면 영영 picked. `unpick` 로직 있고
+  (`guide_bridge.py:98`) UI가 멎은 수까지 계산(`views.py:289`)하나 프론트 호출자 없음. 소유자/멤버용
+  세션인증 "다시 맡기기" 액션 추가.
+- **[엔진 on/off 표시]** — 지금 정적 안내문만. 러너 heartbeat(폴마다 ingest) → 라이브 상태로.
+
+### C. 디자인 — 타임라인 **구조화**(단순 나열 탈피)
+- **[회의/표결 블록]** *(최우선)* — 방금 픽스로 회의가 채널에 뜨지만 **N개 개별 버블**로 나열됨
+  (`Channel.vue` groups 63-103은 연속 동일발화자만 묶음 → 회의는 발화자가 매번 달라 안 묶임).
+  `kind==='meeting'` 연속을 **한 블록**(참여자 스택+주제 헤더, 표결은 집계 푸터)으로. 칩은 블록 헤더로.
+- **[수명주기 = 페이즈 구분선]** — 위임/목표/완료/배포가 일반 버블과 동일(`TAG_KINDS`가 meeting/vote만
+  칩). day-sep식 중앙 구분선으로 흐름을 페이즈로 분절. 정의돼 있으나 미사용인 kinds.js 색 활용.
+- **[지속 페이즈 레일]** — live-strip은 단일 줄·자동만료(`Channel.vue:133-139`). `목표→작업→검증→완료`
+  상시 레일 + CollabPanel(토글 뒤 숨음) 요약 1줄 인라인.
+- **[목록 섹셔닝]** — Channels(`Channels.vue:49` 하드코딩 정렬, 내/공개 미분리), Friends(5개 평면 리스트),
+  AgentDetail 활동피드(raw summary·날짜 그룹 없음). Agents.vue/Recommend.vue가 좋은 템플릿.

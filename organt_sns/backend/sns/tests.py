@@ -1,5 +1,8 @@
 """SNS 단위 테스트 — 추천 알고리즘(F1301)의 결정 로직을 DB 없이 검증."""
+import time
+
 from django.test import TestCase
+from rest_framework.test import APIClient
 
 from sns.recommend import score_candidates, tokens
 
@@ -46,3 +49,31 @@ class RecommendTest(TestCase):
 
     def test_토크나이저_한영숫자(self):
         self.assertEqual(tokens("Vue3 실시간-동기화!"), ["vue3", "실시간", "동기화"])
+
+
+class MeetingVisibilityTest(TestCase):
+    """회의·표결이 '유령 채널'로 새지 않고 채널에 네이티브로 표시되는지 — 회귀 가드."""
+
+    def test_post가_스레드를_채널로_해석한다(self):
+        # 라우팅 픽스: _say(회의·표결)가 합성 thread_id로 post()해도 실제 채널로 풀려야 한다.
+        from sns.sns_guide import SnsGuide
+        g = SnsGuide()
+        tid = g._new_id()
+        g._thread_channel[tid] = 4242                       # open_task가 등록하는 thread→channel 매핑
+        self.assertEqual(g._thread_channel.get(int(tid), int(tid)), 4242)  # 회의 발언 → 채널
+        self.assertEqual(g._thread_channel.get(99, 99), 99)               # 실제 채널 직접 post는 통과
+
+    def test_회의발언이_messages에서_네이티브kind로_표시(self):
+        # 표시 픽스: collab_kind가 [회의] 라벨을 떼고 meeting kind로 — messages 액션 end-to-end.
+        from sns.models import Project, Agent, GuideMessage
+        proj = Project.objects.create(pid="S-9001", name="검수 채널", visibility="public")
+        member = Agent.objects.create(bot_id=900001, role="게임 기획자", name="김도윤")
+        GuideMessage.objects.create(                        # 픽스된 post()가 남기는 형태 그대로
+            channel_id=proj.id, thread_id=proj.id, sender_id=member.bot_id,
+            msg_type="plain", body="[회의 1R] 서버 권위 모델을 제안합니다", ts=time.time())
+        res = APIClient().get(f"/api/projects/{proj.pid}/messages/")
+        self.assertEqual(res.status_code, 200)
+        meet = [m for m in res.data["messages"] if m.get("kind") == "meeting"]
+        self.assertEqual(len(meet), 1, "회의 메시지가 표시 안 됨(아까처럼 숨김)")
+        self.assertNotIn("[회의", meet[0]["summary"])       # 프로토콜 라벨 제거됨
+        self.assertIn("서버 권위", meet[0]["summary"])
