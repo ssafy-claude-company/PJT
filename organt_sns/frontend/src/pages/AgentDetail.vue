@@ -40,6 +40,13 @@ async function saveEdit() {
     editing.value = false
   } finally { saving.value = false }
 }
+async function doShare() { agent.value = await api.shareAgent(route.params.botId) }
+const isPublic = computed(() => agent.value && agent.value.visibility === 'public')
+const joinedFmt = computed(() => {
+  if (!agent.value || !agent.value.joined_at) return ''
+  try { return new Date(agent.value.joined_at).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' }) } catch (e) { return '' }
+})
+const origin = computed(() => (agent.value && agent.value.created_via === 'sns') ? '스튜디오 채용' : '디스코드 합류')
 onMounted(load)
 watch(() => route.params.botId, () => { editing.value = false; load() })
 </script>
@@ -54,18 +61,37 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
         <div class="between">
           <div>
             <div class="page-title" style="margin:0">{{ agent.name || '이름 없음' }}</div>
-            <div class="flex" style="gap:7px;margin-top:4px">
+            <div class="flex" style="gap:7px;margin-top:4px;flex-wrap:wrap">
               <span class="muted" style="font-size:14px">{{ agent.role || '대기 중' }}</span>
               <span v-if="agent.is_leader" class="badge lead">리더</span>
               <span v-if="isMine" class="badge accent">내 직원</span>
               <span v-else class="badge">공개 직원</span>
+              <span v-if="isMine" class="badge" :class="{ ok: isPublic }">{{ isPublic ? '공유됨 · 공개' : '비공개' }}</span>
             </div>
           </div>
-          <button v-if="!editing && isMine" class="btn ghost sm" @click="startEdit"><Icon name="edit" :size="15" />정보 수정</button>
+          <div v-if="isMine && !editing" class="flex" style="gap:7px">
+            <button class="btn ghost sm" @click="doShare" :title="isPublic ? '비공개로 — 나만 사용' : '공개로 — 모두가 보고 쓸 수 있게'">
+              <Icon :name="isPublic ? 'lock' : 'globe'" :size="15" />{{ isPublic ? '비공개로' : '공유하기' }}
+            </button>
+            <button class="btn ghost sm" @click="startEdit"><Icon name="edit" :size="15" />수정</button>
+          </div>
         </div>
-        <div class="muted mono" style="font-size:12px;margin-top:8px">활동 {{ agent.event_count }}<span v-if="agent.distill_count"> · 성장 {{ agent.distill_count }}</span></div>
-        <div v-if="agent.persona && !editing" class="persona">{{ agent.persona }}</div>
+        <div class="meta-row">
+          <span>활동 {{ agent.event_count }}회</span>
+          <span v-if="agent.distill_count">성장 {{ agent.distill_count }}회</span>
+          <span>{{ origin }}</span>
+          <span v-if="isMine && joinedFmt">{{ joinedFmt }} 합류</span>
+        </div>
       </div>
+    </div>
+
+    <!-- 성격 · 일하는 방식(인격) -->
+    <div v-if="agent.persona && !editing" class="panel persona-panel">
+      <h2>성격 · 일하는 방식</h2>
+      <div class="persona-body">{{ agent.persona }}</div>
+    </div>
+    <div v-else-if="isMine && !agent.persona && !editing" class="sb-hint" style="margin:0 0 18px">
+      아직 성격이 정해지지 않았어요. <button class="linklike" @click="startEdit">성격 추가하기</button> — 어떻게 일하면 좋을지 적어두면 더 또렷한 직원이 됩니다.
     </div>
 
     <div v-if="editing" class="panel" style="margin-bottom:18px">
@@ -128,6 +154,13 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
   font-size: 27px; color: #fff; font-weight: 700 }
 .persona { margin-top: 14px; color: var(--text); font-size: 13px; line-height: 1.6; padding: 11px 14px;
   background: var(--surface2); border: 1px solid var(--line); border-left: 2px solid var(--accent); border-radius: var(--r) }
+.meta-row { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 9px; color: var(--text3); font-size: 12px; font-variant-numeric: tabular-nums }
+.meta-row span { position: relative }
+.meta-row span:not(:first-child)::before { content: '·'; position: absolute; left: -8px; color: var(--line) }
+.persona-panel { margin-bottom: 18px }
+.persona-body { padding: 14px 16px; color: var(--text); font-size: 13.5px; line-height: 1.65; white-space: pre-wrap }
+.badge.ok { color: var(--ok); background: var(--ok-soft) }
+.linklike { background: none; border: 0; color: var(--accent2); font: inherit; font-weight: 600; cursor: pointer; padding: 0; text-decoration: underline }
 .lbl { display: block; font-size: 11px; color: var(--text3); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 7px }
 .sw { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; transition: .12s; outline: 1px solid var(--line) }
 .sw:hover { transform: scale(1.08) }

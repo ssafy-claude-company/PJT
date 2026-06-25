@@ -23,6 +23,9 @@ class Agent(models.Model):
     owner = models.ForeignKey("Person", null=True, blank=True, on_delete=models.SET_NULL,
                               related_name="owned_agents",
                               help_text="소유자(사용자가 채용한 '나만의 직원'). null=공개 쇼케이스 직원")
+    # 기본 public: 시드(쇼케이스)는 공개 유지. 채용 직원은 뷰에서 private 지정, 소유자가 공유 전환.
+    visibility = models.CharField(max_length=10, choices=[("public", "공개"), ("private", "비공개")],
+                                  default="public", db_index=True)
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

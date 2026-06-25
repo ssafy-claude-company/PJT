@@ -37,6 +37,7 @@ export default {
   agent: (botId) => http.get(`/agents/${botId}/`).then((r) => r.data),
   agentEvents: (botId) => http.get(`/agents/${botId}/events/`).then((r) => r.data),
   editAgent: (botId, payload) => http.patch(`/agents/${botId}/edit/`, payload).then((r) => r.data),  // 봇 편집(관리)
+  shareAgent: (botId) => http.post(`/agents/${botId}/share/`).then((r) => r.data),  // 공개/비공개 전환
 
   profiles: () => http.get('/profiles/').then((r) => list(r.data)),
 

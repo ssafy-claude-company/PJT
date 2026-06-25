@@ -43,9 +43,22 @@ async function load() {
     ])
     myChannels.value = mine
     const minePids = new Set(mine.map((c) => c.pid))
-    explore.value = p.filter((c) => (c.event_count > 0 || c.message_count > 0) && !minePids.has(c.pid))
+    // 둘러보기 = 공개 채널(내 워크스페이스·숨긴 것 제외). 활동 없어도 공개면 보인다.
+    explore.value = p.filter((c) => !minePids.has(c.pid) && !hidden.value.has(c.pid))
     stats.value = s
   } catch (e) { /* keep last */ }
+}
+// 둘러보기에서 채널 숨기기(내 화면에서만, localStorage). 쇼케이스 정리용.
+const hidden = ref(new Set(JSON.parse(localStorage.getItem('organt_hidden') || '[]')))
+function hideChannel(pid) {
+  const s = new Set(hidden.value); s.add(pid); hidden.value = s
+  localStorage.setItem('organt_hidden', JSON.stringify([...s]))
+  explore.value = explore.value.filter((c) => c.pid !== pid)
+}
+function unhideAll() {
+  hidden.value = new Set()
+  localStorage.removeItem('organt_hidden')
+  load()
 }
 onMounted(() => { load(); timer = setInterval(load, 8000) })
 onUnmounted(() => clearInterval(timer))
@@ -58,9 +71,14 @@ const shownExplore = computed(() => {
   if (!t) return explore.value
   return explore.value.filter((c) => (c.name || c.pid).toLowerCase().includes(t) || c.pid.toLowerCase().includes(t))
 })
-const isLive = computed(() => stats.value?.baton?.role)
+// 최근(5분 이내) baton만 '활동 중'으로. 오래된 시드 이벤트가 영구 LIVE로 보이던 것 방지.
+const batonLive = computed(() => {
+  const b = stats.value?.baton
+  return b && b.ts && (Date.now() / 1000 - b.ts) < 300 ? b : null
+})
+const isLive = computed(() => !!batonLive.value)
 const meBg = computed(() => me.color || avatarColor(me.handle || 'guest'))
-const activeChan = (pid) => stats.value && stats.value.baton && stats.value.baton.project === pid
+const activeChan = (pid) => !!batonLive.value && batonLive.value.project === pid
 async function doLogout() { await logout(); router.replace('/login') }
 </script>
 
@@ -105,6 +123,8 @@ async function doLogout() { await logout(); router.replace('/login') }
                      class="sb-item" :class="{ active: activePid === c.pid, archived: c.status === 'archived' }">
           <Icon class="ic" name="hash" :size="15" />
           <span class="nm">{{ c.name || c.pid }}</span>
+          <Icon :name="c.visibility === 'public' ? 'globe' : 'lock'" :size="12" class="vis-ic"
+                :title="c.visibility === 'public' ? '공개 채널' : '비공개 채널'" />
           <span v-if="c.role === 'lead'" class="role-pill">리드</span>
           <span v-else-if="activeChan(c.pid)" class="dot" title="지금 활동 중"></span>
         </router-link>
@@ -112,19 +132,21 @@ async function doLogout() { await logout(); router.replace('/login') }
           <Icon name="plus" :size="13" /> 채널을 만들거나 친구에게 초대받으면 여기에 모여요.
         </div>
 
-        <!-- 둘러보기(쇼케이스) -->
+        <!-- 둘러보기(공개 채널) -->
         <div class="sb-sec between">
           <span><Icon name="compass" :size="13" /> 둘러보기 · {{ explore.length }}</span>
         </div>
         <input v-if="explore.length > 6" v-model="q" class="field sb-search" placeholder="채널 검색" />
         <router-link v-for="c in shownExplore" :key="c.pid" :to="`/channels/${c.pid}`"
-                     class="sb-item" :class="{ active: activePid === c.pid, archived: c.status === 'archived' }">
+                     class="sb-item explore-item" :class="{ active: activePid === c.pid, archived: c.status === 'archived' }">
           <Icon class="ic" name="hash" :size="15" />
           <span class="nm">{{ c.name || c.pid }}</span>
+          <button class="sb-hide" title="내 목록에서 숨기기" @click.prevent.stop="hideChannel(c.pid)"><Icon name="x" :size="13" /></button>
           <Icon v-if="c.status === 'archived'" class="arch-tag" name="archive" :size="14" />
           <span v-else-if="activeChan(c.pid)" class="dot" title="지금 활동 중"></span>
         </router-link>
-        <div v-if="!explore.length && !myChannels.length" class="empty" style="padding:14px"><span class="spin"></span></div>
+        <button v-if="hidden.size" class="sb-unhide" @click="unhideAll">숨긴 채널 {{ hidden.size }}개 다시 보기</button>
+        <div v-if="!explore.length && !myChannels.length && !hidden.size" class="empty" style="padding:14px"><span class="spin"></span></div>
       </div>
 
       <!-- 내 프로필 + 로그아웃 (하단 고정) -->

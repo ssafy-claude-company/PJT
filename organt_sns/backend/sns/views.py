@@ -28,7 +28,7 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ["-event_count"]
 
     def get_queryset(self):
-        """공개 직원(owner=null) + 내 직원(owner=me). ?scope=mine|public 로 좁힘."""
+        """공개 직원(쇼케이스+공유) + 내 직원. ?scope=mine|public 로 좁힘."""
         from .social import current_person
         from django.db.models import Q
         cur = current_person(self.request)
@@ -37,8 +37,9 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
         if scope == "mine":
             return qs.filter(owner=cur) if cur else qs.none()
         if scope == "public":
-            return qs.filter(owner__isnull=True)
-        return qs.filter(Q(owner__isnull=True) | Q(owner=cur)) if cur else qs.filter(owner__isnull=True)
+            return qs.filter(visibility="public")
+        # 기본: 공개(쇼케이스+남이 공유한 것) + 내 것(비공개 포함)
+        return qs.filter(Q(visibility="public") | Q(owner=cur)) if cur else qs.filter(visibility="public")
 
     def get_serializer_context(self):
         ctx = super().get_serializer_context()
@@ -67,6 +68,18 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
             else:
                 setattr(a, f, v[:200] if f == "persona" else v[:60])
         a.save()
+        return Response(AgentSerializer(a, context=self.get_serializer_context()).data)
+
+    @action(detail=True, methods=["post"])
+    def share(self, request, bot_id=None):
+        """공개/비공개 전환 — 내 직원만. 공개하면 모두가 보고 쓸 수 있다(공유). POST .../share/"""
+        from .social import current_person
+        a = self.get_object()
+        cur = current_person(request)
+        if a.owner_id is None or not cur or a.owner_id != cur.id:
+            return Response({"detail": "내 직원만 공개 설정을 바꿀 수 있어요."}, status=403)
+        a.visibility = "private" if a.visibility == "public" else "public"
+        a.save(update_fields=["visibility"])
         return Response(AgentSerializer(a, context=self.get_serializer_context()).data)
 
 
@@ -435,8 +448,8 @@ class RecommendView(APIView):
         profiles = {p.role: p for p in RoleProfile.objects.all()}
         agents = (Agent.objects.exclude(bot_id=0).annotate(event_count=Count("events"))
                   .exclude(role="").exclude(role__isnull=True))
-        # 공개 직원 + 내 직원만 추천(남의 비공개 직원 제외)
-        agents = agents.filter(Q(owner__isnull=True) | Q(owner=cur)) if cur else agents.filter(owner__isnull=True)
+        # 공개 직원(쇼케이스+공유) + 내 직원만 추천(남의 비공개 직원 제외)
+        agents = agents.filter(Q(visibility="public") | Q(owner=cur)) if cur else agents.filter(visibility="public")
         candidates = []
         for a in agents:
             p = profiles.get(a.role)
@@ -485,7 +498,7 @@ class RecruitView(APIView):
                 a = Agent.objects.create(
                     bot_id=bot_id, role=role[:60], name=name[:100],
                     persona=(request.data.get("persona") or "")[:5000],
-                    avatar=avatar, created_via="sns", owner=person)
+                    avatar=avatar, created_via="sns", owner=person, visibility="private")
                 break
             except IntegrityError:
                 continue

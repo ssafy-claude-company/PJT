@@ -127,7 +127,9 @@ function renderMd(s) {
 
 const batonHere = computed(() => {
   const b = stats.value?.baton
-  return b && b.project === route.params.pid ? b.role : null
+  // 최근(5분 이내)일 때만 '작업 중'. 오래된 시드 baton으로 영구 표시되던 것 방지.
+  const live = b && b.ts && (Date.now() / 1000 - b.ts) < 300
+  return live && b.project === route.params.pid ? b.role : null
 })
 
 const atBottom = ref(true)

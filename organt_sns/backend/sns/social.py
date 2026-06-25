@@ -232,6 +232,6 @@ def workspace(request):
         return Response({"detail": "로그인이 필요해요."}, status=401)
     ms = (Membership.objects.filter(person=cur).select_related("project")
           .order_by("role", "-project__pid"))
-    chans = [{"pid": m.project.pid, "name": m.project.name,
-              "status": m.project.status, "role": m.role} for m in ms]
+    chans = [{"pid": m.project.pid, "name": m.project.name, "status": m.project.status,
+              "role": m.role, "visibility": m.project.visibility} for m in ms]
     return Response({"channels": chans})
