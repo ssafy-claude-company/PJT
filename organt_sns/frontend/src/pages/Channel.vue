@@ -56,6 +56,9 @@ function cleanLine(s, kind) {
   return s
 }
 
+// 구조화 협업 발언(회의·표결)엔 작은 종류 칩 — 평범한 메시지와 구분돼 '협업이 보이게'.
+const TAG_KINDS = new Set(['meeting', 'vote'])
+
 // 디스코드식: 사람·직원 구분 없이 한 흐름. 같은 사람 연속 메시지는 한 묶음(머리글 1번).
 const groups = computed(() => {
   const out = []
@@ -84,6 +87,7 @@ const groups = computed(() => {
     const id = isHuman ? 'h:' + author : (m.actor_id || m.actor_role || '?')
     const raw = m.body || m.summary || ''
     const line = { key: m.key, text: isHuman ? cleanLine(raw, null) : cleanLine(raw, m.kind), kind: m.kind, ts: m.ts,
+      tag: (!isHuman && TAG_KINDS.has(m.kind)) ? kindMeta(m.kind) : null,
       to: (!isHuman && (m.target_name || m.target_role)) || null }
     if (cur && cur.id === id) { cur.lines.push(line) }
     else {
@@ -439,7 +443,7 @@ watch(() => route.params.pid, () => {
             </div>
             <div v-for="ln in g.lines" :key="ln.key" class="cmsg-line">
               <div :class="{ clamp: isLong(ln.text) && !longOpen.has(ln.key) }">
-                <span v-if="ln.to" class="cmsg-to">@{{ ln.to }}</span><span v-html="renderMd(ln.text)"></span>
+                <span v-if="ln.tag" class="cmsg-tag" :style="{ color: ln.tag.c, background: ln.tag.bg }">{{ ln.tag.label }}</span><span v-if="ln.to" class="cmsg-to">@{{ ln.to }}</span><span v-html="renderMd(ln.text)"></span>
               </div>
               <button v-if="isLong(ln.text)" class="more-btn" @click="toggleLong(ln.key)">{{ longOpen.has(ln.key) ? '접기 ▴' : '더 보기 ▾' }}</button>
             </div>

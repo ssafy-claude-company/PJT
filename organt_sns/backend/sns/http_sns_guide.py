@@ -100,8 +100,12 @@ class HttpSnsGuide:
 
     # ── 메시지 ─────────────────────────────────────────────────────
     async def post(self, channel_id, sender_id, content, reply_to=None):
+        # 스레드→채널 해석(send_request/response와 동일) — _say(회의·표결·병렬)가 합성 thread_id로
+        # 호출돼도 사용자가 보는 실제 채널에 뜨게 한다. 안 그러면 협업 토의가 유령 채널로 새서
+        # 흐름이 '리더 혼자' 중앙집권적으로 보인다.
+        ch = self._thread_channel.get(int(channel_id), int(channel_id))
         res = await self._post("/api/guide/ingest/", {
-            "op": "post", "channel_id": int(channel_id), "thread_id": int(channel_id),
+            "op": "post", "channel_id": int(ch), "thread_id": int(channel_id),
             "sender_id": int(sender_id or 0), "msg_type": "plain", "body": str(content),
             "reply_to": (int(reply_to) if reply_to else None)})
         return str(res.get("msg_id"))

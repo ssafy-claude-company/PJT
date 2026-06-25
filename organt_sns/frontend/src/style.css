@@ -117,6 +117,7 @@ a.cmsg-name:hover{text-decoration:underline}
   font:12.5px ui-monospace,Menlo,Consolas,monospace;color:#cbb8ff}
 .cmsg-line .md-link{color:var(--accent2);text-decoration:none}.cmsg-line .md-link:hover{text-decoration:underline}
 .cmsg-to{color:var(--accent2);font-weight:600;background:var(--accent-soft);border-radius:5px;padding:0 6px;margin-right:5px;font-size:13px}
+.cmsg-tag{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 7px;margin-right:6px;vertical-align:1px;letter-spacing:.02em}
 .day-sep{display:flex;align-items:center;gap:12px;margin:18px 12px 8px;color:var(--text3);font-size:11px}
 .day-sep::before,.day-sep::after{content:"";flex:1;height:1px;background:var(--line2)}
 .day-sep span{flex:none}

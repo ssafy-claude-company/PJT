@@ -85,8 +85,11 @@ class SnsGuide:
 
     # ── 메시지 ─────────────────────────────────────────────────────
     async def post(self, channel_id, sender_id, content, reply_to=None):
+        # 스레드→채널 해석(send_request/response와 동일) — _say(회의·표결·병렬)가 합성 thread_id로
+        # 호출돼도 사용자가 보는 실제 채널에 뜨게 한다(유령 채널로 새는 토의 = '리더 혼자'처럼 보임).
+        ch = self._thread_channel.get(int(channel_id), int(channel_id))
         return str(await sync_to_async(self._write)(
-            channel_id=int(channel_id), thread_id=int(channel_id), sender_id=int(sender_id or 0),
+            channel_id=int(ch), thread_id=int(channel_id), sender_id=int(sender_id or 0),
             msg_type="plain", body=str(content), reply_to=(int(reply_to) if reply_to else None)))
 
     async def send_request(self, thread_id, sender_id, to_id, kind, body):

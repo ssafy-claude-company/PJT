@@ -12,6 +12,7 @@ export const KIND = {
   work: { label: '작업', c: GREY, bg: GREY_BG },
   goal_set: { label: '목표', c: OK, bg: OK_BG },
   meeting: { label: '회의', c: ACCENT, bg: ACCENT_BG },
+  vote: { label: '표결', c: VIOLET, bg: VIOLET_BG },
   verification: { label: '검증', c: WARN, bg: WARN_BG },
   deploy: { label: '배포', c: OK, bg: OK_BG },
   task_complete: { label: '완료', c: OK, bg: 'rgba(82,183,136,.2)' },

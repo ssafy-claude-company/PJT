@@ -40,3 +40,23 @@ def to_native(text):
     s = _MENTION.sub("", s)                            # 멘션 래퍼 제거(SNS는 자체 멘션 렌더)
     s = _CHANNEL.sub("", s)
     return re.sub(r"[ \t]{2,}", " ", s).strip()
+
+
+# _say 협업 발언(회의/표결/병렬 보고)의 프로토콜 라벨. 디스코드는 평채널이라 라벨을 본문에 박았지만,
+# SNS는 종류(kind)로 표현하므로 라벨을 떼고 네이티브 kind로 승격한다(라벨 텍스트 노출 = 디스코드 잔재).
+_COLLAB = (
+    (re.compile(r"^\s*\[회의(?:\s*\d+\s*R)?\]\s*"), "meeting"),
+    (re.compile(r"^\s*\[표\]\s*"), "vote"),
+    (re.compile(r"^\s*\[병렬\s*보고\]\s*"), "work"),
+)
+
+
+def collab_kind(text):
+    """회의/표결/병렬 발언이면 (네이티브 kind, 접두 제거 본문), 아니면 (None, 원문). to_native 후 호출."""
+    if not text:
+        return None, text
+    s = str(text)
+    for rx, kind in _COLLAB:
+        if rx.match(s):
+            return kind, rx.sub("", s, count=1).strip()
+    return None, s
