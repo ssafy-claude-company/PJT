@@ -37,6 +37,7 @@ class HttpSnsGuide:
         self._s.headers.update({"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
         self._ids = itertools.count(int(time.time() * 1000))
         self._thread_channel = {}                          # thread_id → channel_id (클라 보유)
+        self._origin_channel = None                        # 이 요청의 채널 — 협업을 여기로 라우팅(러너가 세팅)
 
     def _new_id(self):
         return next(self._ids)
@@ -74,9 +75,11 @@ class HttpSnsGuide:
 
     # ── 채널/스레드 ────────────────────────────────────────────────
     async def create_project_channel(self, guild_id, name):
-        # SNS 채널 생성은 스튜디오/사용자 몫. 러너는 기존 채널에만 출력 — 합성 id 반환(매핑만).
-        cid = self._new_id()
-        return cid
+        # SNS-네이티브: 프로젝트 협업을 '요청이 온 채널'에 그대로 — 디스코드처럼 새 채널을 따로 안 만들고
+        # 사용자가 보는 채널에 위임·작업·완료가 라이브로 뜨게 한다. origin 없으면 합성 id(폴백).
+        if self._origin_channel:
+            return int(self._origin_channel)
+        return self._new_id()
 
     async def open_task(self, channel_id, status):
         tid = self._new_id()

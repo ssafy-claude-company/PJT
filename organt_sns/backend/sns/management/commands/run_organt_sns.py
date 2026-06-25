@@ -166,6 +166,8 @@ class Command(BaseCommand):
                     req = Request(to_id=to_id, kind=kind, body=m["body"], from_id=0, message_id=str(mid))
                     await mark_pick(mid)
                     self.stdout.write(f"▶ 요청 처리: ch={m['channel_id']} to={to_id} kind={m['kind']} body={m['body'][:46]!r}")
+                    # 협업을 '요청이 온 채널'에 라우팅 — 위임·작업이 사용자 채널에 보이게.
+                    setattr(guide, "_origin_channel", int(m["channel_id"]))
                     try:
                         await sysm.route_channel_request(int(m["channel_id"]), req)
                         await mark_pick(mid, done=True)
