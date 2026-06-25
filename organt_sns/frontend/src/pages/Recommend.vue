@@ -53,7 +53,8 @@ function ex(e) { q.value = e; run() }
       <div class="muted" style="margin-bottom:10px">
         “{{ result.query || '전반적인 역량' }}”에 맞는 직원 {{ result.results.length }}명
       </div>
-      <div class="grid" style="gap:12px">
+      <div v-if="!result.results.length" class="empty">맞는 직원을 찾지 못했어요. 다른 표현으로 검색해보세요.</div>
+      <div v-else class="grid" style="gap:12px">
         <div v-for="(r, i) in result.results" :key="r.bot_id" class="card">
           <div class="between">
             <div class="flex" style="min-width:0">

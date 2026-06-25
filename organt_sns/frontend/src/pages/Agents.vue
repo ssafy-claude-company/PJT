@@ -13,8 +13,8 @@ const q = ref('')
 
 async function load() {
   loading.value = true
-  agents.value = await api.agents({ ordering: sort.value })
-  loading.value = false
+  try { agents.value = await api.agents({ ordering: sort.value }) }
+  finally { loading.value = false }   // 실패해도 스피너가 영원히 안 돌게
 }
 function setSort(s) { sort.value = s; load() }
 const active = (s) => (sort.value === s ? 'on' : '')
@@ -70,7 +70,7 @@ onMounted(load)
 
       <!-- 공개 직원(쇼케이스) -->
       <div class="sec-h">공개 직원 <span class="cnt">{{ publicList.length }}</span></div>
-      <div v-if="!publicList.length" class="empty">검색 결과가 없습니다</div>
+      <div v-if="!publicList.length" class="empty">{{ q ? '검색 결과가 없어요' : '공개된 직원이 없어요' }}</div>
       <div v-else class="grid cards">
         <router-link v-for="a in publicList" :key="a.bot_id" class="card link" :to="`/agents/${a.bot_id}`">
           <div class="flex" style="gap:11px;min-width:0">

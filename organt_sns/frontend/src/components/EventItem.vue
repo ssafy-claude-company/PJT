@@ -1,22 +1,33 @@
 <script setup>
-import { kindMeta, timeFmt } from '../kinds'
+import { kindMeta, whenFmt, dateFmt } from '../kinds'
 
 defineProps({
   ev: { type: Object, required: true },
   showProject: { type: Boolean, default: true },
 })
+
+// 로그 접두("이름 → id: 본문")를 떼어 본문만. 화살표 없으면 그대로.
+function clean(s) {
+  s = (s || '').trim()
+  const arrow = s.search(/→/)
+  if (arrow >= 0) {
+    const colon = s.indexOf(':', arrow)
+    if (colon >= 0) { const b = s.slice(colon + 1).trim(); if (b) return b }
+  }
+  return s
+}
 </script>
 
 <template>
   <div class="feed-item">
     <span class="k" :style="{ background: kindMeta(ev.kind).bg, color: kindMeta(ev.kind).c }">{{ kindMeta(ev.kind).label }}</span>
     <span class="s">
-      {{ ev.summary }}
+      {{ clean(ev.summary) }}
       <router-link v-if="showProject && ev.project_pid" class="p-tag" :to="`/channels/${ev.project_pid}`">
         {{ ev.project_pid }}<template v-if="ev.project_name"> · {{ ev.project_name }}</template>
       </router-link>
     </span>
-    <span class="t">{{ timeFmt(ev.ts) }}</span>
+    <span class="t" :title="dateFmt(ev.ts)">{{ whenFmt(ev.ts) }}</span>
   </div>
 </template>
 

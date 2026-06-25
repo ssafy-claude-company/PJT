@@ -111,7 +111,7 @@ onMounted(async () => {
           <span class="hash-av" :class="{ active: stats?.baton?.project === c.pid }"><Icon name="hash" :size="16" /></span>
           <div class="chan-meta">
             <div class="chan-name">{{ c.name || c.pid }}<span v-if="mine.has(c.pid)" class="mine-tag">내 채널</span></div>
-            <div class="chan-sub">{{ c.pid }}<template v-if="c.leader_role"> · 리더 {{ c.leader_role }}</template></div>
+            <div class="chan-sub"><template v-if="c.leader_role">리더 {{ c.leader_role }}</template><template v-else-if="!c.name">{{ c.pid }}</template><template v-else>채팅 채널</template></div>
           </div>
           <div class="chan-right">
             <span v-if="stats?.baton?.project === c.pid" class="live-baton" style="padding:3px 9px"><i class="pulse"></i>활동</span>

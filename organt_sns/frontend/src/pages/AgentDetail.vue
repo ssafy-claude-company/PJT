@@ -4,13 +4,25 @@ import { useRoute } from 'vue-router'
 import api from '../api'
 import EventItem from '../components/EventItem.vue'
 import Icon from '../components/Icon.vue'
+import { dayKey, dayLabel } from '../kinds'
 import { monogram, avatarBg, AVATAR_COLORS } from '../avatar'
+import { toast } from '../toast'
 import { me } from '../user'
 
 const route = useRoute()
 const agent = ref(null)
 const isMine = computed(() => agent.value && agent.value.owner_handle && agent.value.owner_handle === me.handle)
 const events = ref([])
+// 활동 피드에 날짜 구분선 삽입 — '시:분'만 나열돼 언제인지 모르는 문제 해결.
+const feedRows = computed(() => {
+  const out = []; let last = null
+  for (const e of events.value) {
+    const k = dayKey(e.ts)
+    if (k !== last) { out.push({ day: true, key: 'd' + k, label: dayLabel(e.ts) }); last = k }
+    out.push({ day: false, key: 'e' + e.seq, ev: e })
+  }
+  return out
+})
 const profile = ref(null)
 const loading = ref(true)
 const editing = ref(false)
@@ -38,9 +50,16 @@ async function saveEdit() {
   try {
     agent.value = await api.editAgent(route.params.botId, form.value)
     editing.value = false
-  } finally { saving.value = false }
+    toast('직원 정보를 저장했어요')
+  } catch (e) { toast('저장하지 못했어요', 'err') }
+  finally { saving.value = false }
 }
-async function doShare() { agent.value = await api.shareAgent(route.params.botId) }
+async function doShare() {
+  try {
+    agent.value = await api.shareAgent(route.params.botId)
+    toast(agent.value.visibility === 'public' ? '공개로 전환했어요 — 모두가 쓸 수 있어요' : '비공개로 전환했어요')
+  } catch (e) { toast('전환하지 못했어요', 'err') }
+}
 const isPublic = computed(() => agent.value && agent.value.visibility === 'public')
 const joinedFmt = computed(() => {
   if (!agent.value || !agent.value.joined_at) return ''
@@ -127,7 +146,10 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
       <div class="panel" style="align-self:start">
         <h2>최근 활동</h2>
         <div v-if="!events.length" class="empty">아직 활동 기록이 없어요</div>
-        <EventItem v-for="e in events" :key="e.seq" :ev="e" />
+        <template v-for="r in feedRows" :key="r.key">
+          <div v-if="r.day" class="feed-day">{{ r.label }}</div>
+          <EventItem v-else :ev="r.ev" />
+        </template>
       </div>
       <div class="panel" style="align-self:start">
         <h2>쌓은 노하우 · {{ agent.role }}</h2>
@@ -166,5 +188,7 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
 .sw:hover { transform: scale(1.08) }
 .sw.on { border-color: var(--text); outline-color: var(--text) }
 .cols2 { grid-template-columns: 1fr 1fr }
+.feed-day { padding: 10px 16px 4px; font-size: 11px; font-weight: 700; color: var(--text3); letter-spacing: .03em; border-bottom: 1px solid var(--line2) }
 @media(max-width:760px){ .cols2 { grid-template-columns: 1fr } }
+@media(max-width:560px){ .prof-head .between { flex-wrap: wrap; gap: 10px } }   /* 액션 버튼이 긴 이름에 안 눌리게 */
 </style>

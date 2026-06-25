@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { me } from '../user'
+import { toast } from '../toast'
 import { avatarColor } from '../avatar'
 
 const router = useRouter()
@@ -38,12 +39,19 @@ async function search() {
   searching.value = true
   try { found.value = await api.people(q.value.trim()) } finally { searching.value = false }
 }
-async function add(handle) { await api.addFriend(handle); await load() }
-async function acceptFriend(handle) { await api.acceptFriend(handle); await load() }
-async function declineFriend(handle) { await api.removeFriend(handle); await load() }
-async function remove(handle) { await api.removeFriend(handle); await load() }
-async function acceptInvite(pid) { await api.acceptInvite(pid); router.push(`/channels/${pid}`) }
-async function declineInvite(pid) { await api.declineInvite(pid); await load() }
+async function act(fn, ok, err) {
+  try { await fn(); toast(ok) } catch (e) { toast(e?.response?.data?.detail || err, 'err') }
+  await load()
+}
+const add = (handle) => act(() => api.addFriend(handle), '친구 요청을 보냈어요', '요청하지 못했어요')
+const acceptFriend = (handle) => act(() => api.acceptFriend(handle), '친구가 됐어요', '수락하지 못했어요')
+const declineFriend = (handle) => act(() => api.removeFriend(handle), '요청을 거절했어요', '처리하지 못했어요')
+const remove = (handle) => act(() => api.removeFriend(handle), '친구를 삭제했어요', '삭제하지 못했어요')
+async function acceptInvite(pid) {
+  try { await api.acceptInvite(pid); toast('채널에 들어왔어요'); router.push(`/channels/${pid}`) }
+  catch (e) { toast('수락하지 못했어요', 'err'); await load() }
+}
+const declineInvite = (pid) => act(() => api.declineInvite(pid), '초대를 거절했어요', '처리하지 못했어요')
 onMounted(load)
 </script>
 

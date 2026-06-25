@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import api from '../api'
+import { toast } from '../toast'
 import { monogram, avatarBg, AVATAR_COLORS } from '../avatar'
 
 const bots = ref([])
@@ -10,17 +11,20 @@ const saving = ref(false)
 const ROLES = ['백엔드', '프론트엔드', 'QA', '게임 기획자', '디자이너', '데브옵스', 'AI 엔지니어', '데이터 엔지니어', 'PM']
 
 async function load() {
-  bots.value = await api.agents({ ordering: '-event_count' })
-  loading.value = false
+  try { bots.value = await api.agents({ ordering: '-event_count' }) }
+  finally { loading.value = false }   // 실패해도 스피너가 영원히 안 돌게
 }
 async function recruit() {
   if (!form.value.role.trim()) return
   saving.value = true
   try {
+    const role = form.value.role.trim()
     await api.recruit({ ...form.value })   // 이름 비우면 백엔드가 고유 이름 자동 배정
     form.value = { role: '', name: '', avatar: '', persona: '' }
     await load()
-  } finally { saving.value = false }
+    toast(`${role} 직원을 새로 만들었어요`)
+  } catch (e) { toast('직원을 만들지 못했어요', 'err') }
+  finally { saving.value = false }
 }
 // 미리보기 색
 function previewBg() { return form.value.avatar || avatarBg({ name: form.value.name, role: form.value.role }) }

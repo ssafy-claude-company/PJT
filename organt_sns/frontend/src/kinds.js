@@ -39,5 +39,31 @@ export const timeFmt = (ts) => {
 export const dateFmt = (ts) => {
   if (!ts) return ''
   const d = new Date(ts * 1000)
-  return d.toLocaleString('ko-KR', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString('ko-KR', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+// 날짜 인식 상대 시각 — 피드가 '시:분:초'만 나열돼 언제인지 모르는 문제 해결.
+// 방금 / N분 전 / (오늘)HH:MM / 어제 HH:MM / M월 D일 HH:MM / YYYY년 M월 D일 HH:MM
+export const whenFmt = (ts) => {
+  if (!ts) return ''
+  const d = new Date(ts * 1000), now = new Date()
+  const sec = (now - d) / 1000
+  if (sec < 60) return '방금'
+  if (sec < 3600) return `${Math.floor(sec / 60)}분 전`
+  const hm = d.toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit' })
+  if (d.toDateString() === now.toDateString()) return hm
+  const y = new Date(now); y.setDate(now.getDate() - 1)
+  if (d.toDateString() === y.toDateString()) return `어제 ${hm}`
+  const sameYear = d.getFullYear() === now.getFullYear()
+  const md = d.toLocaleDateString('ko-KR', sameYear
+    ? { month: 'long', day: 'numeric' } : { year: 'numeric', month: 'long', day: 'numeric' })
+  return `${md} ${hm}`
+}
+// epoch(sec) → 날짜 구분선 라벨(요일 포함). 같은 날 메시지 묶음의 머리글.
+export const dayLabel = (ts) => {
+  if (!ts) return ''
+  return new Date(ts * 1000).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })
+}
+export const dayKey = (ts) => {
+  const d = new Date(ts * 1000)
+  return `${d.getFullYear()}.${d.getMonth()}.${d.getDate()}`
 }

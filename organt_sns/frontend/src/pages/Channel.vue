@@ -7,6 +7,7 @@ import CollabPanel from '../components/CollabPanel.vue'
 import Icon from '../components/Icon.vue'
 import { monogram, avatarColor, avatarBg } from '../avatar'
 import { askPrompt, askConfirm } from '../dialog'
+import { toast } from '../toast'
 import { me } from '../user'
 
 const route = useRoute()
@@ -152,9 +153,11 @@ function onScroll() {
   const el = msgsEl.value; if (!el) return
   atBottom.value = el.scrollTop + el.clientHeight >= el.scrollHeight - 80
 }
+const loadErr = ref(false)
 async function load() {
-  loading.value = true; briefing.value = null; showBrief.value = false
+  loading.value = true; briefing.value = null; showBrief.value = false; loadErr.value = false
   try { data.value = await api.channelMessages(route.params.pid) }
+  catch (e) { if (!data.value) loadErr.value = true }   // 401은 인터셉터가 처리 — 그 외 실패면 빈 화면 대신 안내
   finally { loading.value = false; atBottom.value = true; await nextTick(); scrollBottom() }
 }
 // 라이브 폴링 — 새 메시지를 새로고침 없이. 바닥에 있을 때만 자동스크롤, 탭 숨김 시 정지.
@@ -196,7 +199,8 @@ async function send() {
     if (data.value?.messages) data.value.messages.push(m)
     draft.value = ''
     await nextTick(); scrollBottom()
-  } finally { sending.value = false }
+  } catch (e) { toast('메시지를 보내지 못했어요', 'err') }
+  finally { sending.value = false }
 }
 const briefErr = ref(false)
 async function loadBrief() {
@@ -253,8 +257,11 @@ async function toggleMembers() {
   }
 }
 async function invite(handle) {
-  try { const r = await api.invite(route.params.pid, handle); members.value = r.members || []; invitedPending.value = r.invited || [] }
-  catch (e) { /* 권한·중복 무시 */ }
+  try {
+    const r = await api.invite(route.params.pid, handle)
+    members.value = r.members || []; invitedPending.value = r.invited || []
+    toast('초대했어요')
+  } catch (e) { toast(e?.response?.data?.detail || '초대하지 못했어요', 'err') }
 }
 
 // 채널 관리·접근(소유자/멤버 기반)
@@ -263,19 +270,29 @@ const canInvite = computed(() => !!data.value?.is_member && !me.is_guest)
 const isPublic = computed(() => data.value?.visibility === 'public')
 async function doVisibility() {
   menu.value = false
-  const r = await api.setChannelVisibility(route.params.pid)
-  if (data.value) data.value.visibility = r.visibility
+  try {
+    const r = await api.setChannelVisibility(route.params.pid)
+    if (data.value) data.value.visibility = r.visibility
+    toast(r.visibility === 'public' ? '공개 채널로 바꿨어요' : '비공개 채널로 바꿨어요')
+  } catch (e) { toast('변경하지 못했어요', 'err') }
 }
 async function doRename() {
   menu.value = false
   const name = await askPrompt({ title: '채널 이름 변경', placeholder: '새 이름', value: data.value?.name || '' })
   if (!name) return
-  const r = await api.renameChannel(route.params.pid, name)
-  if (data.value) data.value.name = r.name
+  try {
+    const r = await api.renameChannel(route.params.pid, name)
+    if (data.value) data.value.name = r.name
+    toast('이름을 바꿨어요')
+  } catch (e) { toast('이름을 바꾸지 못했어요', 'err') }
 }
 async function doArchive() {
   menu.value = false
-  await api.archiveChannel(route.params.pid)
+  try {
+    const r = await api.archiveChannel(route.params.pid)        // {archived} 반환 — 로컬 상태도 갱신(메뉴 라벨 최신화)
+    if (data.value) data.value.status = r?.archived ? 'archived' : (data.value.context?.status || 'live')
+    toast(r?.archived ? '채널을 보관했어요' : '채널을 복원했어요')
+  } catch (e) { toast('처리하지 못했어요', 'err') }
 }
 async function doRemove() {
   menu.value = false
@@ -413,6 +430,7 @@ watch(() => route.params.pid, () => {
 
   <div class="msgs" ref="msgsEl" @scroll.passive="onScroll">
     <div v-if="loading" class="empty"><span class="spin"></span> 대화 불러오는 중…</div>
+    <div v-else-if="loadErr" class="empty">대화를 불러오지 못했어요. <button class="linklike" @click="load">다시 시도</button></div>
     <template v-else>
       <template v-for="g in groups" :key="g.key">
         <!-- 날짜 구분 -->

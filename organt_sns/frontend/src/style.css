@@ -118,6 +118,12 @@ a.cmsg-name:hover{text-decoration:underline}
 .cmsg-line .md-link{color:var(--accent2);text-decoration:none}.cmsg-line .md-link:hover{text-decoration:underline}
 .cmsg-to{color:var(--accent2);font-weight:600;background:var(--accent-soft);border-radius:5px;padding:0 6px;margin-right:5px;font-size:13px}
 .cmsg-tag{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 7px;margin-right:6px;vertical-align:1px;letter-spacing:.02em}
+.toast-wrap{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.toast{background:var(--surface2);border:1px solid var(--line);color:var(--text);font-size:13.5px;font-weight:500;padding:10px 16px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);animation:toast-in .18s ease}
+.toast.ok{border-left:3px solid var(--ok)}
+.toast.err{border-left:3px solid var(--danger)}
+@keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.linklike{background:none;border:0;color:var(--accent2);font:inherit;font-weight:600;cursor:pointer;padding:0;text-decoration:underline}
 .day-sep{display:flex;align-items:center;gap:12px;margin:18px 12px 8px;color:var(--text3);font-size:11px}
 .day-sep::before,.day-sep::after{content:"";flex:1;height:1px;background:var(--line2)}
 .day-sep span{flex:none}

@@ -7,6 +7,7 @@ import Dialog from './components/Dialog.vue'
 import SignIn from './components/SignIn.vue'
 import NewChannel from './components/NewChannel.vue'
 import { me, isAuthed, logout } from './user'
+import { toasts } from './toast'
 import { avatarColor } from './avatar'
 
 const route = useRoute()
@@ -84,6 +85,11 @@ async function doLogout() { await logout(); router.replace('/login') }
 </script>
 
 <template>
+  <!-- 토스트(액션 피드백) — 인증 여부 무관 항상 표시 -->
+  <div class="toast-wrap">
+    <div v-for="t in toasts" :key="t.id" class="toast" :class="t.kind">{{ t.msg }}</div>
+  </div>
+
   <!-- 미인증: 로그인/회원가입 전체 화면 -->
   <router-view v-if="!isAuthed()" />
 

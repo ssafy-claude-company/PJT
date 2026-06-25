@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import api from '../api'
-import { timeFmt } from '../kinds'
+import { whenFmt, dateFmt } from '../kinds'
 import { avatarColor, monogram } from '../avatar'
 import Icon from './Icon.vue'
 
@@ -58,7 +58,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
             <div class="tedges">
               <div v-for="e in edges" :key="e.to" class="tedge">
                 <Icon name="arrowR" :size="13" class="ar" /><b>{{ e.to }}</b><span class="x">×{{ e.count }}</span>
-                <span class="last" v-if="e.last">{{ clip(e.last.replace(/^[^:]*:\s*/, ''), 40) }}</span>
+                <span class="last" v-if="e.last">{{ clip(e.last.replace(/^[^:]*:\s*/, '').replace(/<?@?\d{6,}>?/g, '').trim() || '작업', 40) }}</span>
               </div>
             </div>
           </div>
@@ -81,7 +81,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
       <div v-if="d.outputs && d.outputs.length">
         <div class="sec">결과물</div>
         <div v-for="(o, i) in d.outputs.slice().reverse()" :key="i" class="out">
-          <div class="oh"><span class="badge">{{ o.role || '직원' }}</span><span class="t">{{ timeFmt(o.ts) }}</span></div>
+          <div class="oh"><span class="badge">{{ o.role || '직원' }}</span><span class="t" :title="dateFmt(o.ts)">{{ whenFmt(o.ts) }}</span></div>
           <div class="obody">{{ clip(o.result, 220) }}</div>
           <div v-if="o.links && o.links.length" class="olinks">
             <a v-for="l in o.links" :key="l" :href="l" target="_blank" rel="noopener" class="olink"><Icon name="link" :size="13" />{{ l.replace(/^https?:\/\//, '').slice(0, 40) }}</a>
@@ -92,7 +92,7 @@ onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { 
       <div v-if="d.interventions.length">
         <div class="sec">사람이 거든 것 · {{ d.interventions.length }}</div>
         <div class="iv" v-for="(iv, i) in d.interventions.slice(-6)" :key="i">
-          <span class="t">{{ timeFmt(iv.ts) }}</span><span class="who">{{ iv.role || '사람' }}</span>{{ clip(iv.summary, 70) }}
+          <span class="t" :title="dateFmt(iv.ts)">{{ whenFmt(iv.ts) }}</span><span class="who">{{ iv.role || '사람' }}</span>{{ clip(iv.summary, 70) }}
         </div>
       </div>
     </div>

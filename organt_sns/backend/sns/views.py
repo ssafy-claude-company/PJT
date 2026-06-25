@@ -337,9 +337,9 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             try:
                 to_int = int(to_id)
             except (TypeError, ValueError):
-                return Response({"detail": "담당 봇 지정이 올바르지 않습니다."}, status=400)
+                return Response({"detail": "담당 직원 지정이 올바르지 않습니다."}, status=400)
             if not Agent.objects.filter(bot_id=to_int).exists():
-                return Response({"detail": "대상 봇을 찾을 수 없습니다."}, status=400)
+                return Response({"detail": "대상 직원을 찾을 수 없습니다."}, status=400)
         m = GuideMessage.objects.create(
             channel_id=proj.id, thread_id=proj.id, sender_id=0, msg_type="request",
             to_id=to_int, kind=kind, body=body[:4000], ts=time.time(),
@@ -536,7 +536,7 @@ class RecruitView(APIView):
             except IntegrityError:
                 continue
         else:
-            return Response({"detail": "봇 생성에 실패했습니다. 다시 시도하세요."}, status=500)
+            return Response({"detail": "직원 생성에 실패했습니다. 다시 시도하세요."}, status=500)
         a.event_count = 0
         return Response(AgentSerializer(a).data, status=201)
 
@@ -562,7 +562,7 @@ class ChannelCreateView(APIView):
             try:
                 leader = Agent.objects.filter(bot_id=int(lb)).first()
             except (TypeError, ValueError):
-                return Response({"detail": "리더 봇 지정이 올바르지 않습니다."}, status=400)
+                return Response({"detail": "리더 직원 지정이 올바르지 않습니다."}, status=400)
         # 공개/비공개 — 기본 비공개('나만의 채널'). 체험 계정은 공개 불가(둘러보기 오염 방지).
         vis = "public" if request.data.get("visibility") == "public" else "private"
         if person.is_guest:
