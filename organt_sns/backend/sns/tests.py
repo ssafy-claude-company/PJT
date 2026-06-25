@@ -154,6 +154,20 @@ class RequeueStuckTest(TestCase):
         self.assertEqual(data["stuck_count"], 1)        # 옛 픽만 멎음(최신은 작업 중이라 제외)
         self.assertEqual(data["live_status"]["state"], "working")
 
+    def test_진행갱신_touch가_picked_ts를_새로고쳐_멎음에서_뺀다(self):
+        # 긴 흐름 보호: 러너가 흐름 도중 picked_ts를 touch로 갱신 → 5분+ 협업도 '멎음'으로 오판 안 됨.
+        from sns.models import GuideMessage
+        from sns.management.commands.run_organt_sns import _local_pick
+        from sns.views import stuck_requests
+        proj = self._setup()
+        gm = self._stuck(proj, 400)                     # 400초 전 픽 → 지금은 멎음 1
+        rows = lambda: list(GuideMessage.objects.filter(channel_id=proj.id))
+        self.assertEqual(len(stuck_requests(rows(), time.time())), 1)
+        _local_pick(gm.msg_id, touch=True)              # 진행 갱신 — picked_ts=now
+        self.assertGreater((GuideMessage.objects.get(msg_id=gm.msg_id).payload or {}).get("picked_ts"),
+                           time.time() - 5)             # 새로고쳐짐
+        self.assertEqual(len(stuck_requests(rows(), time.time())), 0)   # 작업 중으로 되살아나 멎음 0
+
     def test_권한_비로그인401_비멤버403(self):
         from sns.models import Person
         proj = self._setup()

@@ -103,6 +103,8 @@ def pick(request):
         p["picked"] = True
         if request.data.get("done"):
             p["done_ts"] = time.time()
+        elif request.data.get("touch"):
+            p["picked_ts"] = time.time()              # 진행 갱신 — 긴 흐름이 '멎음'으로 오판되지 않게(러너 생존 중 갱신)
         else:
             p.setdefault("picked_ts", time.time())    # 멎은 요청 판정(픽 후 무응답 경과)용
     GuideMessage.objects.filter(msg_id=mid).update(payload=p)

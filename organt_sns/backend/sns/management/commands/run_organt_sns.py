@@ -75,7 +75,7 @@ def _local_pending(seen):
     return out
 
 
-def _local_pick(msg_id, done=False):
+def _local_pick(msg_id, done=False, touch=False):
     m = GuideMessage.objects.filter(msg_id=msg_id).first()
     if not m:
         return
@@ -83,6 +83,8 @@ def _local_pick(msg_id, done=False):
     p["picked"] = True
     if done:
         p["done_ts"] = time.time()
+    elif touch:
+        p["picked_ts"] = time.time()             # 진행 갱신 — 긴 흐름이 '멎음'으로 오판되지 않게
     else:
         p.setdefault("picked_ts", time.time())   # 멎은 요청 판정(픽 후 무응답 경과)용
     GuideMessage.objects.filter(msg_id=msg_id).update(payload=p)
@@ -141,8 +143,8 @@ class Command(BaseCommand):
                 data = await guide._get("/api/guide/pending/")
                 return [p for p in data.get("pending", []) if p["msg_id"] not in seen]
 
-            async def mark_pick(mid, done=False):
-                await guide._post("/api/guide/pick/", {"msg_id": mid, "done": done})
+            async def mark_pick(mid, done=False, touch=False):
+                await guide._post("/api/guide/pick/", {"msg_id": mid, "done": done, "touch": touch})
 
             async def _beat():
                 await guide._post("/api/guide/heartbeat/", {"note": "remote"})
@@ -163,8 +165,8 @@ class Command(BaseCommand):
             async def fetch_pending(seen):
                 return await sync_to_async(_local_pending)(seen)
 
-            async def mark_pick(mid, done=False):
-                await sync_to_async(_local_pick)(mid, done)
+            async def mark_pick(mid, done=False, touch=False):
+                await sync_to_async(_local_pick)(mid, done, touch)
 
             async def _beat():
                 from sns.models import EngineHeartbeat
@@ -252,6 +254,16 @@ class Command(BaseCommand):
                                     self.stdout.write(f"✎ 사람 개입 {'주입' if ok else '미주입(흐름없음)'} — ch={ch}")
                             except Exception:
                                 pass
+                            # 긴 흐름 동안에도 엔진 생존(heartbeat)·진행(picked_ts)을 갱신 — 외곽 폴이 흐름에
+                            # 막혀 있어 여기서 안 하면 5분+ 협업이 '엔진 꺼짐'·'멎은 요청'으로 오표시된다.
+                            _nb = asyncio.get_event_loop().time()
+                            if _nb - last_beat > 8:
+                                try:
+                                    await _beat()
+                                    await mark_pick(mid, touch=True)
+                                except Exception:
+                                    pass
+                                last_beat = _nb
                         await flow_task
                         await mark_pick(mid, done=True)
                         self.stdout.write(f"✓ 처리 완료: msg_id={mid}")
