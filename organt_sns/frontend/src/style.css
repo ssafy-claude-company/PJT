@@ -134,6 +134,16 @@ a.cmsg-name:hover{text-decoration:underline}
 .day-sep{display:flex;align-items:center;gap:12px;margin:18px 12px 8px;color:var(--text3);font-size:11px}
 .day-sep::before,.day-sep::after{content:"";flex:1;height:1px;background:var(--line2)}
 .day-sep span{flex:none}
+/* 수명주기 페이즈 구분선 — 목표/완료/배포/경보를 흐름 마디로(쇼케이스 가독성) */
+.phase-sep{display:flex;align-items:center;gap:9px;margin:15px 14px 8px;padding:7px 12px;border-radius:var(--r);
+  background:rgba(255,255,255,.02);border:1px solid var(--line2);border-left:2px solid var(--accent-line)}
+.phase-sep.goal_set{border-left-color:rgba(82,183,136,.45)}
+.phase-sep.task_complete,.phase-sep.deploy{border-left-color:rgba(82,183,136,.55)}
+.phase-sep.convergence_alert{border-left-color:rgba(233,105,107,.55)}
+.ph-pill{font-size:11px;font-weight:700;border-radius:5px;padding:2px 8px;letter-spacing:.02em;flex:none}
+.ph-text{flex:1;min-width:0;font-size:12.5px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph-actor{font-size:11.5px;color:var(--text3);flex:none}
+.ph-time{font-size:11px;color:var(--text3);flex:none}
 .to-bottom{position:sticky;bottom:12px;margin:8px 6px 0 auto;width:fit-content;display:flex;align-items:center;gap:5px;
   background:var(--elevated);border:1px solid var(--line);color:var(--text);border-radius:20px;padding:7px 13px;
   font:inherit;font-size:12.5px;font-weight:550;cursor:pointer;box-shadow:var(--shadow);z-index:5}

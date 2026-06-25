@@ -60,6 +60,8 @@ function cleanLine(s, kind) {
 // 회의·표결은 발화자가 매 줄 달라 '연속 동일발화자' 묶음에 안 잡혀 N개 버블로 흩뿌려진다.
 // 같은 kind 연속을 한 블록(참여자 스택 + 발언 목록)으로 — 디스코드식 평채널 흩뿌림을 네이티브 구조화로.
 const TAG_KINDS = new Set(['meeting', 'vote'])
+// 수명주기 랜드마크 — 일반 버블 대신 흐름 분절선(페이즈 구분)으로. 목표→작업→완료→배포의 마디.
+const MILESTONE = new Set(['goal_set', 'task_complete', 'deploy', 'convergence_alert'])
 // 블록 헤더 아바타 스택용 — 발언자 중복 제거(첫 등장 순).
 const collabSpeakers = (g) => {
   const seen = new Set(), out = []
@@ -101,6 +103,13 @@ const groups = computed(() => {
       continue
     }
     flushCollab()
+    // 수명주기 페이즈 구분선 — 목표/완료/배포/경보를 일반 버블이 아니라 흐름 분절선으로
+    if (m.type === 'agent' && MILESTONE.has(m.kind)) {
+      cur = null
+      out.push({ type: 'phase', key: 'p' + m.key, kind: m.kind, label: kindMeta(m.kind), ts: m.ts,
+        text: cleanLine(m.body || m.summary || '', m.kind), actor: m.actor_name || m.actor_role || null })
+      continue
+    }
     // 사람: 직접 보낸 메시지 + 행위자 없는 사용자 요청·개입(과거 디스코드 기록)
     const userOrigin = (m.kind === 'user_request' || m.kind === 'intervention') && !m.actor_id
     const isHuman = m.type === 'human' || userOrigin
@@ -478,6 +487,13 @@ watch(() => route.params.pid, () => {
       <template v-for="g in groups" :key="g.key">
         <!-- 날짜 구분 -->
         <div v-if="g.type === 'date'" class="day-sep"><span>{{ g.label }}</span></div>
+        <!-- 수명주기 페이즈 구분선 — 목표/완료/배포/경보로 흐름을 마디 짓기 -->
+        <div v-else-if="g.type === 'phase'" class="phase-sep" :class="g.kind">
+          <span class="ph-pill" :style="{ color: g.label.c, background: g.label.bg }">{{ g.label.label }}</span>
+          <span v-if="g.text" class="ph-text">{{ g.text }}</span>
+          <span v-if="g.actor" class="ph-actor">{{ g.actor }}</span>
+          <span class="ph-time">{{ timeFmt(g.ts) }}</span>
+        </div>
         <!-- 도구 작업: 접힌 한 줄, 클릭하면 무슨 작업인지 펼침 -->
         <div v-else-if="g.type === 'work'" class="work-fold">
           <button class="work-toggle" @click="toggleWork(g.key)">
