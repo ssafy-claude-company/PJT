@@ -78,6 +78,8 @@ const batonLive = computed(() => {
   return b && b.ts && (Date.now() / 1000 - b.ts) < 300 ? b : null
 })
 const isLive = computed(() => !!batonLive.value)
+// 협업 엔진(러너) 가동 여부 — 정적 안내문 대신 실제 heartbeat 기반.
+const engineLive = computed(() => !!stats.value?.engine?.live)
 const pendingCount = computed(() => (stats.value?.pending?.friend_requests || 0) + (stats.value?.pending?.invites || 0))
 const meBg = computed(() => me.color || avatarColor(me.handle || 'guest'))
 const activeChan = (pid) => !!batonLive.value && batonLive.value.project === pid
@@ -107,6 +109,10 @@ async function doLogout() { await logout(); router.replace('/login') }
         <span class="wm"><Icon class="mark" name="layers" :size="18" /><span class="wt">Organt</span></span>
         <span class="sub">친구와 AI 직원이 함께 일하는 곳</span>
       </router-link>
+      <div v-if="stats" class="sb-engine" :class="{ on: engineLive }"
+           :title="engineLive ? '협업 엔진 가동 중 — 요청이 라이브로 처리됩니다' : '협업 엔진 꺼짐 — 요청은 큐에 쌓이고, 엔진이 켜지면 처리됩니다'">
+        <i class="dot"></i><span>{{ engineLive ? '협업 엔진 가동 중' : '협업 엔진 꺼짐' }}</span>
+      </div>
       <div class="sb-scroll">
         <router-link to="/friends" class="sb-item" :class="{ active: route.path === '/friends' }">
           <Icon class="ic" name="user" /><span class="nm">친구</span>

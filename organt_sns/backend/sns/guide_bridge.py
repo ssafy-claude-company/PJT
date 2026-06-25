@@ -124,3 +124,14 @@ def thread(request):
     return Response({"rows": [
         {"msg_id": m.msg_id, "msg_type": m.msg_type, "sender_id": m.sender_id, "to_id": m.to_id,
          "kind": m.kind, "reply_to": m.reply_to, "body": m.body} for m in rows]})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def heartbeat(request):
+    """러너 생존 신호 — 폴마다 호출. stats가 engine_live를 파생(정적 안내문 대신 실제 가동 표시)."""
+    if not _authed(request):
+        return _deny()
+    from .models import EngineHeartbeat
+    EngineHeartbeat.beat(note=(request.data.get("note") or "remote"))
+    return Response({"ok": True})

@@ -650,6 +650,11 @@ class StatsView(APIView):
         else:
             agent_q = agent_q.filter(owner__isnull=True)
             proj_q = proj_q.filter(visibility="public")
+        # 협업 엔진(러너) 생존 — heartbeat 최근 30초 내면 가동 중(정적 안내문 대신 실제 표시).
+        from .models import EngineHeartbeat
+        import time as _t
+        hb = EngineHeartbeat.objects.first()
+        engine = {"live": bool(hb and (_t.time() - hb.last_beat) < 30), "last": hb.last_beat if hb else 0}
         return Response({
             "events": Event.objects.count(),
             "agents": agent_q.count(),
@@ -659,4 +664,5 @@ class StatsView(APIView):
             "by_kind": by_kind,
             "baton": baton,
             "pending": pending,
+            "engine": engine,
         })

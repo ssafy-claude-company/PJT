@@ -157,6 +157,8 @@ const liveStatus = computed(() => {
   if (ls.state === 'done' ? age >= 1800 : age >= 300) return null   // 완료 30분 / 작업중 5분
   return ls
 })
+// 협업 엔진(러너) 가동 여부 — 정적 안내문 대신 실제 heartbeat 기반.
+const engineLive = computed(() => !!stats.value?.engine?.live)
 const batonHere = computed(() => {
   const b = stats.value?.baton
   // 최근(5분 이내)일 때만 '작업 중'. 오래된 시드 baton으로 영구 표시되던 것 방지.
@@ -445,7 +447,9 @@ watch(() => route.params.pid, () => {
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />
 
   <div v-if="data && data.pending_count" class="pending-bar">
-    대기 중인 요청 <b>{{ data.pending_count }}건</b> — 정상 접수됐습니다. 실제 작업은 <b>협업 엔진이 켜져 있을 때</b> 직원들이 처리합니다.
+    대기 중인 요청 <b>{{ data.pending_count }}건</b> — 정상 접수됐습니다.
+    <template v-if="engineLive">협업 엔진이 <b>가동 중</b>이라 직원들이 곧 처리합니다.</template>
+    <template v-else>협업 엔진이 <b>꺼져 있어</b> 대기 중입니다 — 엔진이 켜지면 처리됩니다.</template>
   </div>
 
   <!-- 멎은 요청 — 처리하던 러너가 멈춰 '작업 중'으로 박제된 것. 소유자/멤버가 다시 큐로. -->

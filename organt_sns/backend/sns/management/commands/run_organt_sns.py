@@ -123,6 +123,9 @@ class Command(BaseCommand):
 
             async def mark_pick(mid, done=False):
                 await guide._post("/api/guide/pick/", {"msg_id": mid, "done": done})
+
+            async def _beat():
+                await guide._post("/api/guide/heartbeat/", {"note": "remote"})
             where = f"원격 {remote}"
         else:
             guide = SnsGuide()
@@ -133,6 +136,10 @@ class Command(BaseCommand):
 
             async def mark_pick(mid, done=False):
                 await sync_to_async(_local_pick)(mid, done)
+
+            async def _beat():
+                from sns.models import EngineHeartbeat
+                await sync_to_async(EngineHeartbeat.beat)("local")
             where = "로컬 ORM"
 
         if not bot_info:
@@ -156,9 +163,17 @@ class Command(BaseCommand):
             return
 
         seen = set()
+        last_beat = 0.0
         self.stdout.write("요청 폴링 시작 — 채널/스튜디오에서 봇에게 요청하면 라이브로 처리됩니다. (Ctrl+C 종료)")
         while True:
             try:
+                _now = asyncio.get_event_loop().time()      # 엔진 생존 신호 — 폴마다(8초 throttle)
+                if _now - last_beat > 8:
+                    try:
+                        await _beat()
+                    except Exception:
+                        pass
+                    last_beat = _now
                 pend = await fetch_pending(seen)
                 for m in pend:
                     mid = m["msg_id"]

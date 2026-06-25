@@ -226,3 +226,15 @@ class Membership(models.Model):
     class Meta:
         unique_together = [("person", "project")]
         ordering = ["-role", "created_at"]
+
+
+class EngineHeartbeat(models.Model):
+    """협업 엔진(러너) 생존 신호 — 러너가 폴마다 갱신, stats가 engine_live를 파생.
+    정적 안내문('엔진이 켜져 있을 때') 대신 실제 가동 여부를 표시하기 위함. 단일 행(pk=1)."""
+    last_beat = models.FloatField(default=0.0)      # epoch sec — 마지막 폴 시각
+    note = models.CharField(max_length=80, blank=True)   # 모드(local/remote) 등 참고용
+
+    @classmethod
+    def beat(cls, note=""):
+        import time
+        cls.objects.update_or_create(pk=1, defaults={"last_beat": time.time(), "note": note[:80]})

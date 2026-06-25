@@ -141,3 +141,18 @@ class RequeueStuckTest(TestCase):
         self.assertEqual(APIClient().post(f"/api/projects/{proj.pid}/requeue/").status_code, 401)
         Person.objects.create(handle="outsider", name="남", token="tok_out")
         self.assertEqual(self._client("tok_out").post(f"/api/projects/{proj.pid}/requeue/").status_code, 403)
+
+
+class EngineHeartbeatTest(TestCase):
+    """협업 엔진(러너) 생존 — stats가 heartbeat에서 engine_live를 파생(정적 안내문 대체)."""
+
+    def test_heartbeat_없으면_꺼짐_최근이면_가동(self):
+        from sns.models import EngineHeartbeat
+        self.assertFalse(APIClient().get("/api/stats/").data["engine"]["live"])   # 신호 없음 → 꺼짐
+        EngineHeartbeat.beat("test")
+        self.assertTrue(APIClient().get("/api/stats/").data["engine"]["live"])    # 방금 beat → 가동
+
+    def test_오래된_heartbeat는_꺼짐(self):
+        from sns.models import EngineHeartbeat
+        EngineHeartbeat.objects.update_or_create(pk=1, defaults={"last_beat": time.time() - 60})
+        self.assertFalse(APIClient().get("/api/stats/").data["engine"]["live"])   # 60초 전 > 30초 임계 → 꺼짐
