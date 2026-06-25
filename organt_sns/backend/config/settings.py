@@ -70,10 +70,11 @@ WSGI_APPLICATION = "config.wsgi.application"
 _DB_URL = os.environ.get("DATABASE_URL", "").strip()
 if _DB_URL:
     import dj_database_url
-    # conn_max_age=0 + health check: 무료 Postgres가 유휴 연결을 끊어도 죽은 소켓에 안 매달리게
-    # (지속 연결을 들고 있으면 다음 쿼리가 끊긴 연결에서 무한 대기 → 워커 먹통). 데모 트래픽엔 영향 없음.
+    # 연결 재사용(conn_max_age) + 헬스체크: 따뜻한 연결을 재사용해 매 요청 TLS 핸드셰이크
+    # 비용을 없애 빠르게(원격 Postgres). 무료 Postgres가 유휴 연결을 끊으면 헬스체크가
+    # 죽은 연결을 감지해 재연결 → 먹통 없이 빠르게. (conn_max_age=0은 매 요청 재연결이라 느렸음)
     DATABASES = {"default": dj_database_url.parse(
-        _DB_URL, conn_max_age=0, conn_health_checks=True, ssl_require=False)}
+        _DB_URL, conn_max_age=600, conn_health_checks=True, ssl_require=False)}
 else:
     DATABASES = {
         "default": {
