@@ -244,13 +244,15 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         } for e in evs if not _marker(e)]
         # SNS-네이티브 라이브 메시지(GuideMessage) — 스튜디오 요청 + (러너 단계) SnsGuide 출력
         gms = list(GuideMessage.objects.filter(channel_id=proj.id).exclude(msg_type="status").order_by("msg_id"))
+        live_status = None
         if gms:
             ag = {a.bot_id: a for a in Agent.objects.exclude(bot_id=0)}   # 유령 bot_id=0 제외
             _km = {"request": "delegation", "response": "work", "plain": "work"}
             for gm in gms:
-                # SYS 내부 라이브-상태 요약(sender=0·plain, "● 작업 중…")은 채팅에 안 띄운다 —
-                # SNS는 상태를 베턴·맥락 띠로 네이티브 표시. 디스코드식 상태블록을 채팅에 흘리지 않음.
+                # SYS 내부 라이브-상태 요약(sender=0·plain, "● 작업 중…")은 채팅 메시지로 안 띄우고
+                # 네이티브 라이브-상태 띠로 따로 내보낸다(디스코드식 상태블록을 채팅에 흘리지 않음).
                 if gm.sender_id == 0 and gm.msg_type == "plain":
+                    live_status = {"text": to_native(gm.body), "ts": gm.ts}   # 순서대로 — 마지막이 최신
                     continue
                 if gm.sender_id == 0 and gm.msg_type == "request":
                     msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
@@ -299,7 +301,8 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                          "leader_id": str(proj.leader.bot_id) if proj.leader else None,
                          "leader_role": proj.leader.role if proj.leader else None, "context": context,
                          "visibility": proj.visibility, "owner_handle": proj.owner.handle if proj.owner else None,
-                         "is_owner": is_owner(proj, cur), "is_member": is_member(proj, cur)})
+                         "is_owner": is_owner(proj, cur), "is_member": is_member(proj, cur),
+                         "live_status": live_status})
 
     @action(detail=True, methods=["post"], url_path="request")
     def make_request(self, request, pid=None):

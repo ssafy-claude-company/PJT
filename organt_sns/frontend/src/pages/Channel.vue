@@ -125,6 +125,12 @@ function renderMd(s) {
   return s.replace(/\n/g, '<br>')
 }
 
+// 엔진 라이브 상태 — SYS가 올린 '작업 중' 요약을 채팅이 아니라 네이티브 띠로(최근 3분만).
+const liveStatus = computed(() => {
+  const ls = data.value?.live_status
+  if (!ls || !ls.ts || (Date.now() / 1000 - ls.ts) >= 180) return null
+  return { ...ls, text: (ls.text || '').replace(/^●\s*/, '') }
+})
 const batonHere = computed(() => {
   const b = stats.value?.baton
   // 최근(5분 이내)일 때만 '작업 중'. 오래된 시드 baton으로 영구 표시되던 것 방지.
@@ -368,6 +374,9 @@ watch(() => route.params.pid, () => {
     </div>
     <button v-if="data.context.goal && data.context.goal.length > 84" class="ctx-more" @click="ctxOpen = !ctxOpen">{{ ctxOpen ? '접기' : '더 보기' }}</button>
   </div>
+
+  <!-- 엔진 라이브 상태(네이티브) — '작업 중' 요약을 채팅 대신 띠로 -->
+  <div v-if="liveStatus" class="live-strip"><i class="pulse"></i><span class="live-strip-t">{{ liveStatus.text }}</span></div>
 
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />
 
