@@ -241,6 +241,13 @@ class EngineHeartbeat(models.Model):
         import time
         cls.objects.update_or_create(pk=1, defaults={"last_beat": time.time(), "note": note[:80]})
 
+    @classmethod
+    def is_live(cls, threshold=30):
+        """러너가 살아 있나 — heartbeat가 threshold초 내면 가동 중. 단일 임계 출처(stats·멎음판정 공유)."""
+        import time
+        hb = cls.objects.filter(pk=1).first()
+        return bool(hb and (time.time() - hb.last_beat) < threshold)
+
 
 class StopSignal(models.Model):
     """사용자 '작업 중지' 신호 — 웹이 기록, 러너가 폴해 Sys.request_cancel(channel)을 부른 뒤 삭제.

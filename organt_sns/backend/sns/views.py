@@ -44,7 +44,8 @@ def classify_kind(body):
 # 미해결로 남은 요청은 버려진(멎은) 것. 활성 작업은 live_status로 '작업 중' 표시되므로 멎음에서 빼
 # 같은 요청이 '작업 중'과 '멎음'에 동시에 잡히던 모순(작업 중 5분창 vs 멎음 2분창 불일치)을 없앤다.
 _WORK_GRACE = 300   # 픽 후 이 시간(초)까진 '작업 중'으로 본다(프론트 live_status 창과 동일)
-_STUCK_AFTER = 120  # 활성 작업이 아닌 픽 요청이 이 시간 넘게 무응답이면 '멎음'
+_STUCK_AFTER = 120  # 엔진 가동 중인데 활성 작업이 아닌 픽이 이 시간 넘게 무응답이면 '멎음'
+_ENGINE_OFF_GRACE = 30  # 엔진(러너)이 꺼졌으면 픽은 곧 멎음 — heartbeat가 죽음의 확실한 신호라 짧게
 
 
 def _open_picks(gms, responded):
@@ -58,8 +59,10 @@ def _picked_ts(g):
     return (g.payload or {}).get("picked_ts") or g.ts or 0
 
 
-def live_pick_mid(gms, now, responded):
-    """현재 '작업 중'인 요청의 msg_id — 가장 최근 픽이 WORK_GRACE 이내면 그 id, 아니면 None."""
+def live_pick_mid(gms, now, responded, engine_live=True):
+    """현재 '작업 중'인 요청의 msg_id — 가장 최근 픽이 WORK_GRACE 이내면 그 id. 엔진 꺼졌으면 None(작업 중 없음)."""
+    if not engine_live:
+        return None                    # 러너 죽음 → 진행 중인 작업 없음
     picks = _open_picks(gms, responded)
     if not picks:
         return None
@@ -67,12 +70,13 @@ def live_pick_mid(gms, now, responded):
     return newest.msg_id if (now - _picked_ts(newest)) <= _WORK_GRACE else None
 
 
-def stuck_requests(gms, now):
-    """멎은 요청 목록 — 픽·무응답·미완이며 '활성 작업'이 아니고 STUCK_AFTER 초 경과한 사용자 요청."""
+def stuck_requests(gms, now, engine_live=True):
+    """멎은 요청 — 픽·무응답·미완이며 '활성 작업'이 아닌 것. 엔진 꺼졌으면 짧은 grace로 빨리 노출."""
     responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
-    live = live_pick_mid(gms, now, responded)
+    live = live_pick_mid(gms, now, responded, engine_live)
+    grace = _STUCK_AFTER if engine_live else _ENGINE_OFF_GRACE
     return [g for g in _open_picks(gms, responded)
-            if g.msg_id != live and (now - _picked_ts(g)) > _STUCK_AFTER]
+            if g.msg_id != live and (now - _picked_ts(g)) > grace]
 
 
 class AgentViewSet(viewsets.ReadOnlyModelViewSet):
@@ -360,17 +364,19 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                              "author": c.author_name, "body": c.body})
         msgs.sort(key=lambda m: m["ts"])
         import time as _t
+        from .models import EngineHeartbeat
         _now = _t.time()
+        engine_live = EngineHeartbeat.is_live()       # 러너 생존 — '작업 중'·'멎음' 판정의 확실한 신호
         responded = {g.reply_to for g in gms if g.msg_type == "response" and g.reply_to}
         # 미처리 요청 수(러너 꺼짐/대기 가시화) — 픽업 안 됐고 응답도 없는 사용자 요청
         pending = sum(1 for g in gms if g.sender_id == 0 and g.msg_type == "request"
                       and not (g.payload or {}).get("picked") and g.msg_id not in responded)
-        # '작업 중'(live_status)은 '활성 픽'(가장 최근 픽·5분 이내)일 때만 — 멎음과 상호배타.
+        # '작업 중'(live_status)은 '활성 픽'(엔진 가동·가장 최근 픽·5분 이내)일 때만 — 멎음과 상호배타.
         if live_status and live_status.get("state") == "working" \
-                and live_pick_mid(gms, _now, responded) is None:
-            live_status = None                       # 5분 넘게 무응답이면 '작업 중' 아님 → 멎음으로 잡힘
+                and live_pick_mid(gms, _now, responded, engine_live) is None:
+            live_status = None                        # 엔진 꺼짐/5분 초과면 '작업 중' 아님 → 멎음으로 잡힘
         # 멎은 요청 — 픽·무응답·미완이며 활성 작업도 아닌 채 멈춘 것(러너 사망 등). 한 helper로 일관.
-        stuck = len(stuck_requests(gms, _now))
+        stuck = len(stuck_requests(gms, _now, engine_live))
         # 프로젝트 한눈에 — 목표·상태·산출물(라이브 링크). 채팅 안 읽어도 맥락 파악.
         import re as _re
         goal = ""
@@ -446,10 +452,11 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         proj = self.get_object()
         if not (is_owner(proj, cur) or is_member(proj, cur)):
             return Response({"detail": "이 채널의 멤버만 할 수 있어요."}, status=403)
+        from .models import EngineHeartbeat
         gms = list(GuideMessage.objects.filter(channel_id=proj.id))
         now = time.time()
         n = 0
-        for g in stuck_requests(gms, now):             # 멎음 판정은 messages 표시와 동일 helper로 — 활성 작업은 안 건드림
+        for g in stuck_requests(gms, now, EngineHeartbeat.is_live()):   # 멎음 판정은 messages 표시와 동일 helper로 — 활성 작업은 안 건드림
             np = dict(g.payload or {})
             np.pop("picked", None); np.pop("done_ts", None); np.pop("picked_ts", None)
             GuideMessage.objects.filter(msg_id=g.msg_id).update(payload=np)
@@ -773,9 +780,8 @@ class StatsView(APIView):
             proj_q = proj_q.filter(visibility="public")
         # 협업 엔진(러너) 생존 — heartbeat 최근 30초 내면 가동 중(정적 안내문 대신 실제 표시).
         from .models import EngineHeartbeat
-        import time as _t
-        hb = EngineHeartbeat.objects.first()
-        engine = {"live": bool(hb and (_t.time() - hb.last_beat) < 30), "last": hb.last_beat if hb else 0}
+        hb = EngineHeartbeat.objects.filter(pk=1).first()
+        engine = {"live": EngineHeartbeat.is_live(), "last": hb.last_beat if hb else 0}
         return Response({
             "events": Event.objects.count(),
             "agents": agent_q.count(),

@@ -136,8 +136,9 @@ class RequeueStuckTest(TestCase):
 
     def test_작업중인_최신픽은_멎음아님_옛픽만_재큐(self):
         # 순차 러너: 가장 최근 픽이 '활성 작업'이라 멎음에서 제외 — 그보다 앞서 픽돼 버려진 것만 재큐.
-        from sns.models import GuideMessage
+        from sns.models import GuideMessage, EngineHeartbeat
         proj = self._setup()
+        EngineHeartbeat.beat("test")                    # 엔진 가동 중 — 최신 픽을 '작업 중'으로 인정
         old = self._stuck(proj, 400)                    # 옛 픽(버려짐) — 최신이 아니므로 멎음
         live = self._stuck(proj, 30)                    # 방금 픽(작업 중) — 멎음 아님
         res = self._client("tok_requeue_1").post(f"/api/projects/{proj.pid}/requeue/")
@@ -147,12 +148,24 @@ class RequeueStuckTest(TestCase):
 
     def test_messages_작업중인_요청은_멎음에_안잡힘(self):
         # 표시(messages)의 stuck_count와 live_status가 같은 helper를 써 같은 요청을 동시에 '작업 중·멎음'으로 안 잡음.
+        from sns.models import EngineHeartbeat
         proj = self._setup()
+        EngineHeartbeat.beat("test")                    # 엔진 가동 중
         self._stuck(proj, 400)                          # 옛 픽 → 멎음 1
         self._stuck(proj, 30)                           # 최신 픽 → 작업 중(live_status)
         data = self._client("tok_requeue_1").get(f"/api/projects/{proj.pid}/messages/").data
         self.assertEqual(data["stuck_count"], 1)        # 옛 픽만 멎음(최신은 작업 중이라 제외)
         self.assertEqual(data["live_status"]["state"], "working")
+
+    def test_엔진_꺼지면_픽은_빨리_멎음(self):
+        # heartbeat가 죽으면(러너 사망) 활성 작업도 없고, 픽은 짧은 grace로 빨리 '멎음' 노출 → 빠른 복구.
+        from sns.models import EngineHeartbeat
+        proj = self._setup()
+        EngineHeartbeat.objects.update_or_create(pk=1, defaults={"last_beat": time.time() - 120})  # 엔진 꺼짐
+        self._stuck(proj, 45)                           # 45초 전 픽 — 엔진 켜졌으면 작업 중, 꺼졌으니 멎음
+        data = self._client("tok_requeue_1").get(f"/api/projects/{proj.pid}/messages/").data
+        self.assertEqual(data["stuck_count"], 1)        # 엔진 꺼짐 → 30초 grace 넘겨 멎음
+        self.assertIsNone(data["live_status"])          # 작업 중 아님(러너 죽음)
 
     def test_진행갱신_touch가_picked_ts를_새로고쳐_멎음에서_뺀다(self):
         # 긴 흐름 보호: 러너가 흐름 도중 picked_ts를 touch로 갱신 → 5분+ 협업도 '멎음'으로 오판 안 됨.
