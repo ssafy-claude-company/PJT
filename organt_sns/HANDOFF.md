@@ -83,6 +83,7 @@
 | `[Response]\nBody:` / `[Request]…Body:` 프로토콜 접두 | `protocol.format_*` | `to_native()`가 `_PROTO` 정규식으로 제거 |
 | `<@id>` `<#id>` `<:emoji:id>` 멘션/채널/커스텀이모지 | 디스코드 마크업 | `to_native()`가 멘션·채널 제거, 이모지 → `:name:` |
 | **합성 채널 id** (`create_project_channel`이 새 id 생성) | 협업이 사용자 안 보이는 채널로 샘 | `HttpSnsGuide._origin_channel` 세팅 시 **요청이 들어온 채널로 라우팅** → 흐름이 사용자 채널에 보임 |
+| **회의·표결이 채널에 안 뜸**(리더 혼자처럼 보임) | `_say`(회의/표결)가 합성 `thread_id`로 `post()` 호출인데 `post`만 thread→channel 미해석(send_request/response는 해석함) → 토의가 유령 채널로 샘 | `post()`도 `_thread_channel.get`으로 해석(두 Guide 모두). 프로토콜 라벨 `[회의 NR]`/`[표]`는 `guide_format.collab_kind`로 **네이티브 kind(meeting/vote) 승격** + 접두 제거, 대화 줄에 작은 종류 칩 |
 
 **핵심 파일**: `backend/sns/guide_format.py`(`to_native`), `backend/sns/views.py`의 `messages`
 액션(plain 상태메시지 skip + `live_status` 파생 + `to_native` 적용), `frontend/src/pages/Channel.vue`
