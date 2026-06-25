@@ -248,18 +248,25 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         if gms:
             ag = {a.bot_id: a for a in Agent.objects.exclude(bot_id=0)}   # 유령 bot_id=0 제외
             _km = {"request": "delegation", "response": "work", "plain": "work"}
+            last_agent_id = None
             for gm in gms:
+                # 디스코드식 상태 요약(sender=0·plain "● 작업 중 / ✅ 완료")은 표시·파싱 안 함 —
+                # 상태는 아래 '구조화된 처리 상태(payload)'에서 직접 뽑는다(이모지 패턴 의존 X).
                 if gm.sender_id == 0 and gm.msg_type == "plain":
-                    # 작업 중·완료·진행 같은 '상태'는 채팅 메시지가 아니라 네이티브 상태로(디스코드 제약 없음).
-                    txt = to_native(gm.body)
-                    done = txt[:2] in ("✅", "☑️") or txt.startswith("✅") or txt.startswith("☑")
-                    live_status = {"text": txt, "ts": gm.ts, "done": done}   # 마지막이 최신 상태
                     continue
                 if gm.sender_id == 0 and gm.msg_type == "request":
                     msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
                                  "author": (gm.payload or {}).get("requester_name") or "사람",
                                  "body": to_native(gm.body)})
+                    p = gm.payload or {}             # 구조화 상태 — picked/done_ts(이모지 아님)
+                    if p.get("done_ts"):
+                        live_status = {"state": "done", "ts": p["done_ts"], "goal": to_native(gm.body)[:80]}
+                    elif p.get("picked"):
+                        live_status = {"state": "working", "ts": gm.ts, "goal": to_native(gm.body)[:80]}
+                    else:
+                        live_status = None           # 대기 — 상태 없음(요청만 표시)
                 else:
+                    last_agent_id = gm.sender_id
                     a = ag.get(gm.sender_id); ta = ag.get(gm.to_id) if gm.to_id else None
                     kind = "consultation" if (gm.msg_type == "request" and gm.kind == "I") else _km.get(gm.msg_type, "work")
                     msgs.append({"type": "agent", "key": f"g{gm.msg_id}", "ts": gm.ts, "kind": kind,
@@ -268,6 +275,10 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                                  "actor_id": str(a.bot_id) if a else None,
                                  "target_role": ta.role if ta else None,
                                  "target_name": ta.name if ta else None, "summary": to_native(gm.body)})
+            if live_status and live_status.get("state") == "working" and last_agent_id:
+                a = ag.get(last_agent_id)            # 진행 중이면 최근 활동 직원
+                if a:
+                    live_status["actor"] = a.name or a.role
         for thread in proj.threads.all():          # 모든 스레드의 코멘트 병합(첫 스레드만 보던 버그)
             for c in thread.comments.all():
                 msgs.append({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),

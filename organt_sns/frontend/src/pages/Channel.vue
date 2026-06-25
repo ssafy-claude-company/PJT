@@ -125,13 +125,13 @@ function renderMd(s) {
   return s.replace(/\n/g, '<br>')
 }
 
-// 엔진 라이브 상태(네이티브) — '작업 중'/'완료'를 채팅이 아니라 상태 띠로.
+// 엔진 상태(네이티브) — 구조화된 처리 상태(working/done)에서. 이모지 파싱 아님.
 const liveStatus = computed(() => {
   const ls = data.value?.live_status
   if (!ls || !ls.ts) return null
   const age = Date.now() / 1000 - ls.ts
-  if (ls.done ? age >= 1800 : age >= 180) return null   // 완료는 좀 더 오래, 작업 중은 최근만
-  return { ...ls, text: (ls.text || '').replace(/^(●|✅|☑️|☑)\s*/, '') }
+  if (ls.state === 'done' ? age >= 1800 : age >= 300) return null   // 완료 30분 / 작업중 5분
+  return ls
 })
 const batonHere = computed(() => {
   const b = stats.value?.baton
@@ -384,10 +384,10 @@ watch(() => route.params.pid, () => {
     <button v-if="data.context.goal && data.context.goal.length > 84" class="ctx-more" @click="ctxOpen = !ctxOpen">{{ ctxOpen ? '접기' : '더 보기' }}</button>
   </div>
 
-  <!-- 엔진 상태(네이티브) — '작업 중'/'완료'를 채팅 대신 상태 띠로 -->
-  <div v-if="liveStatus" class="live-strip" :class="{ done: liveStatus.done }">
-    <Icon v-if="liveStatus.done" name="check" :size="14" class="ls-ic" /><i v-else class="pulse"></i>
-    <span class="live-strip-t">{{ liveStatus.text }}</span>
+  <!-- 엔진 상태(네이티브) — 구조화 상태에서 조립, 이모지 아님 -->
+  <div v-if="liveStatus" class="live-strip" :class="{ done: liveStatus.state === 'done' }">
+    <Icon v-if="liveStatus.state === 'done'" name="check" :size="14" class="ls-ic" /><i v-else class="pulse"></i>
+    <span class="live-strip-t"><b>{{ liveStatus.state === 'done' ? '완료' : (liveStatus.actor || '직원') + ' 작업 중' }}</b><span v-if="liveStatus.goal" class="ls-goal"> · {{ liveStatus.goal }}</span></span>
   </div>
 
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />
