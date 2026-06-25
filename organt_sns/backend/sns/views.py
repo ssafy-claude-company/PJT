@@ -224,9 +224,11 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         evs = list(proj.events.select_related("actor", "target").order_by("-seq")[:limit])
         evs.reverse()
         # 본문은 payload(body/result/goal)에 전체가 있다 — summary는 100자 컷 요약이라 표시엔 전체 본문을 쓴다.
+        from .guide_format import to_native   # 디스코드 마크업(<t:..:R>·<@..> 등) → SNS-네이티브
+
         def _full(e):
             p = e.payload or {}
-            return p.get("body") or p.get("result") or p.get("goal") or e.summary
+            return to_native(p.get("body") or p.get("result") or p.get("goal") or e.summary)
 
         def _marker(e):   # 본문 없는 위임 마커("ID → ID 위임") — 내용 이벤트가 본문을 들고 있어 중복
             s = (e.summary or "").rstrip()
@@ -246,9 +248,14 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             ag = {a.bot_id: a for a in Agent.objects.exclude(bot_id=0)}   # 유령 bot_id=0 제외
             _km = {"request": "delegation", "response": "work", "plain": "work"}
             for gm in gms:
+                # SYS 내부 라이브-상태 요약(sender=0·plain, "● 작업 중…")은 채팅에 안 띄운다 —
+                # SNS는 상태를 베턴·맥락 띠로 네이티브 표시. 디스코드식 상태블록을 채팅에 흘리지 않음.
+                if gm.sender_id == 0 and gm.msg_type == "plain":
+                    continue
                 if gm.sender_id == 0 and gm.msg_type == "request":
                     msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
-                                 "author": (gm.payload or {}).get("requester_name") or "사람", "body": gm.body})
+                                 "author": (gm.payload or {}).get("requester_name") or "사람",
+                                 "body": to_native(gm.body)})
                 else:
                     a = ag.get(gm.sender_id); ta = ag.get(gm.to_id) if gm.to_id else None
                     kind = "consultation" if (gm.msg_type == "request" and gm.kind == "I") else _km.get(gm.msg_type, "work")
@@ -257,7 +264,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                                  "actor_name": a.name if a else None,
                                  "actor_id": str(a.bot_id) if a else None,
                                  "target_role": ta.role if ta else None,
-                                 "target_name": ta.name if ta else None, "summary": gm.body})
+                                 "target_name": ta.name if ta else None, "summary": to_native(gm.body)})
         for thread in proj.threads.all():          # 모든 스레드의 코멘트 병합(첫 스레드만 보던 버그)
             for c in thread.comments.all():
                 msgs.append({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),
@@ -284,7 +291,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         done = proj.events.filter(kind="task_complete").exists()
         deploys = proj.events.filter(kind="deploy").count()
         status = "완료" if done else ("진행 중" if msgs else "시작 전")
-        context = {"goal": (goal or "").strip()[:400], "status": status,
+        context = {"goal": to_native((goal or "").strip())[:400], "status": status,
                    "deploys": deploys, "links": links[:4]}
         from .social import current_person, is_owner, is_member
         cur = current_person(request)
