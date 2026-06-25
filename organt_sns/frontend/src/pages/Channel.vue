@@ -57,23 +57,31 @@ function cleanLine(s, kind) {
   return s
 }
 
-// 구조화 협업 발언(회의·표결)엔 작은 종류 칩 — 평범한 메시지와 구분돼 '협업이 보이게'.
+// 회의·표결은 발화자가 매 줄 달라 '연속 동일발화자' 묶음에 안 잡혀 N개 버블로 흩뿌려진다.
+// 같은 kind 연속을 한 블록(참여자 스택 + 발언 목록)으로 — 디스코드식 평채널 흩뿌림을 네이티브 구조화로.
 const TAG_KINDS = new Set(['meeting', 'vote'])
+// 블록 헤더 아바타 스택용 — 발언자 중복 제거(첫 등장 순).
+const collabSpeakers = (g) => {
+  const seen = new Set(), out = []
+  for (const e of g.entries) { if (!seen.has(e.seed)) { seen.add(e.seed); out.push(e) } }
+  return out
+}
 
 // 디스코드식: 사람·직원 구분 없이 한 흐름. 같은 사람 연속 메시지는 한 묶음(머리글 1번).
 const groups = computed(() => {
   const out = []
-  let cur = null, work = null, lastDay = null
+  let cur = null, work = null, collab = null, lastDay = null
   const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getFullYear()}.${d.getMonth()}.${d.getDate()}` }
   const dayLabel = (ts) => new Date(ts * 1000).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })
   const flushWork = () => { if (work) { out.push(work); work = null } }
+  const flushCollab = () => { collab = null }      // 블록은 생성 시 바로 out에 넣고 entries만 누적
   const maybeDay = (ts) => {
     const k = dayKey(ts)
-    if (k !== lastDay) { flushWork(); cur = null; out.push({ type: 'date', key: 'd' + out.length, label: dayLabel(ts) }); lastDay = k }
+    if (k !== lastDay) { flushWork(); flushCollab(); cur = null; out.push({ type: 'date', key: 'd' + out.length, label: dayLabel(ts) }); lastDay = k }
   }
   for (const m of (data.value?.messages || [])) {
     if (!isConv(m)) {                                   // 도구 작업 — 한 줄로 접되, 펼치면 무슨 작업인지 보이게
-      cur = null
+      cur = null; flushCollab()
       const it = workItem(m.summary || '')
       if (work) { work.n++; if (work.items.length < 50) work.items.push(it) }
       else work = { type: 'work', key: 'w' + out.length, n: 1, items: [it] }
@@ -81,6 +89,18 @@ const groups = computed(() => {
     }
     maybeDay(m.ts)
     flushWork()
+    // 회의·표결: 발화자 무관 같은 kind 연속을 한 블록으로(참여자 스택 + 발언). 집계는 만들지 않음
+    // (Status Rule — 표결 집계 등 내부 조율은 채널 비노출, 도구 반환 전용. 채널엔 발언만 온다).
+    if (m.type === 'agent' && TAG_KINDS.has(m.kind)) {
+      cur = null
+      const entry = { key: m.key, actorId: m.actor_id || null, author: m.actor_name || m.actor_role || '직원',
+        role: m.actor_name ? m.actor_role : null, seed: m.actor_id || m.actor_name || m.actor_role,
+        text: cleanLine(m.body || m.summary || '', m.kind), ts: m.ts }
+      if (collab && collab.kind === m.kind) { collab.entries.push(entry) }
+      else { collab = { type: 'collab', kind: m.kind, key: 'k' + m.key, label: kindMeta(m.kind), ts: m.ts, entries: [entry] }; out.push(collab) }
+      continue
+    }
+    flushCollab()
     // 사람: 직접 보낸 메시지 + 행위자 없는 사용자 요청·개입(과거 디스코드 기록)
     const userOrigin = (m.kind === 'user_request' || m.kind === 'intervention') && !m.actor_id
     const isHuman = m.type === 'human' || userOrigin
@@ -88,7 +108,6 @@ const groups = computed(() => {
     const id = isHuman ? 'h:' + author : (m.actor_id || m.actor_role || '?')
     const raw = m.body || m.summary || ''
     const line = { key: m.key, text: isHuman ? cleanLine(raw, null) : cleanLine(raw, m.kind), kind: m.kind, ts: m.ts,
-      tag: (!isHuman && TAG_KINDS.has(m.kind)) ? kindMeta(m.kind) : null,
       to: (!isHuman && (m.target_name || m.target_role)) || null }
     if (cur && cur.id === id) { cur.lines.push(line) }
     else {
@@ -446,6 +465,27 @@ watch(() => route.params.pid, () => {
             <div v-if="g.n > g.items.length" class="work-item wmore">…외 {{ g.n - g.items.length }}건</div>
           </div>
         </div>
+        <!-- 회의·표결: 흩뿌린 버블 대신 한 블록(참여자 스택 + 발언 목록) -->
+        <div v-else-if="g.type === 'collab'" class="collab-block" :class="g.kind">
+          <div class="cb-head">
+            <span class="cb-kind" :style="{ color: g.label.c, background: g.label.bg }">{{ g.label.label }}</span>
+            <span class="cb-stack">
+              <span v-for="s in collabSpeakers(g)" :key="s.seed" class="cb-av xs" :style="{ background: avatarColor(s.seed) }" :title="s.author">{{ monogram(s.author) }}</span>
+            </span>
+            <span class="cb-meta">{{ collabSpeakers(g).length }}명 · 발언 {{ g.entries.length }}</span>
+            <span class="cb-time">{{ timeFmt(g.ts) }}</span>
+          </div>
+          <div class="cb-body">
+            <div v-for="e in g.entries" :key="e.key" class="cb-row">
+              <router-link v-if="e.actorId" :to="`/agents/${e.actorId}`" class="cb-av" :style="{ background: avatarColor(e.seed) }">{{ monogram(e.author) }}</router-link>
+              <span v-else class="cb-av" :style="{ background: avatarColor(e.seed) }">{{ monogram(e.author) }}</span>
+              <div class="cb-rbd">
+                <div class="cb-rhead"><span class="cb-rname">{{ e.author }}</span><span v-if="e.role" class="cb-rrole">{{ e.role }}</span></div>
+                <div class="cb-rtext" v-html="renderMd(e.text)"></div>
+              </div>
+            </div>
+          </div>
+        </div>
         <!-- 메시지 묶음: 사람·직원 동일 레이아웃 -->
         <div v-else class="cmsg">
           <router-link v-if="g.actorId" :to="`/agents/${g.actorId}`" class="cmsg-av" :style="{ background: g.isHuman ? 'var(--accent)' : avatarColor(g.seed) }">{{ monogram(g.author) }}</router-link>
@@ -461,7 +501,7 @@ watch(() => route.params.pid, () => {
             </div>
             <div v-for="ln in g.lines" :key="ln.key" class="cmsg-line">
               <div :class="{ clamp: isLong(ln.text) && !longOpen.has(ln.key) }">
-                <span v-if="ln.tag" class="cmsg-tag" :style="{ color: ln.tag.c, background: ln.tag.bg }">{{ ln.tag.label }}</span><span v-if="ln.to" class="cmsg-to">@{{ ln.to }}</span><span v-html="renderMd(ln.text)"></span>
+                <span v-if="ln.to" class="cmsg-to">@{{ ln.to }}</span><span v-html="renderMd(ln.text)"></span>
               </div>
               <button v-if="isLong(ln.text)" class="more-btn" @click="toggleLong(ln.key)">{{ longOpen.has(ln.key) ? '접기 ▴' : '더 보기 ▾' }}</button>
             </div>
