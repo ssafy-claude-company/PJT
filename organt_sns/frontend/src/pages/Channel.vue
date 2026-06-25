@@ -500,7 +500,10 @@ watch(() => route.params.pid, () => {
 
   <!-- 멎은 요청 — 처리하던 러너가 멈춰 '작업 중'으로 박제된 것. 소유자/멤버가 다시 큐로. -->
   <div v-if="data && data.stuck_count" class="stuck-bar">
-    <span>멎은 요청 <b>{{ data.stuck_count }}건</b> — 처리하던 직원이 응답을 멈췄어요. 다시 맡겨 큐로 되돌릴 수 있어요.</span>
+    <span>멎은 요청 <b>{{ data.stuck_count }}건</b> —
+      <template v-if="engineLive">처리하던 직원이 응답을 멈췄어요. 다시 맡겨 큐로 되돌릴 수 있어요.</template>
+      <template v-else>협업 엔진이 <b>꺼져</b> 처리가 멈췄어요. 다시 맡겨두면 엔진이 켜질 때 처리됩니다.</template>
+    </span>
     <span class="sb-grow"></span>
     <button class="btn ghost sm" :disabled="requeuing" @click="doRequeue">{{ requeuing ? '…' : '다시 맡기기' }}</button>
   </div>
