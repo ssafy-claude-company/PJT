@@ -148,14 +148,22 @@ async function load() {
 // 라이브 폴링 — 새 메시지를 새로고침 없이. 바닥에 있을 때만 자동스크롤, 탭 숨김 시 정지.
 async function refresh() {
   if (document.hidden) return
+  // 사용자가 텍스트를 선택 중이면(복사하려는 중) 갱신을 건너뛴다 — 선택이 지워지지 않게.
+  const sel = window.getSelection && window.getSelection()
+  if (sel && String(sel).length > 0) return
   const pid = route.params.pid                 // 채널 전환 레이스 방지: 응답이 늦게 와도 현재 채널만 반영
   try {
     const fresh = await api.channelMessages(pid)
     if (pid !== route.params.pid) return        // 그새 채널이 바뀌었으면 버린다
-    const prevLast = data.value?.messages?.length
-    data.value = fresh
+    const prev = data.value?.messages || []
+    const nm = fresh.messages || []
+    // 바뀐 게 없으면 재렌더 안 함 — 매번 통째로 교체하면 텍스트 선택이 지워져 복사가 안 됐다.
+    const changed = prev.length !== nm.length || (nm.length && prev[prev.length - 1]?.key !== nm[nm.length - 1]?.key)
+    if (changed) {
+      data.value = fresh
+      if (atBottom.value) { await nextTick(); scrollBottom() }
+    }
     live.value = true
-    if ((fresh.messages?.length || 0) !== prevLast && atBottom.value) { await nextTick(); scrollBottom() }
   } catch (e) { /* 직전 상태 유지 */ }
   api.stats().then((s) => { stats.value = s }).catch(() => {})
 }
