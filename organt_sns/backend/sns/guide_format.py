@@ -27,11 +27,14 @@ def _fmt_time(unix, style):
     return dt.strftime("%H:%M")
 
 
+_PROTO = re.compile(r"^\[(?:Response|Request)\][^\n]*?Body:\s*")
+
+
 def to_native(text):
-    """디스코드 마크업 → SNS-네이티브 텍스트. None/빈값은 그대로."""
+    """디스코드 마크업·Rule 프로토콜 접두 → SNS-네이티브 텍스트. None/빈값은 그대로."""
     if not text:
         return text
-    s = str(text)
+    s = _PROTO.sub("", str(text))                     # [Response] Body: / [Request] … Body: 접두 제거
     s = _TS.sub(lambda m: _fmt_time(m.group(1), m.group(2)), s)
     s = _EMOJI.sub(lambda m: f":{m.group(1)}:", s)   # 커스텀 이모지 → :name:
     s = _MENTION.sub("", s)                            # 멘션 래퍼 제거(SNS는 자체 멘션 렌더)

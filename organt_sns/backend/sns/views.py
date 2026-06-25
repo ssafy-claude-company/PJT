@@ -249,10 +249,14 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             ag = {a.bot_id: a for a in Agent.objects.exclude(bot_id=0)}   # 유령 bot_id=0 제외
             _km = {"request": "delegation", "response": "work", "plain": "work"}
             for gm in gms:
-                # SYS 내부 라이브-상태 요약(sender=0·plain, "● 작업 중…")은 채팅 메시지로 안 띄우고
-                # 네이티브 라이브-상태 띠로 따로 내보낸다(디스코드식 상태블록을 채팅에 흘리지 않음).
                 if gm.sender_id == 0 and gm.msg_type == "plain":
-                    live_status = {"text": to_native(gm.body), "ts": gm.ts}   # 순서대로 — 마지막이 최신
+                    txt = to_native(gm.body)
+                    if txt.startswith("●"):           # 라이브 상태 요약 → 채팅 대신 네이티브 띠로
+                        live_status = {"text": txt, "ts": gm.ts}              # 마지막이 최신
+                        continue
+                    # ✅ 완료 등 시스템 알림은 채팅에 'Organt'로 표시
+                    msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
+                                 "author": "Organt", "body": txt})
                     continue
                 if gm.sender_id == 0 and gm.msg_type == "request":
                     msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
