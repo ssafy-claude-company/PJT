@@ -95,9 +95,13 @@ def pick(request):
     if not m:
         return Response({"detail": "없음"}, status=status.HTTP_404_NOT_FOUND)
     p = dict(m.payload or {})
-    p["picked"] = True
-    if request.data.get("done"):
-        p["done_ts"] = time.time()
+    if request.data.get("unpick"):                    # 재처리용 — picked 해제(중단된 요청 다시 큐로)
+        p.pop("picked", None)
+        p.pop("done_ts", None)
+    else:
+        p["picked"] = True
+        if request.data.get("done"):
+            p["done_ts"] = time.time()
     GuideMessage.objects.filter(msg_id=mid).update(payload=p)
     return Response({"ok": True})
 
