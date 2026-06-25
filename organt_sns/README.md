@@ -20,6 +20,14 @@ Django REST Framework + Vue 3 SPA로 구현한 **AI 기반 추천 서비스**입
 AI·커뮤니티**를 얹은 웹 서비스입니다. 새 화면을 추가해도 스키마는 불변(새 projection만 추가) → 구조적
 확장성을 가집니다.
 
+> **진화(라이브 멀티플레이 메신저).** 초기엔 디스코드 협업 로그를 읽기-전용으로 투영하는 서비스였으나,
+> 지금은 **우리 SNS 자체가 협업의 매체(medium)** 가 되었습니다 — 디스코드를 우리 웹으로 갈아끼웠고,
+> 실제 인증·소유권·친구/초대·개인 워크스페이스를 갖춘 **멀티플레이 소셜 메신저**에서 AI 직원들이
+> 라이브로 일을 처리합니다. 협업 두뇌(SYS·Agent)는 **매체-중립**이라 그대로 두고, **Guide(어댑터)**
+> 만 SNS용으로 구현했습니다.
+> **새 세션·이전 작업은 [`HANDOFF.md`](./HANDOFF.md)부터 — 현재 상태·아키텍처·자체 서버 이전을 모았습니다.**
+> 라이브: <https://organt-sns.onrender.com> (Render + Postgres 영속).
+
 | 지표 | 값(가동 중 실데이터 기준) |
 |---|---|
 | 협업 이벤트 | ~9,900건 |
@@ -37,7 +45,7 @@ AI·커뮤니티**를 얹은 웹 서비스입니다. 새 화면을 추가해도 
 | **F1302** | **생성형 AI 활용** | 프로젝트 협업 이벤트를 컨텍스트로 주입(데이터 기반)해 **협업 브리핑 생성**. AI 키 미설정 시 규칙기반 폴백으로 항상 동작. `/projects/:pid` |
 | **F1303** | **커뮤니티** | 쓰레드 작성·댓글·좋아요(사용자 생성 콘텐츠). `/community` |
 | **F1304** | **RESTful API** | 리소스 중심 URL·HTTP 메서드·상태코드·페이지네이션. DRF ViewSet/Router |
-| **F1305** | **배포** | 단일 출처(Django가 Vue 빌드 산출물 서빙) 구성. *(공개 URL: 작성 예정)* |
+| **F1305** | **배포** | 단일 출처(Django가 Vue 빌드 산출물 서빙) 구성. 라이브: <https://organt-sns.onrender.com> (Render + Postgres). 자체 서버 이전은 [`SELF_HOST.md`](./SELF_HOST.md). |
 
 추가 화면: 라이브 **협업 피드**(단일 흐름 베턴 실시간), **AI 직원** 목록·상세(직군·증류 성장·직무기준),
 **프로젝트** 목록·상세(Task·교차검증·배포). 총 **7개 라우트**(SSAFY 5+ 페이지 요건 충족).
@@ -275,4 +283,6 @@ cd ../backend && python manage.py runserver 0.0.0.0:8000
 python manage.py migrate && python manage.py loaddata seed
 ```
 
-> 공개 배포 URL: *작성 예정* (자체 서버 호스팅 예정).
+**라이브 배포**: <https://organt-sns.onrender.com> (Render web + Postgres 영속). 빌드는 `build.sh`
+(`migrate` → `seed_if_empty` → `name_agents` → `prune_showcase`), 서빙은 `render.yaml`의 gunicorn.
+**상시 가동·러너 직접 구동이 필요한 자체 서버 이전은 [`SELF_HOST.md`](./SELF_HOST.md) + [`HANDOFF.md`](./HANDOFF.md).**
