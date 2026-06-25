@@ -243,6 +243,14 @@ a.cmsg-name:hover{text-decoration:underline}
   font-weight:600;padding:3px 11px;border-radius:20px;cursor:pointer;transition:.12s}
 .ls-stop:hover{background:rgba(233,105,107,.12);border-color:rgba(233,105,107,.6)}
 .ls-stop:disabled{opacity:.5;cursor:default}
+/* 진행 중 개입(정보 전달) — 작업 중일 때 끼어들기 입력 */
+.interject-bar{display:flex;align-items:center;gap:9px;margin:8px 20px 0;padding:6px 8px 6px 13px;border-radius:var(--r);
+  background:var(--surface2);border:1px solid var(--accent-line)}
+.interject-bar .ij-ic{color:var(--accent2);flex:none}
+.interject-bar .ij-field{flex:1;min-width:0;background:none;border:0;color:var(--text);font:inherit;font-size:13px;outline:none}
+.interject-bar .ij-field::placeholder{color:var(--text3)}
+.interject-bar .btn{flex:none}
+@media(max-width:760px){ .interject-bar{margin:8px 14px 0} }
 @media(max-width:760px){ .live-strip,.pending-bar{margin:10px 14px 0} }
 .recs{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:8px}
 .recchip{background:var(--surface);border:1px solid var(--line);border-radius:20px;color:var(--text);

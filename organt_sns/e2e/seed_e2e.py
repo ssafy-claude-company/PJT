@@ -67,6 +67,9 @@ ev("deploy", 255, "배포 완료", {"result": "https://organt-p-001.onrender.com
 # 멎은 요청 — 픽 후 무응답·미완·5분 경과 → stuck-bar
 gm(0, "사운드 이펙트도 추가해줘", mtype="request", kind="W", off=300,
    payload={"requester_name": "E2E", "picked": True, "picked_ts": t0 + 300})
+# 방금 픽한(작업 중·최근) 요청 — live_status working(recent) → 라이브-스트립 + 개입 바 표시
+gm(0, "멀티플레이 동기화 더 다듬어줘", mtype="request", kind="W", off=590,
+   payload={"requester_name": "E2E", "picked": True, "picked_ts": t0 + 590})
 
 GuideMessage.objects.create(channel_id=p2.id, thread_id=p2.id, sender_id=0, msg_type="request",
                             kind="W", body="포트폴리오 만들어줘", ts=t0, payload={})

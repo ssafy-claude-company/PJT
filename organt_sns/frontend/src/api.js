@@ -77,6 +77,7 @@ export default {
   makeRequest: (pid, payload) => http.post(`/projects/${pid}/request/`, payload).then((r) => r.data),
   requeueStuck: (pid) => http.post(`/projects/${pid}/requeue/`).then((r) => r.data),   // 멎은 요청 다시 맡기기
   stopWork: (pid) => http.post(`/projects/${pid}/stop/`).then((r) => r.data),          // 진행 중 작업 중지
+  interject: (pid, payload) => http.post(`/projects/${pid}/interject/`, payload).then((r) => r.data),  // 진행 중 개입(정보 전달)
   // 채널 관리(관리 기능)
   renameChannel: (pid, name) => http.patch(`/projects/${pid}/rename/`, { name }).then((r) => r.data),
   archiveChannel: (pid) => http.post(`/projects/${pid}/archive/`).then((r) => r.data),

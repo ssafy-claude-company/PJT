@@ -236,3 +236,46 @@ class PerAgentModelTest(TestCase):
         mm = _local_models()
         self.assertEqual(mm.get(920010), "opus")
         self.assertNotIn(920011, mm)
+
+
+class InterjectTest(TestCase):
+    """진행 중 개입(정보 전달) — 소유자/멤버가 신호 기록 + 타임라인 표시용 plain. 러너가 폴해 주입."""
+
+    def _setup(self):
+        from sns.models import Project, Person, Membership
+        proj = Project.objects.create(pid="S-9400", name="개입 채널", visibility="public")
+        Person.objects.create(handle="iv", name="개입자", token="tok_iv")
+        Membership.objects.create(person=Person.objects.get(handle="iv"), project=proj, status="active")
+        return proj
+
+    def test_멤버는_개입신호_기록_및_타임라인표시(self):
+        from sns.models import InterjectSignal
+        proj = self._setup()
+        c = APIClient()
+        c.credentials(HTTP_AUTHORIZATION="Token tok_iv")
+        self.assertEqual(c.post(f"/api/projects/{proj.pid}/interject/", {"body": "백엔드 코드 이상, 다시 봐"}).status_code, 200)
+        self.assertTrue(InterjectSignal.objects.filter(channel_id=proj.id, text__icontains="백엔드").exists())
+        msgs = c.get(f"/api/projects/{proj.pid}/messages/").data["messages"]
+        self.assertTrue(any(x["type"] == "human" and "백엔드 코드 이상" in x["body"] for x in msgs))
+
+    def test_빈내용_400_권한_401_403(self):
+        from sns.models import Person
+        proj = self._setup()
+        c = APIClient()
+        c.credentials(HTTP_AUTHORIZATION="Token tok_iv")
+        self.assertEqual(c.post(f"/api/projects/{proj.pid}/interject/", {"body": "  "}).status_code, 400)
+        self.assertEqual(APIClient().post(f"/api/projects/{proj.pid}/interject/", {"body": "x"}).status_code, 401)
+        Person.objects.create(handle="ov", name="남", token="tok_ov")
+        c2 = APIClient()
+        c2.credentials(HTTP_AUTHORIZATION="Token tok_ov")
+        self.assertEqual(c2.post(f"/api/projects/{proj.pid}/interject/", {"body": "x"}).status_code, 403)
+
+    def test_local_interject_pending_소거(self):
+        from sns.models import InterjectSignal
+        from sns.management.commands.run_organt_sns import _local_interject_pending
+        proj = self._setup()
+        InterjectSignal.objects.create(channel_id=proj.id, target_id=None, text="hi", requested_at=0)
+        out = _local_interject_pending(proj.id)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["text"], "hi")
+        self.assertFalse(InterjectSignal.objects.filter(channel_id=proj.id).exists())

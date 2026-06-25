@@ -157,3 +157,25 @@ def stops(request):
     if chans:
         StopSignal.objects.filter(channel_id__in=chans).delete()
     return Response({"channels": chans})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def interjects(request):
+    """러너 폴 — 사람 '진행 중 개입' 신호 조회+소거. `?channel=`이면 그 채널만. {target_id, text} 목록 반환
+    (러너가 deliver_human_info로 주입). 소거-on-read = 멱등. 원격 배치용."""
+    if not _authed(request):
+        return _deny()
+    from .models import InterjectSignal
+    ch = request.query_params.get("channel")
+    qs = InterjectSignal.objects.all()
+    if ch:
+        try:
+            qs = qs.filter(channel_id=int(ch))
+        except (TypeError, ValueError):
+            return Response({"detail": "channel이 올바르지 않습니다."}, status=status.HTTP_400_BAD_REQUEST)
+    sigs = list(qs.order_by("id"))
+    if sigs:
+        InterjectSignal.objects.filter(id__in=[s.id for s in sigs]).delete()
+    return Response({"infos": [{"channel_id": s.channel_id, "target_id": s.target_id, "text": s.text}
+                               for s in sigs]})

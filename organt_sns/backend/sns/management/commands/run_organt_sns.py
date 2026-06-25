@@ -94,6 +94,15 @@ def _local_stop_pending(channel_id):
     return StopSignal.objects.filter(channel_id=channel_id).delete()[0] > 0
 
 
+def _local_interject_pending(channel_id):
+    """이 채널의 '진행 중 개입' 신호들을 소거하고 [{target_id, text}] 반환(러너 로컬 모드)."""
+    from sns.models import InterjectSignal
+    sigs = list(InterjectSignal.objects.filter(channel_id=channel_id).order_by("id"))
+    if sigs:
+        InterjectSignal.objects.filter(id__in=[s.id for s in sigs]).delete()
+    return [{"target_id": s.target_id, "text": s.text} for s in sigs]
+
+
 class Command(BaseCommand):
     help = "Organt SYS를 SnsGuide로 띄워 채널 요청을 라이브 협업으로 처리한다(디스코드 비의존)."
 
@@ -141,6 +150,10 @@ class Command(BaseCommand):
             async def _check_stop(ch):
                 d = await guide._get(f"/api/guide/stops/?channel={ch}")
                 return bool(d.get("stopped"))
+
+            async def _check_interject(ch):
+                d = await guide._get(f"/api/guide/interjects/?channel={ch}")
+                return d.get("infos", [])
             where = f"원격 {remote}"
         else:
             guide = SnsGuide()
@@ -159,6 +172,9 @@ class Command(BaseCommand):
 
             async def _check_stop(ch):
                 return await sync_to_async(_local_stop_pending)(ch)
+
+            async def _check_interject(ch):
+                return await sync_to_async(_local_interject_pending)(ch)
             where = "로컬 ORM"
 
         if not bot_info:
@@ -227,6 +243,13 @@ class Command(BaseCommand):
                                 if await _check_stop(ch):
                                     sysm.request_cancel(ch)
                                     self.stdout.write(f"■ 작업 중지 요청 수신 — ch={ch}")
+                            except Exception:
+                                pass
+                            try:
+                                # 사람 '진행 중 개입' — 폴해서 대상 봇 다음 턴 프롬프트에 주입(deliver_human_info).
+                                for info in await _check_interject(ch):
+                                    ok = sysm.deliver_human_info(ch, info.get("target_id"), info.get("text"))
+                                    self.stdout.write(f"✎ 사람 개입 {'주입' if ok else '미주입(흐름없음)'} — ch={ch}")
                             except Exception:
                                 pass
                         await flow_task

@@ -5188,3 +5188,28 @@ def test_사용자요청_Info도_리더점유시_큐_유실없음():
         await asyncio.wait_for(t1, timeout=2)
         assert "이거 왜 이래요?" in ran                            # 큐 드레인 — 질문도 결국 처리
     asyncio.run(scenario())
+
+
+def test_deliver_human_info_노트주입_프롬프트반영_가드_대상라우팅():
+    """[사람 중간 개입] deliver_human_info가 활성 흐름의 대상 봇 pending_info에 적재 → _prompt가 그 봇 턴에
+    노트로 주입(없으면 부재 가드), 대상 지정 시 그 봇 + 리더(인지)에 라우팅. baton/큐 안 건드림."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "L", 12: "백엔드"})
+    f = _flow(s.guide, leader=11)            # user_channel=500, bot_info={11:L,12:M}, leader=11
+    s.active_flows[500] = f
+    assert s.deliver_human_info(999, None, "x") is False        # 활성 흐름 없는 채널
+    assert s.deliver_human_info(500, None, "   ") is False       # 빈 텍스트
+    # 대상 미지정 → 리더(11)
+    assert s.deliver_human_info(500, None, "백엔드 코드 이상, 다시 봐") is True
+    assert f.pending_info.get(11) == ["백엔드 코드 이상, 다시 봐"]
+    # 대상=12 → 12 직접 + 리더(11) 인지 노트
+    assert s.deliver_human_info(500, 12, "캐시 붙여줘") is True
+    assert "캐시 붙여줘" in f.pending_info.get(12, [])
+    assert any("전달됨" in n for n in f.pending_info.get(11, []))
+    # _prompt: 리더(11) 프롬프트에 노트 반영
+    p = s._prompt("받은요청", Kind.WORK, "leader", 11, 11, f)
+    assert "백엔드 코드 이상, 다시 봐" in p and "사람이 작업 중 전한 정보" in p
+    # 노트 없는 봇(99)은 그 마커 부재(빈값 가드 — origin_note 패턴)
+    assert "사람이 작업 중 전한 정보" not in s._prompt("x", Kind.WORK, "member", 99, 11, f)
+    # 소비-clear(run_turn이 하는 일) 후엔 부재
+    f.pending_info.pop(11, None)
+    assert "사람이 작업 중 전한 정보" not in s._prompt("x", Kind.WORK, "leader", 11, 11, f)

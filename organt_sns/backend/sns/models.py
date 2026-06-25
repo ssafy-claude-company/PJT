@@ -248,3 +248,15 @@ class StopSignal(models.Model):
     channel_id = models.BigIntegerField(unique=True, db_index=True)
     requested_at = models.FloatField(default=0.0)
     requested_by = models.CharField(max_length=30, blank=True)
+
+
+class InterjectSignal(models.Model):
+    """사람 '진행 중 개입(정보 전달)' 신호 — 흐름 도중 사람이 넘긴 정보. 웹이 기록, 러너가 폴해
+    Sys.deliver_human_info(channel, target, text)로 *대상 봇 다음 턴 프롬프트*에 주입한 뒤 삭제.
+    채널당 여러 건 가능(unique 아님) — 큐로 미루지 않고 흐름에 부착(개입의 핵심). StopSignal과 같은 결."""
+    channel_id = models.BigIntegerField(db_index=True)
+    target_id = models.BigIntegerField(null=True, blank=True)   # 대상 봇(없으면 리더)
+    text = models.TextField()
+    requested_at = models.FloatField(default=0.0)
+    requested_by = models.CharField(max_length=30, blank=True)
+    requester_name = models.CharField(max_length=60, blank=True)   # 타임라인 작성자 표시용

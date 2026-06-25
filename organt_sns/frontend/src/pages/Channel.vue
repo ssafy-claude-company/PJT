@@ -266,6 +266,22 @@ async function sendRequest() {
     await nextTick(); scrollBottom()
   } finally { reqSending.value = false }
 }
+// 진행 중 개입(정보 전달) — 흐름 도중 봇에게 정보를 넘김. 러너가 받아 deliver_human_info로 다음 턴에 주입.
+const interjectBody = ref('')
+const interjecting = ref(false)
+async function doInterject() {
+  const body = interjectBody.value.trim()
+  if (!body) return
+  interjecting.value = true
+  try {
+    await api.interject(route.params.pid, { body })
+    interjectBody.value = ''
+    toast('전했어요 — 봇이 다음 턴에 반영합니다')
+    data.value = await api.channelMessages(route.params.pid)
+  } catch (e) { toast(e?.response?.data?.detail || '전하지 못했어요', 'err') }
+  finally { interjecting.value = false }
+}
+
 // 작업 중지 — 진행 중인 협업 흐름을 멈춤(소유자/멤버). 러너가 신호를 받아 SYS.request_cancel.
 const stopping = ref(false)
 async function doStop() {
@@ -462,6 +478,14 @@ watch(() => route.params.pid, () => {
     <Icon v-if="liveStatus.state === 'done'" name="check" :size="14" class="ls-ic" /><i v-else class="pulse"></i>
     <span class="live-strip-t"><b>{{ liveStatus.state === 'done' ? '완료' : (liveStatus.actor || '직원') + ' 작업 중' }}</b><span v-if="liveStatus.goal" class="ls-goal"> · {{ liveStatus.goal }}</span></span>
     <button v-if="liveStatus.state === 'working' && (data?.is_owner || data?.is_member)" class="ls-stop" :disabled="stopping" @click="doStop" title="진행 중인 작업을 멈춥니다">{{ stopping ? '…' : '중지' }}</button>
+  </div>
+
+  <!-- 진행 중 개입 — 작업 중일 때만. 끼어들어 정보 전하면 봇이 다음 턴에 판단·반영. -->
+  <div v-if="liveStatus && liveStatus.state === 'working' && (data?.is_owner || data?.is_member)" class="interject-bar">
+    <Icon name="send" :size="13" class="ij-ic" />
+    <input class="ij-field" v-model="interjectBody" placeholder="끼어들어 정보 전하기 — 봇이 다음 턴에 반영합니다 (예: 백엔드 코드 다시 봐)"
+           @keyup.enter="doInterject" :disabled="interjecting" />
+    <button class="btn ghost sm" :disabled="interjecting || !interjectBody.trim()" @click="doInterject">{{ interjecting ? '…' : '개입' }}</button>
   </div>
 
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />

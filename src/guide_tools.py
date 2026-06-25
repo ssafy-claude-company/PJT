@@ -570,6 +570,10 @@ class Flow:
                                        #   리더 다음 턴에 'SYS 확인 사실'로 주입할 큐 — 워커가 핑계로 보고하고
                                        #   리더가 묵살·재발사하던 루프(P-030 backend2↔PM 핑퐁) 차단. 리더가
                                        #   직접 그 도메인 전문가에게 위임하게 한다(sys_core continue 루프에서 소비).
+        self.pending_info = {}         # [사람 중간 개입] {봇id: [텍스트]} — 흐름 진행 중 사람이 넘긴 정보를
+                                       #   그 봇 *다음 턴 프롬프트*에 주입(매체가 deliver_human_info로 적재). 흐름격리
+                                       #   필수(origin_request처럼 전역이면 동시 흐름 교차오염). _prompt가 읽고
+                                       #   run_turn이 소비-clear. baton 프레임 아님(게이트#3 무관) — 순수 프롬프트 노트.
         self.leader_segment = 0        # 리더 턴 세그먼트 번호(시작=1, continue마다 +1) — 관측용
         self.req_results = {}          # (seg,from,to,kind,body)->응답: 같은 턴 병렬 중복요청 합치기용 캐시
         self.act_count = 0             # 작업공간 변경(run/Write/Edit) 누계 — 훅이 +1. '위임 도중 owner가 실제로

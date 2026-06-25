@@ -971,6 +971,14 @@ class Sys:
                          f"{', '.join('inbox/' + n for n in _inb)}\n이 파일들을 Read로 확인해 요청에 반영하세요"
                          f"(사용자가 자료로 함께 보낸 것 — 추측 말고 실제 내용 확인). owner에게 위임 시 이 경로를 알려주세요.\n\n")
                         if _inb else "")
+        # [사람 중간 개입 — 진행 중 도착] 흐름 도중 사람이 이 봇에게 넘긴 정보(매체가 deliver_human_info로 적재).
+        # 순수 프롬프트 노트(요청·baton 아님): 맹종 말고 당신 판단으로 작업에 반영하고, 반영 여부·방식을 응답에 한 줄로
+        # 알리세요(대화 느낌). 워커에게 보낼 게 있으면 당신(리더)이 그 owner에게 그 취지로 재위임/지시하세요.
+        _pend = (getattr(flow, "pending_info", None) or {}).get(me) if flow is not None else None
+        human_info_note = (("[사람이 작업 중 전한 정보 — 방금 도착]\n"
+                            + "\n".join(f"· {t}" for t in _pend)
+                            + "\n→ 당신 판단으로 진행 중 작업에 반영하고(원문 의도 기준), 반영 여부·방식을 응답에 간단히 알리세요.\n\n")
+                           if _pend else "")
         if role == "leader":
             my_role = f"{domain}(담당자)" if domain else "담당자"
             # 담당자가 '예비'(직군 미배정)로 호명된 경우: 자길 예비로 방치하지 말고 먼저 자기 직군부터 채용해
@@ -998,6 +1006,7 @@ class Sys:
                 f"당신의 역할: {my_role}\n"
                 f"{origin_note}"
                 f"{inbound_note}"
+                f"{human_info_note}"
                 f"{portfolio_note}"
                 f"{self._env_note()}"
                 f"받은 형태: {body}\n동료: {peers}\n\n"
@@ -1046,7 +1055,7 @@ class Sys:
         my_role = domain or "팀원"
         return (
             f"당신은 자율적으로 일하는 팀원입니다(당신도 필요하면 동료에게 먼저 묻습니다). "
-            f"당신의 역할: {my_role}\n{origin_note}{inbound_note}받은 요청({getattr(kind, 'value', kind)}): {body}\n동료: {peers}\n\n"
+            f"당신의 역할: {my_role}\n{origin_note}{inbound_note}{human_info_note}받은 요청({getattr(kind, 'value', kind)}): {body}\n동료: {peers}\n\n"
             f"{self._craft_note(me)}"
             f"{self._PRINCIPLE}\n\n"
             f"**기획 단계에서 '당신 도메인의 할 일·담당'을 물으면** 당신 전문 영역의 할 일을 스스로 정의해 제안하고 맡을 "
@@ -1520,8 +1529,15 @@ class Sys:
                 # 워치독이 흐름 전체를 본다. 워커(비-리더) 턴은 '도구 활동이 turn_timeout 동안 완전히 멈춘'
                 # 경우(진짜 행)에만 끊는다 — 일하는 동안은 무한정 허용(하트비트). 끊기면 '인프라 실패'로 반환.
                 if role == "leader":
-                    return await self._absorb_role_profiles(await _do())
-                return await self._absorb_role_profiles(await self._run_until_silent(_do, flow))
+                    _out = await self._absorb_role_profiles(await _do())
+                else:
+                    _out = await self._absorb_role_profiles(await self._run_until_silent(_do, flow))
+                if flow is not None:   # [사람 개입] 주입된 노트 소비-clear(턴 성공 후 1회 — revive 재시도엔 유지돼 재주입)
+                    try:
+                        (flow.pending_info or {}).pop(organt_id, None)
+                    except Exception:
+                        pass
+                return _out
             except asyncio.TimeoutError:
                 self._log("agent_timeout", organt=organt_id, role=role, sec=self.turn_timeout)
                 return (f"API Error: timeout — 동료({organt_id}) 서브프로세스가 {self.turn_timeout}s 동안 "
@@ -2187,6 +2203,33 @@ class Sys:
                 if t is not None and not t.done():
                     t.cancel()
                 self._log("cancel_requested", channel=cid)
+                return True
+        return False
+
+    def deliver_human_info(self, channel_id, target_id, text) -> bool:
+        """사람의 '진행 중 개입(정보 전달)' — 활성 흐름의 대상 봇 *다음 턴 프롬프트*에 노트로 주입한다.
+        큐로 미루지 않고(개입의 핵심) 흐름에 부착만 — baton 프레임/wake를 만들지 않으므로 single-alive·게이트 불변
+        (게이트는 도구호출만 보고 프롬프트 텍스트는 안 봄). 대상이 흐름 팀에 없으면 리더로. 리더는 항상 인지한다
+        (라우터·사용자 응답 주체). 매체/러너가 같은 이벤트루프에서 호출. 활성 흐름 없으면 False(매체가 폴백 큐잉)."""
+        text = (str(text or "")).strip()
+        if not text:
+            return False
+        cid = int(channel_id)
+        for f in list(self.active_flows.values()):
+            if getattr(f, "user_channel", None) == cid and not f.done:
+                lead = f.leader
+                bi = f.bot_info or {}
+                tgt = int(target_id) if (target_id and int(target_id) in bi) else lead
+                if getattr(f, "pending_info", None) is None:
+                    f.pending_info = {}
+                f.pending_info.setdefault(tgt, []).append(text)            # 대상 봇이 다음 턴에 직접 본다
+                if tgt != lead:                                            # 리더는 '누구에게 갔는지' 인지(라우터·응답)
+                    f.pending_info.setdefault(lead, []).append(f"[{bi.get(tgt, tgt)}에게 전달됨] {text}")
+                try:
+                    f.last_activity = time.monotonic()                     # 무진행 워치독이 안 끊게
+                except Exception:
+                    pass
+                self._log("human_info_delivered", channel=cid, target=tgt)
                 return True
         return False
 

@@ -281,7 +281,12 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                 # 디스코드식 상태 요약(sender=0·plain "● 작업 중 / ✅ 완료")은 표시·파싱 안 함 —
                 # 상태는 아래 '구조화된 처리 상태(payload)'에서 직접 뽑는다(이모지 패턴 의존 X).
                 if gm.sender_id == 0 and gm.msg_type == "plain":
-                    continue
+                    p = gm.payload or {}
+                    if p.get("interject"):               # 사람 '진행 중 개입' 한 줄 — 타임라인에 사람 메시지로
+                        msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
+                                     "author": p.get("requester_name") or "사람",
+                                     "body": to_native(gm.body), "interject": True})
+                    continue                              # 그 외 sender0 plain(디스코드식 상태요약)은 표시 안 함
                 if gm.sender_id == 0 and gm.msg_type == "request":
                     msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
                                  "author": (gm.payload or {}).get("requester_name") or "사람",
@@ -433,6 +438,39 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({"detail": "이 채널의 멤버만 할 수 있어요."}, status=403)
         StopSignal.objects.update_or_create(
             channel_id=proj.id, defaults={"requested_at": time.time(), "requested_by": cur.handle[:30]})
+        return Response({"ok": True})
+
+    @action(detail=True, methods=["post"])
+    def interject(self, request, pid=None):
+        """진행 중 개입(정보 전달) — 흐름 도중 사람이 봇에게 정보를 넘긴다(소유자/멤버). 큐로 미루지 않고
+        러너가 폴해 Sys.deliver_human_info로 *대상 봇 다음 턴 프롬프트*에 주입 → 봇이 판단·반영·응답.
+        POST /api/projects/{pid}/interject/  body=텍스트, to_id=대상 봇(선택, 없으면 리더)."""
+        import time
+        from .social import current_person, is_owner, is_member
+        from .models import InterjectSignal
+        cur = current_person(request)
+        if not cur:
+            return Response({"detail": "로그인이 필요해요."}, status=401)
+        proj = self.get_object()
+        if not (is_owner(proj, cur) or is_member(proj, cur)):
+            return Response({"detail": "이 채널의 멤버만 할 수 있어요."}, status=403)
+        body = (request.data.get("body") or "").strip()
+        if not body:
+            return Response({"detail": "전할 내용이 비었습니다."}, status=400)
+        to_int = None
+        to_id = request.data.get("to_id")
+        if to_id:
+            try:
+                to_int = int(to_id)
+            except (TypeError, ValueError):
+                return Response({"detail": "대상 직원 지정이 올바르지 않습니다."}, status=400)
+        InterjectSignal.objects.create(
+            channel_id=proj.id, target_id=to_int, text=body[:4000],
+            requested_at=time.time(), requested_by=cur.handle[:30], requester_name=cur.name)
+        # 타임라인 즉시 표시용 — 사람 한 줄을 plain으로도 적어 둔다(러너가 신호를 소비·삭제해도 남게).
+        GuideMessage.objects.create(
+            channel_id=proj.id, thread_id=proj.id, sender_id=0, msg_type="plain", body=body[:4000],
+            ts=time.time(), to_id=to_int, payload={"interject": True, "requester_name": cur.name})
         return Response({"ok": True})
 
     @action(detail=True, methods=["post"])

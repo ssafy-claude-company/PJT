@@ -41,6 +41,14 @@ function ok(cond, msg) { if (cond) { pass++; console.log('  ✓ ' + msg); } else
     await page.waitForTimeout(1200);
     ok(await page.$('.stuck-bar') === null, '다시 맡기기 후 멎은 요청 바 사라짐(재큐)');
 
+    // 진행 중 개입 — 작업 중이라 개입 바 노출, 끼어들어 정보 전하면 타임라인에 사람 메시지로 표시
+    ok(await page.$('.interject-bar') !== null, '작업 중 — 개입 바 노출');
+    await page.fill('.interject-bar .ij-field', '백엔드 인증은 OAuth로 가줘');
+    await page.click('.interject-bar button');
+    await page.waitForTimeout(1200);
+    const interjected = await page.$$eval('.msgs', els => els[0] && els[0].textContent.includes('백엔드 인증은 OAuth로'));
+    ok(interjected, '개입 전송 → 타임라인에 표시');
+
     // ── 홈: 엔진 표시 + 채널 섹셔닝 ─────────────────
     await page.goto(BASE + '/', { waitUntil: 'networkidle' });
     await page.waitForSelector('.sb-engine', { timeout: 6000 });
