@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import api from '../api'
 import EventItem from '../components/EventItem.vue'
 import Icon from '../components/Icon.vue'
-import { dayKey, dayLabel } from '../kinds'
+import { dayKey, dayLabel, craftLevel } from '../kinds'
 import { monogram, avatarBg, AVATAR_COLORS } from '../avatar'
 import { toast } from '../toast'
 import { me } from '../user'
@@ -12,6 +12,8 @@ import { me } from '../user'
 const route = useRoute()
 const agent = ref(null)
 const isMine = computed(() => agent.value && agent.value.owner_handle && agent.value.owner_handle === me.handle)
+// 직무기준 증류 누적 → 장인 레벨/진척(성장 시각화). 직군 공용 지표라 RoleProfile에서.
+const craft = computed(() => craftLevel(profile.value?.distill_count || 0))
 const events = ref([])
 // 활동 피드에 날짜 구분선 삽입 — '시:분'만 나열돼 언제인지 모르는 문제 해결.
 const feedRows = computed(() => {
@@ -165,11 +167,17 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
       <div class="panel" style="align-self:start">
         <h2>쌓은 노하우 · {{ agent.role }}</h2>
         <div v-if="profile" style="padding:16px">
-          <div class="flex" style="margin-bottom:12px">
-            <span class="grow">성장 {{ profile.distill_count }}회</span>
-            <span class="badge">새 경험 {{ profile.experience_count }}</span>
+          <!-- 성장: 증류(수면 consolidation) 누적 → 장인 레벨/진척 -->
+          <div class="craft">
+            <div class="craft-head">
+              <span class="craft-lv">Lv.{{ craft.level }}</span>
+              <span class="craft-title">{{ craft.title }}</span>
+              <span class="craft-stat">증류 {{ profile.distill_count }} · 경험 {{ profile.experience_count }}</span>
+            </div>
+            <div class="craft-bar"><span :style="{ width: (craft.max ? 100 : craft.into * 100) + '%' }"></span></div>
+            <div class="craft-foot">{{ craft.max ? '최고 단계 — 깊이 다져진 장인' : `다음 단계까지 증류 ${craft.toNext}회` }}</div>
           </div>
-          <div class="pre">{{ profile.criteria || '(아직 없어요)' }}</div>
+          <div class="pre" style="margin-top:14px">{{ profile.criteria || '(아직 없어요)' }}</div>
         </div>
         <div v-else class="empty">아직 쌓은 노하우가 없어요</div>
       </div>
@@ -200,6 +208,16 @@ watch(() => route.params.botId, () => { editing.value = false; load() })
 .sw.on { border-color: var(--text); outline-color: var(--text) }
 .cols2 { grid-template-columns: 1fr 1fr }
 .feed-day { padding: 10px 16px 4px; font-size: 11px; font-weight: 700; color: var(--text3); letter-spacing: .03em; border-bottom: 1px solid var(--line2) }
+/* 성장 시각화 — 증류 누적 → 장인 레벨/진척 */
+.craft { background: var(--surface2); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 13px 15px }
+.craft-head { display: flex; align-items: baseline; gap: 9px }
+.craft-lv { font-size: 15px; font-weight: 750; color: var(--accent2); letter-spacing: -.02em }
+.craft-title { font-size: 13.5px; font-weight: 650; color: var(--text) }
+.craft-stat { margin-left: auto; font-size: 11.5px; color: var(--text3); font-variant-numeric: tabular-nums }
+.craft-bar { height: 7px; border-radius: 20px; background: rgba(255,255,255,.06); overflow: hidden; margin: 10px 0 6px }
+.craft-bar span { display: block; height: 100%; border-radius: 20px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .4s ease }
+.craft-foot { font-size: 11px; color: var(--text3) }
 @media(max-width:760px){ .cols2 { grid-template-columns: 1fr } }
 @media(max-width:560px){ .prof-head .between { flex-wrap: wrap; gap: 10px } }   /* 액션 버튼이 긴 이름에 안 눌리게 */
 </style>

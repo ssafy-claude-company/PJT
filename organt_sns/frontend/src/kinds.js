@@ -67,3 +67,19 @@ export const dayKey = (ts) => {
   const d = new Date(ts * 1000)
   return `${d.getFullYear()}.${d.getMonth()}.${d.getDate()}`
 }
+
+// 직무기준 증류(수면 consolidation) 누적 = 장인 성장. distill_count → 레벨·칭호·다음 단계 진척.
+// 디스코드가 못 하던 '에이전트 성장'을 1급으로 보이게(ADAPTER_MAP #5).
+const CRAFT_TIERS = [0, 2, 5, 10, 18, 30, 45, 65, 90]
+const CRAFT_TITLES = ['수습', '초급', '숙련', '전문', '능숙', '장인', '명장', '대가', '거장']
+export function craftLevel(distill) {
+  const d = Math.max(0, Number(distill) | 0)
+  let lv = 1
+  for (let i = 1; i < CRAFT_TIERS.length; i++) if (d >= CRAFT_TIERS[i]) lv = i + 1
+  const cur = CRAFT_TIERS[lv - 1], next = lv < CRAFT_TIERS.length ? CRAFT_TIERS[lv] : null
+  return {
+    level: lv, title: CRAFT_TITLES[lv - 1] || '거장', distill: d,
+    into: next === null ? 1 : Math.max(0, Math.min(1, (d - cur) / (next - cur))),
+    next, toNext: next === null ? 0 : next - d, max: next === null,
+  }
+}

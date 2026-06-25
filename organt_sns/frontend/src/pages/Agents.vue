@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { monogram, avatarBg } from '../avatar'
+import { craftLevel } from '../kinds'
 import { me } from '../user'
 
 const router = useRouter()
@@ -63,7 +64,7 @@ onMounted(load)
           <div v-if="a.persona" class="persona-sm">{{ a.persona }}</div>
           <div class="flex" style="gap:8px;margin-top:11px">
             <span class="badge">활동 {{ a.event_count }}</span>
-            <span v-if="a.distill_count" class="grow">성장 {{ a.distill_count }}</span>
+            <span v-if="a.distill_count" class="grow" :title="`직무기준 증류 ${a.distill_count}회`">Lv.{{ craftLevel(a.distill_count).level }} {{ craftLevel(a.distill_count).title }}</span>
           </div>
         </router-link>
       </div>
@@ -86,7 +87,7 @@ onMounted(load)
           <div v-if="a.persona" class="persona-sm">{{ a.persona }}</div>
           <div class="flex" style="gap:8px;margin-top:11px">
             <span class="badge">활동 {{ a.event_count }}</span>
-            <span v-if="a.distill_count" class="grow">성장 {{ a.distill_count }}</span>
+            <span v-if="a.distill_count" class="grow" :title="`직무기준 증류 ${a.distill_count}회`">Lv.{{ craftLevel(a.distill_count).level }} {{ craftLevel(a.distill_count).title }}</span>
           </div>
         </router-link>
       </div>
