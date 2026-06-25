@@ -250,13 +250,10 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             _km = {"request": "delegation", "response": "work", "plain": "work"}
             for gm in gms:
                 if gm.sender_id == 0 and gm.msg_type == "plain":
+                    # 작업 중·완료·진행 같은 '상태'는 채팅 메시지가 아니라 네이티브 상태로(디스코드 제약 없음).
                     txt = to_native(gm.body)
-                    if txt.startswith("●"):           # 라이브 상태 요약 → 채팅 대신 네이티브 띠로
-                        live_status = {"text": txt, "ts": gm.ts}              # 마지막이 최신
-                        continue
-                    # ✅ 완료 등 시스템 알림은 채팅에 'Organt'로 표시
-                    msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
-                                 "author": "Organt", "body": txt})
+                    done = txt[:2] in ("✅", "☑️") or txt.startswith("✅") or txt.startswith("☑")
+                    live_status = {"text": txt, "ts": gm.ts, "done": done}   # 마지막이 최신 상태
                     continue
                 if gm.sender_id == 0 and gm.msg_type == "request":
                     msgs.append({"type": "human", "key": f"g{gm.msg_id}", "ts": gm.ts,
