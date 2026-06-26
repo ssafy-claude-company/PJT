@@ -25,7 +25,7 @@ from .audit import AuditLog, make_post_tool_use_hook
 from .config import Config, load_config
 from .discord_guide import DiscordGuide
 from .guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
-from .organt import Organt, build_options, pinned_cwd
+from .organt import Organt, build_options, load_persona, pinned_cwd
 from .permissions import make_pre_tool_use_hook
 from .protocol import Kind, Request, Response, parse
 from .sys_core import Sys
@@ -209,13 +209,16 @@ async def _connect(token: str, message_content: bool = False,
     raise last
 
 
-def _make_builder(cfg: Config, audit: AuditLog, bot_info=None, model_map=None):
+def _make_builder(cfg: Config, audit: AuditLog, bot_info=None, model_map=None, persona_map=None):
     """role에 맞는 도구·권한·훅·State를 갖춘 Organt를 만드는 빌더를 돌려준다.
     model_map({organt_id: model})이 주어지면 그 봇만 build_options에 model override를 싣는다
     (per-agent 모델 — 매체가 직원별 LLM 지정. 디스코드 경로는 model_map 미전달이라 동작 불변).
+    persona_map({organt_id: persona})이 주어지면 그 봇만 기본 인격(CLAUDE.md) 뒤에 자기 개성·지침을
+    덧붙인다 — 스튜디오에서 사용자가 지정한 봇별 정체성이 실제로 프롬프트에 실린다(미지정 봇은 불변).
     Config가 frozen이라 전역 cfg.model을 못 바꾸므로, override 인자로 봇별 모델을 통과시킨다."""
     bot_info = bot_info or {}
     model_map = model_map or {}
+    persona_map = persona_map or {}
     def organt_builder(organt_id, server, role, flow=None, state_tag=None):
         # 리더도 한 명의 직원 — 구현 도구(Write/Edit)를 그대로 갖는다. 차이는 권한이 아니라
         # 역할: 목표는 팀 합의로 정하고(set_goal), Work 위임 본문은 '스펙'이 아니라
@@ -266,6 +269,11 @@ def _make_builder(cfg: Config, audit: AuditLog, bot_info=None, model_map=None):
         _m = model_map.get(organt_id)
         if _m:                                   # [per-agent 모델] 지정 봇만 override(없으면 cfg.model=전역)
             _bopts["model"] = _m
+        _pp = (persona_map.get(organt_id) or "").strip()
+        if _pp:                                  # [per-agent 인격] 기본 인격 뒤에 이 봇만의 개성·지침을 덧붙임
+            _bopts["system_prompt"] = (load_persona()
+                                       + "\n\n[이 직원만의 개성·지침 — 스튜디오에서 사용자가 지정한 정체성]\n"
+                                       + _pp)
         return Organt(cfg, build_options(cfg, **_bopts),
                       state_path=str(state_path), on_activity=heartbeat)
     return organt_builder

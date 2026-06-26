@@ -5159,6 +5159,26 @@ def test_per_agent_모델이_organt_옵션까지_도달():
     assert base(111, {}, "백엔드").options.model == "sonnet"       # 동작 불변
 
 
+def test_per_agent_persona가_organt_시스템프롬프트까지_도달():
+    """per-agent 인격(스튜디오에서 봇별 정체성 지정) — _make_builder(persona_map)이 지정 봇의 system_prompt
+    뒤에 그 개성을 덧붙여 Organt 옵션까지 도달하고, 미지정 봇·디스코드 경로는 기본 인격 그대로.
+    종전엔 persona 필드가 저장만 되고 런타임에 통째 무시되던 것(라이브 규명: persona 참조 0건)의 회귀 가드."""
+    import tempfile
+    from pathlib import Path
+    from src.config import Config
+    from src.audit import AuditLog
+    from src.main import _make_builder
+    tmp = Path(tempfile.mkdtemp()); (tmp / "logs").mkdir(exist_ok=True)
+    cfg = Config(system_bot_token="x", channel_id=1, model="sonnet",
+                 workspace_dir=tmp, audit_log_path=tmp / "logs" / "audit.jsonl")
+    audit = AuditLog(cfg.audit_log_path)
+    builder = _make_builder(cfg, audit, {111: "백엔드", 222: "QA"}, persona_map={111: "너는 신중하고 보안에 집착한다"})
+    assert "신중하고 보안에 집착" in (builder(111, {}, "백엔드").options.system_prompt or "")   # 지정 봇 → 인격 주입
+    assert "신중하고 보안에 집착" not in (builder(222, {}, "QA").options.system_prompt or "")    # 미지정 봇 → 기본만
+    base = _make_builder(cfg, audit, {111: "백엔드"})              # persona_map 미전달(디스코드 경로)
+    assert "신중하고 보안에 집착" not in (base(111, {}, "백엔드").options.system_prompt or "")    # 동작 불변
+
+
 def test_request_cancel_흐름닫고_점유해제_큐드레인():
     """[안전성] 사용자 중지(request_cancel)는 진행 흐름을 워치독과 같은 취소 경로로 깨끗이 닫는다 —
     점유 해제·active_flows pop·큐 드레인까지. 즉 중지는 ① 리더를 영구 점유로 박제하지 않고

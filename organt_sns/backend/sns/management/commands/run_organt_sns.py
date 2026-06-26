@@ -54,10 +54,11 @@ def _local_roster():
     from django.db.models import Count
     bots = list(Agent.objects.annotate(_ec=Count("events")).order_by("-_ec"))
     bot_info = {int(a.bot_id): (a.role or "예비") for a in bots}
+    persona_map = {int(a.bot_id): a.persona for a in bots if (a.persona or "").strip()}
     leader = next((int(a.bot_id) for a in bots if a.is_leader), None)
     if leader is None and bots:
         leader = int(bots[0].bot_id)
-    return bot_info, leader
+    return bot_info, leader, persona_map
 
 
 def _local_models():
@@ -184,7 +185,7 @@ class Command(BaseCommand):
                 self.stderr.write("--remote 에는 토큰이 필요합니다(--token 또는 ORGANT_GUIDE_TOKEN). 종료.")
                 return
             guide = HttpSnsGuide(remote, token)
-            bot_info, leader, model_map = await self._remote_roster(guide)
+            bot_info, leader, model_map, persona_map = await self._remote_roster(guide)
 
             async def fetch_pending(seen):
                 data = await guide._get("/api/guide/pending/")
@@ -213,7 +214,7 @@ class Command(BaseCommand):
             where = f"원격 {remote}"
         else:
             guide = SnsGuide()
-            bot_info, leader = await sync_to_async(_local_roster)()
+            bot_info, leader, persona_map = await sync_to_async(_local_roster)()
             model_map = await sync_to_async(_local_models)()
 
             async def fetch_pending(seen):
@@ -245,7 +246,7 @@ class Command(BaseCommand):
 
         # per-agent 모델 — 빌더 팩토리에 model_map을 넘겨 봇별 LLM 주입(빈 맵이면 디스코드 경로와 동일).
         sysm = Sys(
-            guide, SNS_GUILD_ID, _make_builder(cfg, audit, bot_info, model_map), bot_info=bot_info,
+            guide, SNS_GUILD_ID, _make_builder(cfg, audit, bot_info, model_map, persona_map), bot_info=bot_info,
             workspace=str(cfg.workspace_dir), projects_path=str(_STATE / "projects.json"),
             session_dir=str(_STATE), jobs_path=str(_STATE / "jobs.json"), seed_path=None)
 
@@ -388,20 +389,22 @@ class Command(BaseCommand):
             await asyncio.sleep(opts["poll"])
 
     async def _remote_roster(self, guide):
-        """원격 /api/agents/ → bot_info({bot_id: role}), 리더, model_map({bot_id: model})."""
+        """원격 /api/agents/ → bot_info({bot_id: role}), 리더, model_map, persona_map({bot_id: persona})."""
         data = await guide._get("/api/agents/")
         rows = data if isinstance(data, list) else data.get("results", [])
-        bot_info, leader, model_map = {}, None, {}
+        bot_info, leader, model_map, persona_map = {}, None, {}, {}
         best = -1
         for a in rows:
             bid = int(a["bot_id"])
             bot_info[bid] = a.get("role") or "예비"
             if (a.get("model") or "").strip():
                 model_map[bid] = a["model"].strip()
+            if (a.get("persona") or "").strip():
+                persona_map[bid] = a["persona"]
             if a.get("is_leader"):
                 leader = bid
             if (a.get("event_count") or 0) > best:
                 best, _fallback = a.get("event_count") or 0, bid
         if leader is None and rows:
             leader = int(rows[0]["bot_id"])
-        return bot_info, leader, model_map
+        return bot_info, leader, model_map, persona_map
