@@ -555,3 +555,58 @@ class DisplayAndRoutingTest(TestCase):
         self._gm(p1, 0, "request", to=None, kind="W", body="추천")
         row = [r for r in _local_pending(set()) if r["channel_id"] == p1.id][0]
         self.assertEqual(row["route_to"], 31)
+
+
+class ResumeCutBuildTest(TestCase):
+    """[잘린 빌드 자동 재개] 회귀 가드 — 러너가 죽어 picked_ts가 멎은 빌드는 다시 큐로,
+    살아있는(touch 중)·완료·중지·이미응답한 요청은 재개 안 됨."""
+
+    def _proj(self, pid="S-9800", leader=None):
+        from sns.models import Project
+        return Project.objects.create(pid=pid, name="ch", visibility="public", leader=leader)
+
+    def _gm(self, proj, sender, mtype="request", to=None, kind="W", body="빌드", payload=None):
+        from sns.models import GuideMessage
+        return GuideMessage.objects.create(channel_id=proj.id, thread_id=proj.id, sender_id=sender,
+            msg_type=mtype, to_id=to, kind=kind, body=body, ts=time.time(), payload=payload or {})
+
+    def test_멎은_빌드는_재큐_살아있는것은_아님(self):
+        from sns.management.commands.run_organt_sns import _local_pending
+        proj = self._proj()
+        stale = self._gm(proj, 0, body="fps 만들어줘",
+                         payload={"picked": True, "picked_ts": time.time() - 600})   # 10분 전 픽, touch 끊김 = 사망
+        live = self._gm(proj, 0, body="todo 만들어줘",
+                        payload={"picked": True, "picked_ts": time.time() - 5})       # 방금 touch = 살아있음
+        ids = {r["msg_id"] for r in _local_pending(set())}
+        self.assertIn(stale.msg_id, ids)        # 멎은 빌드 → 재개
+        self.assertNotIn(live.msg_id, ids)      # 도는 빌드 → 그대로
+
+    def test_완료_중지_미픽은_재개_규칙(self):
+        from sns.management.commands.run_organt_sns import _local_pending
+        proj = self._proj(pid="S-9801")
+        done = self._gm(proj, 0, payload={"picked": True, "picked_ts": time.time() - 600,
+                                          "done_ts": time.time()})                    # 완료
+        stopped = self._gm(proj, 0, payload={"picked": True, "picked_ts": time.time() - 600,
+                                             "stopped": True, "done_ts": time.time()})  # 사용자 중지
+        fresh = self._gm(proj, 0, payload={})                                          # 미픽 신규 = 항상 큐
+        ids = {r["msg_id"] for r in _local_pending(set())}
+        self.assertNotIn(done.msg_id, ids)
+        self.assertNotIn(stopped.msg_id, ids)
+        self.assertIn(fresh.msg_id, ids)
+
+    def test_이미_응답한_멎은_빌드는_재개안됨(self):
+        from sns.management.commands.run_organt_sns import _local_pending
+        from sns.models import GuideMessage
+        proj = self._proj(pid="S-9802")
+        answered = self._gm(proj, 0, body="이미 끝낸 빌드",
+                            payload={"picked": True, "picked_ts": time.time() - 600})
+        GuideMessage.objects.create(channel_id=proj.id, thread_id=proj.id, sender_id=11,
+            msg_type="response", reply_to=answered.msg_id, body="다 했습니다", ts=time.time())
+        ids = {r["msg_id"] for r in _local_pending(set())}
+        self.assertNotIn(answered.msg_id, ids)   # 응답 존재 → 재개 안 함(완료로 간주)
+
+    def test_seen_집합은_재개에서_제외(self):
+        from sns.management.commands.run_organt_sns import _local_pending
+        proj = self._proj(pid="S-9803")
+        stale = self._gm(proj, 0, payload={"picked": True, "picked_ts": time.time() - 600})
+        self.assertNotIn(stale.msg_id, {r["msg_id"] for r in _local_pending({stale.msg_id})})

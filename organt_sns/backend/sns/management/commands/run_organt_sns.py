@@ -79,10 +79,21 @@ def _route_to(channel_id):
 
 
 def _local_pending(seen):
+    import time as _t
+    _RESUME_AFTER = 180   # [잘린 빌드 재개] picked_ts가 이만큼 멈췄으면 그 러너 사망 → 다시 큐로(guide_bridge.pending과 동일)
+    now = _t.time()
+    responded = set(GuideMessage.objects.filter(msg_type="response").exclude(reply_to=None)
+                    .values_list("reply_to", flat=True))
     out = []
     for m in GuideMessage.objects.filter(msg_type="request", sender_id=0).order_by("msg_id"):
-        if m.msg_id in seen or (m.payload or {}).get("picked"):
+        if m.msg_id in seen:
             continue
+        p = m.payload or {}
+        if p.get("done_ts") or p.get("stopped"):
+            continue
+        if p.get("picked"):
+            if m.msg_id in responded or (now - (p.get("picked_ts") or now)) < _RESUME_AFTER:
+                continue
         out.append({"msg_id": m.msg_id, "channel_id": m.channel_id, "to_id": m.to_id,
                     "kind": m.kind, "body": m.body, "route_to": _route_to(m.channel_id)})
     return out

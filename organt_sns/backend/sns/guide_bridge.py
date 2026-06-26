@@ -80,10 +80,22 @@ def pending(request):
             return int(pr.leader.bot_id)
         last = GuideMessage.objects.filter(channel_id=channel_id).exclude(sender_id=0).order_by("-msg_id").first()
         return int(last.sender_id) if last and last.sender_id else None
+    # [잘린 빌드 자동 재개] 러너 churn(컨테이너가 supervisor를 회수)마다 진행 중 빌드가 죽고, 픽됨-미완으로
+    # 남아 영영 재개 안 돼 긴 빌드(fps·todo)가 못 끝나던 근본. 러너는 살아있는 동안 picked_ts를 8초마다
+    # touch한다 → picked_ts가 _RESUME_AFTER 넘게 멈췄으면 그 러너는 죽은 것 → 다시 큐로 내보내 이어받게.
+    # 완료(done_ts)·사용자중지(stopped)·이미 응답받은 요청은 제외(재실행 방지).
+    _RESUME_AFTER = 180   # 초 — touch 22회(8초 간격) 누락 = 확실히 사망
+    now = time.time()
+    responded = set(GuideMessage.objects.filter(msg_type="response").exclude(reply_to=None)
+                    .values_list("reply_to", flat=True))
     out = []
     for m in GuideMessage.objects.filter(msg_type="request", sender_id=0).order_by("msg_id"):
-        if (m.payload or {}).get("picked"):
+        p = m.payload or {}
+        if p.get("done_ts") or p.get("stopped"):
             continue
+        if p.get("picked"):
+            if m.msg_id in responded or (now - (p.get("picked_ts") or now)) < _RESUME_AFTER:
+                continue                       # 살아있는(touch 중) 흐름이거나 이미 응답함 → 재개 안 함
         out.append({"msg_id": m.msg_id, "channel_id": m.channel_id, "to_id": m.to_id,
                     "kind": m.kind, "body": m.body, "route_to": _route_to(m.channel_id)})
     return Response({"pending": out})
