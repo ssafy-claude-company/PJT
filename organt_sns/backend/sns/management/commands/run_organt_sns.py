@@ -265,7 +265,8 @@ class Command(BaseCommand):
                     mid = m["msg_id"]
                     to_id = int(m["to_id"]) if m["to_id"] else leader
                     ch = int(m["channel_id"])
-                    # 같은 채널이 진행 중이거나 대상 봇이 타 흐름 점유 중이면 큐에 남김(두뇌가 직렬화) — seen 미추가로 다음 폴 재검토
+                    # 같은 채널이 진행 중이거나 대상 봇이 타 흐름 점유 중이면 큐에 남김(두뇌가 직렬화) — seen 미추가로 다음 폴 재검토.
+                    # ('진행 중 흐름에 개입으로 즉시 전달'은 단일턴 흐름에선 다음 턴이 없어 유실되므로 안 함 — 큐가 안전하게 각각 응답.)
                     if ch in busy_ch or to_id in busy_lead or sysm.engaged.holder(to_id) is not None:
                         continue
                     seen.add(mid)
