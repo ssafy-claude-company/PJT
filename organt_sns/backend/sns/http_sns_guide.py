@@ -109,8 +109,9 @@ class HttpSnsGuide:
     async def post(self, channel_id, sender_id, content, reply_to=None):
         # 스레드→채널 해석(send_request/response와 동일) — _say(회의·표결·병렬)가 합성 thread_id로
         # 호출돼도 사용자가 보는 실제 채널에 뜨게 한다. 안 그러면 협업 토의가 유령 채널로 새서
-        # 흐름이 '리더 혼자' 중앙집권적으로 보인다.
-        ch = self._thread_channel.get(int(channel_id), int(channel_id))
+        # 흐름이 '리더 혼자' 중앙집권적으로 보인다. [고스트 라우팅 수정] 재기동으로 _thread_channel이
+        # 비거나(맵 유실) 재개가 옛 task-thread를 복원하면 미등록 → 흐름의 ORIGIN_CHANNEL로 라우팅(재기동 생존).
+        ch = self._thread_channel.get(int(channel_id)) or ORIGIN_CHANNEL.get() or self._origin_channel or int(channel_id)
         res = await self._post("/api/guide/ingest/", {
             "op": "post", "channel_id": int(ch), "thread_id": int(channel_id),
             "sender_id": int(sender_id or 0), "msg_type": "plain", "body": str(content),
@@ -118,7 +119,7 @@ class HttpSnsGuide:
         return str(res.get("msg_id"))
 
     async def send_request(self, thread_id, sender_id, to_id, kind, body):
-        ch = self._thread_channel.get(int(thread_id), int(thread_id))
+        ch = self._thread_channel.get(int(thread_id)) or ORIGIN_CHANNEL.get() or self._origin_channel or int(thread_id)
         k = "W" if (str(getattr(kind, "value", kind)).lower().startswith("w")) else "I"
         res = await self._post("/api/guide/ingest/", {
             "op": "send_request", "channel_id": int(ch), "thread_id": int(thread_id),
@@ -127,7 +128,7 @@ class HttpSnsGuide:
         return str(res.get("msg_id"))
 
     async def send_response(self, thread_id, sender_id, request_msg_id, body):
-        ch = self._thread_channel.get(int(thread_id), int(thread_id))
+        ch = self._thread_channel.get(int(thread_id)) or ORIGIN_CHANNEL.get() or self._origin_channel or int(thread_id)
         res = await self._post("/api/guide/ingest/", {
             "op": "send_response", "channel_id": int(ch), "thread_id": int(thread_id),
             "sender_id": int(sender_id), "msg_type": "response",
