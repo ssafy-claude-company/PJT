@@ -3538,20 +3538,37 @@ def test_Skill강화_경험_흡수_주입_상한(tmp_path):
     s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "QA"},
             session_dir=str(tmp_path))
     out = asyncio.run(s._absorb_role_profiles(
-        "검증 완료.\n[경험] QA\n소켓 e2e는 서버 기동 1.5초 대기 후가 안정적\n[/경험]"))
+        "검증 완료.\n[경험] QA\n소켓 e2e는 서버 기동 1.5초 대기 후가 안정적\n[/경험]", me=11))
     assert out == "검증 완료."                                   # 본문에서 블록 제거
-    assert "1.5초" in s.role_experience["QA"][0]                 # 누적
+    assert "1.5초" in s.role_experience["QA"][0]                 # 공용 풀 누적(증류 원료)
+    assert "1.5초" in s.bot_experience[11][0]                    # [개인별] 봇11 자기 경험에도
     saved = _json.load(open(tmp_path / "role_profiles.json", encoding="utf-8"))
-    assert "1.5초" in saved["experience"]["QA"][0]               # 디스크 영속
+    assert "1.5초" in saved["experience"]["QA"][0]               # 디스크 영속(공용)
+    assert "1.5초" in saved["bot_experience"]["11"][0]           # 디스크 영속(개인)
     for i in range(20):                                          # 상한(_EXP_KEEP) 유지
-        asyncio.run(s._absorb_role_profiles(f"r\n[경험] QA\n교훈{i}\n[/경험]"))
+        asyncio.run(s._absorb_role_profiles(f"r\n[경험] QA\n교훈{i}\n[/경험]", me=11))
     assert len(s.role_experience["QA"]) == s._EXP_KEEP
+    assert len(s.bot_experience[11]) == s._EXP_KEEP             # 개인 풀도 상한
     p = s._prompt("b", Kind.WORK, "member", 11, 11)
-    assert "최근 경험" in p and "교훈19" in p                     # 다음 작업에 주입
+    assert "최근 경험" in p and "교훈19" in p                     # 그 봇 자신 경험이 다음 작업에 주입(개인별)
     assert "[경험] QA" in p                                      # 경험 남기기 안내
     s2 = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "QA"},
              session_dir=str(tmp_path))
-    assert s2.role_experience["QA"]                              # 재기동 복원
+    assert s2.role_experience["QA"]                              # 재기동 복원(공용)
+    assert s2.bot_experience[11]                                 # 재기동 복원(개인)
+
+
+def test_E_학습은_개인별_같은직군_두봇이_경험을_안섞는다(tmp_path):
+    """[E 개선] 학습이 직군 공용이 아니라 개인별 — 같은 'QA' 직군 봇 둘(11·22)이 각자 다른 경험을 갖고,
+    프롬프트엔 '자기 경험'만 주입된다(직군 표준=role_profiles는 공용 베이스라인으로 별도 제공=F)."""
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "QA", 22: "QA"},
+            session_dir=str(tmp_path))
+    asyncio.run(s._absorb_role_profiles("r\n[경험] QA\n봇11만의 교훈\n[/경험]", me=11))
+    asyncio.run(s._absorb_role_profiles("r\n[경험] QA\n봇22만의 교훈\n[/경험]", me=22))
+    p11 = s._prompt("b", Kind.WORK, "member", 11, 11)
+    p22 = s._prompt("b", Kind.WORK, "member", 22, 22)
+    assert "봇11만의 교훈" in p11 and "봇22만의 교훈" not in p11   # 11은 자기 것만
+    assert "봇22만의 교훈" in p22 and "봇11만의 교훈" not in p22   # 22는 자기 것만
 
 
 def test_수면_기억증류_경험이_기준으로_압축(tmp_path):

@@ -83,7 +83,8 @@ class Sys:
         # Discord(sys-roles)에 영속돼 이후 모든 작업 프롬프트에 자기검수 기준으로 주입된다.
         # QA·백엔드·프론트·런타임 채용 직군 모두 같은 메커니즘 하나로 '각자의 일'이 고도화된다.
         self.role_profiles: Dict[str, str] = {}
-        self.role_experience: Dict[str, list] = {}   # 직군별 '일하며 쌓인 경험' 최근 요점(Skill 강화 v1)
+        self.role_experience: Dict[str, list] = {}   # 직군별 '일하며 쌓인 경험' 풀 — 수면 증류로 직무 기준에 통합(공용 플라이휠)
+        self.bot_experience: Dict[int, list] = {}    # [개인별 학습] 봇 자신이 겪은 최근 교훈 — 직군 공용이 아닌 개인 정체성
         self.profiles_path = (os.path.join(session_dir, "role_profiles.json") if session_dir else None)
         self._load_profiles()
         self._proj_n = 0
@@ -759,6 +760,8 @@ class Sys:
             self.role_profiles.update({k: v for k, v in (data.get("profiles") or {}).items() if v})
             self.role_experience.update({k: list(v)[-self._EXP_KEEP:]
                                          for k, v in (data.get("experience") or {}).items() if v})
+            self.bot_experience.update({int(k): list(v)[-self._EXP_KEEP:]    # [개인별] 봇별 경험 복원
+                                        for k, v in (data.get("bot_experience") or {}).items() if v})
         except Exception:
             pass
 
@@ -768,7 +771,8 @@ class Sys:
         try:
             tmp = f"{self.profiles_path}.tmp-{time.monotonic_ns()}"   # 병렬 흐름 동시 저장 경합 방지
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"profiles": self.role_profiles, "experience": self.role_experience},
+                json.dump({"profiles": self.role_profiles, "experience": self.role_experience,
+                           "bot_experience": {str(k): v for k, v in self.bot_experience.items()}},
                           f, ensure_ascii=False, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
@@ -868,13 +872,16 @@ class Sys:
         for j in jobs:
             p = self.role_profiles.get(j)
             if p:
+                # [직군 공용 베이스라인] 직무 기준은 그 직군의 누적 표준 — 신규 봇도 첫 작업부터 이걸로 부트스트랩(F).
                 notes.append(f"[당신의 직무 기준 — {j} 전문가의 자기검수 기준. 이 기준을 충족한 산출물만 인도하세요]\n{p}")
             else:
                 missing.append(j)
-            exp = self.role_experience.get(j)
-            if exp:
-                notes.append(f"[당신의 최근 경험 — {j} 직군이 실제 작업에서 얻은 교훈. 같은 함정을 반복하지 마세요]\n"
-                             + "\n".join(f"- {e}" for e in exp[-6:]))
+        # [개인별 경험] 직군 공용이 아니라 '당신(이 봇) 자신이' 겪은 최근 교훈 — 개인 정체성·학습.
+        # 직군 표준(위 직무 기준)은 공용 베이스라인으로 깔리고, 그 위에 당신만의 경험이 쌓인다.
+        exp = self.bot_experience.get(me)
+        if exp:
+            notes.append("[당신의 최근 경험 — 당신이 실제 작업에서 직접 얻은 교훈. 같은 함정을 반복하지 마세요]\n"
+                         + "\n".join(f"- {e}" for e in exp[-6:]))
         if jobs:
             # [의무형 — 데이터 근거] 선택형("없으면 생략")은 라이브에서 0% 산출, 의무형([직무기준]
             # 요청)은 7/7 직군 100% 산출. 학습 플라이휠(기준→경험→증류→개선)의 원료가 여기서만 나오므로
@@ -1139,9 +1146,9 @@ class Sys:
     _EXP_RE = re.compile(r"\[경험\]\s*(?P<job>[^\n]+)\n(?P<body>.*?)\n?\[/경험\]", re.S)
     _EXP_KEEP = 12   # 직군별 최근 경험 보존 줄 수(누적 상한 — 압축은 '기억 증류' 고도화의 몫)
 
-    async def _absorb_role_profiles(self, text: str) -> str:
-        """보고 속 [직무기준] 블록을 흡수한다 — 메모리·Discord(sys-roles)에 영속하고 본문에서 제거.
-        직군 전문가가 자기 기준을 한 번 쓰면 이후 모든 작업에 주입되는 '직무 기억'의 수집 지점."""
+    async def _absorb_role_profiles(self, text: str, me=None) -> str:
+        """보고 속 [직무기준]·[경험] 블록을 흡수한다 — 메모리·Discord(sys-roles)에 영속하고 본문에서 제거.
+        직군 기준은 공용 풀(role_*)로, 경험은 공용 풀 + 보고한 봇(me)의 개인 풀(bot_experience) 양쪽에."""
         if not text or ("[직무기준]" not in text and "[경험]" not in text):
             return text
         absorbed, learned = [], []
@@ -1170,9 +1177,13 @@ class Sys:
                          ("없음", "없다", "-", "특이사항 없음", "(교훈 또는 '없음')")]
                 if not lines:
                     return ""
-                cur = self.role_experience.setdefault(job, [])
+                cur = self.role_experience.setdefault(job, [])   # 공용 풀 — 수면 증류로 직무 기준에 통합(플라이휠 유지)
                 cur.extend(lines)
                 del cur[:-self._EXP_KEEP]   # 최근 N줄만(압축은 기억 증류의 몫)
+                if me is not None:          # [개인별 학습] 보고한 봇의 개인 경험 풀에도 — 직군 공용과 별개로 자기 정체성
+                    bc = self.bot_experience.setdefault(int(me), [])
+                    bc.extend(lines)
+                    del bc[:-self._EXP_KEEP]
                 learned.append((job, len(lines)))
             return ""
 
@@ -1268,7 +1279,7 @@ class Sys:
             self._log("role_distill_failed", job=job, err=str(e)[:80])
             return False
         before = self.role_profiles.get(job)
-        await self._absorb_role_profiles(out)            # [직무기준] 블록 흡수(영속 포함)
+        await self._absorb_role_profiles(out, me=mid)    # [직무기준] 블록 흡수(영속 포함)
         ok = self.role_profiles.get(job) not in (None, before) or (before and "[직무기준]" in (out or ""))
         if self.role_profiles.get(job) and self.role_profiles.get(job) != cur:
             self.role_experience[job] = []               # 증류 완료 — 원석 비움
@@ -1560,9 +1571,9 @@ class Sys:
                 # 워치독이 흐름 전체를 본다. 워커(비-리더) 턴은 '도구 활동이 turn_timeout 동안 완전히 멈춘'
                 # 경우(진짜 행)에만 끊는다 — 일하는 동안은 무한정 허용(하트비트). 끊기면 '인프라 실패'로 반환.
                 if role == "leader":
-                    _out = await self._absorb_role_profiles(await _do())
+                    _out = await self._absorb_role_profiles(await _do(), me=organt_id)
                 else:
-                    _out = await self._absorb_role_profiles(await self._run_until_silent(_do, flow))
+                    _out = await self._absorb_role_profiles(await self._run_until_silent(_do, flow), me=organt_id)
                 if flow is not None:   # [사람 개입] 주입된 노트 소비-clear(턴 성공 후 1회 — revive 재시도엔 유지돼 재주입)
                     try:
                         (flow.pending_info or {}).pop(organt_id, None)
