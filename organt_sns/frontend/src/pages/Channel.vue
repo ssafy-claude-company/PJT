@@ -219,7 +219,7 @@ async function refresh() {
   }
   api.stats().then((s) => { stats.value = s }).catch(() => {})
 }
-function startPoll() { stopPoll(); poll = setInterval(refresh, 4000) }
+function startPoll() { stopPoll(); poll = setInterval(refresh, 2500) }   // 봇 응답이 더 빨리 떠 보이게(4s→2.5s)
 function stopPoll() { if (poll) { clearInterval(poll); poll = null } }
 async function send() {
   const body = draft.value.trim(); if (!body) return
@@ -369,6 +369,7 @@ async function doRemove() {
   const ok = await askConfirm({ title: '채널 삭제', message: `'${data.value?.name || route.params.pid}' 채널을 삭제합니다. 되돌릴 수 없습니다.`, danger: true })
   if (!ok) return
   await api.removeChannel(route.params.pid)
+  window.dispatchEvent(new Event('organt:channels'))   // 사이드바에서 즉시 사라지게(8초 폴 안 기다림)
   router.push('/')
 }
 onMounted(() => {

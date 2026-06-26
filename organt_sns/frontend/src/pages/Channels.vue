@@ -39,6 +39,7 @@ async function onCreate({ name, visibility }) {
   creating.value = true
   try {
     const c = await api.createChannel({ name, visibility })
+    window.dispatchEvent(new Event('organt:channels'))   // 사이드바에 즉시 추가(8초 폴 안 기다림)
     const t = pendingTpl.value
     if (t && t.goal) { try { await api.makeRequest(c.pid, { kind: 'W', body: t.goal }) } catch (e) { /* 채널은 생성됨 */ } }
     showNew.value = false

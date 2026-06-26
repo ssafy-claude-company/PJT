@@ -61,8 +61,9 @@ function unhideAll() {
   localStorage.removeItem('organt_hidden')
   load()
 }
-onMounted(() => { load(); timer = setInterval(load, 8000) })
-onUnmounted(() => clearInterval(timer))
+// 채널 생성/삭제 시 즉시 사이드바 갱신(8초 폴을 기다리지 않게) — 해당 화면이 이 이벤트를 쏜다.
+onMounted(() => { load(); timer = setInterval(load, 8000); window.addEventListener('organt:channels', load) })
+onUnmounted(() => { clearInterval(timer); window.removeEventListener('organt:channels', load) })
 watch(() => route.fullPath, () => { drawer.value = false })
 watch(() => me.handle, (v) => { if (v) load() })   // 로그인 직후 즉시 로드
 
