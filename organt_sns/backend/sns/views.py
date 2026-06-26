@@ -334,7 +334,9 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                                  "body": to_native(gm.body)})
                     p = gm.payload or {}             # 구조화 상태 — picked/done_ts(이모지 아님)
                     if p.get("done_ts"):
-                        live_status = {"state": "done", "ts": p["done_ts"], "goal": to_native(gm.body)[:80]}
+                        # 사용자 중지로 종결된 요청은 '완료'가 아니라 '중지됨'으로 — 작업중·멎음 어디에도 안 잡힘.
+                        _st = "stopped" if p.get("stopped") else "done"
+                        live_status = {"state": _st, "ts": p["done_ts"], "goal": to_native(gm.body)[:80]}
                     elif p.get("picked"):
                         # ts는 픽 시각(picked_ts) 기준 — '작업 중' 창을 사용자 전송이 아닌 실제 착수부터 잼.
                         live_status = {"state": "working", "ts": p.get("picked_ts") or gm.ts,

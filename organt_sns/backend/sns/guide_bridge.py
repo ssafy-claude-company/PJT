@@ -111,6 +111,30 @@ def pick(request):
     return Response({"ok": True})
 
 
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def stop_channel(request):
+    """채널의 '진행 중'(픽됨·미응답·미완) 요청을 '중지됨'으로 종결한다. 흐름이 *안 도는 사이* 누른
+    중지가 화면(작업 중 해제)·재처리(재픽 차단)에 반영되게 — 도는 흐름은 러너가 request_cancel로 끊는다.
+    러너 전역 stop 스캔이 호출(inflight 아닌 채널의 중지 유실 방지). 멱등."""
+    if not _authed(request):
+        return _deny()
+    try:
+        ch = int(request.data["channel"])
+    except (KeyError, TypeError, ValueError):
+        return Response({"detail": "channel이 올바르지 않습니다."}, status=status.HTTP_400_BAD_REQUEST)
+    responded = set(GuideMessage.objects.filter(channel_id=ch, msg_type="response")
+                    .exclude(reply_to=None).values_list("reply_to", flat=True))
+    n = 0
+    for m in GuideMessage.objects.filter(channel_id=ch, sender_id=0, msg_type="request").order_by("-msg_id"):
+        p = m.payload or {}
+        if p.get("picked") and not p.get("done_ts") and m.msg_id not in responded:
+            p = dict(p); p["stopped"] = True; p["done_ts"] = time.time()   # 종결(작업중·멎음 아님)
+            GuideMessage.objects.filter(msg_id=m.msg_id).update(payload=p)
+            n += 1
+    return Response({"stopped": n})
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def thread(request):

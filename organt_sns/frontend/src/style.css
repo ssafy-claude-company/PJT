@@ -239,6 +239,9 @@ a.cmsg-name:hover{text-decoration:underline}
 .live-strip b{font-weight:650}.live-strip .ls-goal{color:var(--text2)}
 .live-strip.done{background:var(--accent-soft);border-color:var(--accent-line)}
 .live-strip.done .ls-ic{color:var(--accent2)}
+/* 사용자가 중지함 — 종결 상태. 녹색/강조 아닌 중립 회색으로(작업중 아님을 명확히). */
+.live-strip.stopped{background:var(--surface2,rgba(140,140,150,.10));border-color:rgba(140,140,150,.28);color:var(--text2)}
+.live-strip.stopped .ls-ic{color:var(--text2)}
 /* 작업 중인데 봇 출력이 오래 끊김 — 녹색(진행 중) 대신 호박색(정체)으로 정직하게. */
 .live-strip.stalled{background:rgba(224,168,92,.10);border-color:rgba(224,168,92,.30)}
 .live-strip.stalled .pulse{background:#e0a85c;box-shadow:0 0 7px #e0a85c;animation-duration:2.6s}

@@ -412,3 +412,62 @@ class FlowIdleReaperTest(TestCase):
         self.assertLess(_flow_idle(sysm, 600), 60)        # 방금 활동 → 진행 중(작은 값 → 안 끊음)
         self.assertIsNone(_flow_idle(sysm, 999))          # 그 채널 활성 흐름 없음
         self.assertIsNone(_flow_idle(_Sys([_Flow(700, now - 1200, done=True)]), 700))  # 완료는 제외
+
+
+class StopChannelTest(TestCase):
+    """중지 신뢰성 — 흐름이 *안 도는 사이* 누른 중지도 픽 요청을 '중지됨'으로 종결한다(작업중·멎음 아님,
+    재픽·재개 차단). 종전엔 inflight 채널만 중지를 봐서 유실됐다(라이브: cancel 0건). 전역 스캔으로 해소."""
+
+    def _setup(self):
+        from sns.models import Project, Person, Membership
+        proj = Project.objects.create(pid="S-9500", name="중지채널", visibility="public")
+        Person.objects.create(handle="sc", name="중지씨", token="tok_sc")
+        Membership.objects.create(person=Person.objects.get(handle="sc"), project=proj, status="active")
+        return proj
+
+    def _picked(self, proj, ago=30):
+        from sns.models import GuideMessage
+        t = time.time() - ago
+        return GuideMessage.objects.create(channel_id=proj.id, thread_id=proj.id, sender_id=0,
+            msg_type="request", kind="W", body="게임 만들어줘", ts=t, payload={"picked": True, "picked_ts": t})
+
+    def test_stop_channel_픽요청을_중지됨으로_종결(self):
+        from sns.management.commands.run_organt_sns import _local_stop_channel
+        from sns.models import GuideMessage
+        proj = self._setup()
+        gm = self._picked(proj)
+        self.assertEqual(_local_stop_channel(proj.id), 1)
+        p = GuideMessage.objects.get(msg_id=gm.msg_id).payload
+        self.assertTrue(p.get("stopped"))
+        self.assertTrue(p.get("done_ts"))
+
+    def test_messages_중지된_요청은_작업중도_멎음도_아님(self):
+        from sns.management.commands.run_organt_sns import _local_stop_channel
+        from sns.models import EngineHeartbeat
+        proj = self._setup()
+        EngineHeartbeat.beat("test")                       # 엔진 가동
+        self._picked(proj)                                 # 원래 '작업 중'
+        c = APIClient(); c.credentials(HTTP_AUTHORIZATION="Token tok_sc")
+        d = c.get(f"/api/projects/{proj.pid}/messages/").data
+        self.assertEqual(d["live_status"]["state"], "working")   # 중지 전: 작업 중
+        _local_stop_channel(proj.id)                       # 사용자 중지(흐름 안 도는 사이)
+        d = c.get(f"/api/projects/{proj.pid}/messages/").data
+        self.assertEqual(d["live_status"]["state"], "stopped")   # 중지 후: 중지됨
+        self.assertEqual(d["stuck_count"], 0)                    # 멎음에도 안 잡힘
+
+    def test_중지된_요청은_재픽_대기에_안_뜬다(self):
+        from sns.management.commands.run_organt_sns import _local_stop_channel, _local_pending
+        proj = self._setup()
+        self._picked(proj)
+        _local_stop_channel(proj.id)
+        self.assertEqual(len(_local_pending(set())), 0)    # picked+done → pending 아님(재픽/재개 차단)
+
+    def test_local_all_stops_전체_반환_소거(self):
+        from sns.management.commands.run_organt_sns import _local_all_stops
+        from sns.models import StopSignal
+        proj = self._setup()
+        StopSignal.objects.create(channel_id=proj.id)
+        StopSignal.objects.create(channel_id=999123)
+        chans = _local_all_stops()
+        self.assertIn(proj.id, chans); self.assertIn(999123, chans)
+        self.assertFalse(StopSignal.objects.exists())      # 전부 소거(전역 스캔 1회 소비)

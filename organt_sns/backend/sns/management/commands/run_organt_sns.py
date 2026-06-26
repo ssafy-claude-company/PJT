@@ -96,6 +96,31 @@ def _local_stop_pending(channel_id):
     return StopSignal.objects.filter(channel_id=channel_id).delete()[0] > 0
 
 
+def _local_all_stops():
+    """미처리 중지신호의 채널 전체를 반환+소거(러너 로컬 모드) — 매 폴 전역 스캔용(inflight 무관)."""
+    from sns.models import StopSignal
+    chans = list(StopSignal.objects.values_list("channel_id", flat=True))
+    if chans:
+        StopSignal.objects.filter(channel_id__in=chans).delete()
+    return [int(c) for c in chans]
+
+
+def _local_stop_channel(channel_id):
+    """채널의 픽됨·미응답·미완 요청을 '중지됨'으로 종결(러너 로컬 모드) — guide_bridge.stop_channel과 동일."""
+    import time as _t
+    from sns.models import GuideMessage
+    responded = set(GuideMessage.objects.filter(channel_id=channel_id, msg_type="response")
+                    .exclude(reply_to=None).values_list("reply_to", flat=True))
+    n = 0
+    for m in GuideMessage.objects.filter(channel_id=channel_id, sender_id=0, msg_type="request").order_by("-msg_id"):
+        p = m.payload or {}
+        if p.get("picked") and not p.get("done_ts") and m.msg_id not in responded:
+            p = dict(p); p["stopped"] = True; p["done_ts"] = _t.time()
+            GuideMessage.objects.filter(msg_id=m.msg_id).update(payload=p)
+            n += 1
+    return n
+
+
 def _local_interject_pending(channel_id):
     """이 채널의 '진행 중 개입' 신호들을 소거하고 [{target_id, text}] 반환(러너 로컬 모드)."""
     from sns.models import InterjectSignal
@@ -163,6 +188,13 @@ class Command(BaseCommand):
                 d = await guide._get(f"/api/guide/stops/?channel={ch}")
                 return bool(d.get("stopped"))
 
+            async def fetch_all_stops():
+                d = await guide._get("/api/guide/stops/")          # 전체 중지신호 반환+소거(전역 스캔)
+                return [int(c) for c in d.get("channels", [])]
+
+            async def mark_channel_stopped(ch):
+                await guide._post("/api/guide/stop_channel/", {"channel": int(ch)})
+
             async def _check_interject(ch):
                 d = await guide._get(f"/api/guide/interjects/?channel={ch}")
                 return d.get("infos", [])
@@ -184,6 +216,12 @@ class Command(BaseCommand):
 
             async def _check_stop(ch):
                 return await sync_to_async(_local_stop_pending)(ch)
+
+            async def fetch_all_stops():
+                return await sync_to_async(_local_all_stops)()
+
+            async def mark_channel_stopped(ch):
+                await sync_to_async(_local_stop_channel)(ch)
 
             async def _check_interject(ch):
                 return await sync_to_async(_local_interject_pending)(ch)
@@ -277,15 +315,20 @@ class Command(BaseCommand):
                                 self.stdout.write(f"⏱ {_why} 초과 — 흐름 취소(슬롯 회수): msg={_mid} ch={_info['ch']}")
                             except Exception:
                                 pass
-                # ── 진행 중 흐름들의 중지·개입 폴(채널별) ──
+                # ── 작업 중지: 매 폴 '모든' 미처리 중지신호를 확인(inflight 아닌 채널 포함) ──
+                # [신뢰성] 종전엔 *도는 채널만* 중지를 봤다 → 흐름이 잠깐 안 도는 사이 누른 중지가 유실됐다
+                # (라이브: 사용자 중지가 cancel 0건으로 통째 무시됨). 이제 전역 스캔으로 ① 도는 흐름은 즉시 취소,
+                # ② 안 도는 채널은 픽 요청을 '중지됨'으로 종결(작업중 해제·재픽/재개 차단) — 중지가 항상 먹는다.
+                try:
+                    for _sch in await fetch_all_stops():
+                        cancelled = sysm.request_cancel(_sch)        # 도는 중이면 흐름 취소(아니면 False)
+                        await mark_channel_stopped(_sch)             # 픽 요청 '중지됨' 종결(화면·재픽 정정)
+                        self.stdout.write(f"■ 작업 중지 — ch={_sch}(흐름취소={cancelled})")
+                except Exception:
+                    pass
+                # ── 진행 중 흐름들의 개입 폴(채널별) ──
                 for _mid, _info in list(inflight.items()):
                     _ch = _info["ch"]
-                    try:
-                        if await _check_stop(_ch):
-                            sysm.request_cancel(_ch)
-                            self.stdout.write(f"■ 작업 중지 요청 수신 — ch={_ch}")
-                    except Exception:
-                        pass
                     try:
                         for _x in await _check_interject(_ch):
                             ok = sysm.deliver_human_info(_ch, _x.get("target_id"), _x.get("text"))
