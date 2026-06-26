@@ -99,7 +99,7 @@ def _local_pending(seen):
     return out
 
 
-def _local_pick(msg_id, done=False, touch=False, unpick=False):
+def _local_pick(msg_id, done=False, touch=False, unpick=False, idle=None):
     m = GuideMessage.objects.filter(msg_id=msg_id).first()
     if not m:
         return
@@ -108,6 +108,8 @@ def _local_pick(msg_id, done=False, touch=False, unpick=False):
         p.pop("picked", None); p.pop("done_ts", None); p.pop("picked_ts", None)
         GuideMessage.objects.filter(msg_id=msg_id).update(payload=p)
         return
+    if idle is not None:
+        p["idle_s"] = int(idle)                  # 실제 무진행(초) — 정직한 '조용' 표시용(메시지 간격이 아니라 도구활동 정지 기준)
     p["picked"] = True
     if done:
         p["done_ts"] = time.time()
@@ -206,8 +208,11 @@ class Command(BaseCommand):
                 data = await guide._get("/api/guide/pending/")
                 return [p for p in data.get("pending", []) if p["msg_id"] not in seen]
 
-            async def mark_pick(mid, done=False, touch=False, unpick=False):
-                await guide._post("/api/guide/pick/", {"msg_id": mid, "done": done, "touch": touch, "unpick": unpick})
+            async def mark_pick(mid, done=False, touch=False, unpick=False, idle=None):
+                body = {"msg_id": mid, "done": done, "touch": touch, "unpick": unpick}
+                if idle is not None:
+                    body["idle"] = int(idle)
+                await guide._post("/api/guide/pick/", body)
 
             async def _beat():
                 await guide._post("/api/guide/heartbeat/", {"note": "remote"})
@@ -235,8 +240,8 @@ class Command(BaseCommand):
             async def fetch_pending(seen):
                 return await sync_to_async(_local_pending)(seen)
 
-            async def mark_pick(mid, done=False, touch=False, unpick=False):
-                await sync_to_async(_local_pick)(mid, done, touch, unpick)
+            async def mark_pick(mid, done=False, touch=False, unpick=False, idle=None):
+                await sync_to_async(_local_pick)(mid, done, touch, unpick, idle)
 
             async def _beat():
                 from sns.models import EngineHeartbeat
@@ -311,7 +316,10 @@ class Command(BaseCommand):
                     try:
                         await _beat()
                         for _mid in list(inflight):
-                            await mark_pick(_mid, touch=True)
+                            # picked_ts touch(작업중 유지) + 실제 무진행(_flow_idle)도 함께 보고 → 화면 '조용'을
+                            # 메시지 간격이 아니라 진짜 도구활동 정지 기준으로(잘 도는 빌드는 '조용' 안 뜸).
+                            _idle = _flow_idle(sysm, inflight[_mid]["ch"])
+                            await mark_pick(_mid, touch=True, idle=int(_idle) if _idle is not None else 0)
                     except Exception:
                         pass
                     last_beat = _now

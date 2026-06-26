@@ -181,20 +181,24 @@ class RequeueStuckTest(TestCase):
                            time.time() - 5)             # 새로고쳐짐
         self.assertEqual(len(stuck_requests(rows(), time.time())), 0)   # 작업 중으로 되살아나 멎음 0
 
-    def test_messages_작업중이라도_조용하면_quiet초가_실린다(self):
-        # false-green 방지: 러너 touch로 '작업 중'(녹색)이 유지돼도, 마지막 봇 출력 이후 흐른 시간을
-        # quiet로 실어 화면이 정체를 정직하게 보이게 한다. 봇 출력이 최근이면 작은 값(또는 None).
-        from sns.models import EngineHeartbeat, GuideMessage, Agent
+    def test_messages_조용은_도구활동정지_기준이다_메시지간격_아님(self):
+        # [수정] '조용'은 채널 메시지 간격이 아니라 러너가 보고한 실제 도구활동 정지(idle_s) 기준이어야 한다.
+        # 협업글은 위임 완료마다(몇 분 간격) 떠서, 잘 돌아도 메시지 기준이면 거짓 '조용'이 떴다.
+        from sns.models import EngineHeartbeat, GuideMessage
         proj = self._setup()
-        EngineHeartbeat.beat("test")                    # 엔진 가동
-        Agent.objects.create(bot_id=931001, role="백엔드", name="백엔더", visibility="public")
-        GuideMessage.objects.create(channel_id=proj.id, thread_id=proj.id, sender_id=931001,
-                                    msg_type="plain", body="작업 시작", ts=time.time() - 200)  # 200초 전 마지막 봇 출력
-        self._stuck(proj, 5)                            # 방금 touch된 픽 → 작업 중(녹색 유지)
+        EngineHeartbeat.beat("test")
+        g = self._stuck(proj, 5)
+        # ① 활발히 작업 중(30초 전 도구활동) — 협업 메시지가 한동안 없어도 '조용' 안 뜸(거짓 경보 제거)
+        GuideMessage.objects.filter(msg_id=g.msg_id).update(
+            payload={"picked": True, "picked_ts": time.time(), "idle_s": 30})
         data = self._client("tok_requeue_1").get(f"/api/projects/{proj.pid}/messages/").data
         self.assertEqual(data["live_status"]["state"], "working")
-        self.assertGreaterEqual(data["live_status"]["quiet"], 190)   # ~200초째 조용(정체) — 화면이 '3분째 조용'
-        self.assertLess(data["live_status"]["quiet"], 280)
+        self.assertIsNone(data["live_status"]["quiet"])              # 활동 중 → 조용 아님
+        # ② 4분+ 도구활동 정지 = 진짜 멈춤 → 정직하게 quiet에 실린다
+        GuideMessage.objects.filter(msg_id=g.msg_id).update(
+            payload={"picked": True, "picked_ts": time.time(), "idle_s": 250})
+        data = self._client("tok_requeue_1").get(f"/api/projects/{proj.pid}/messages/").data
+        self.assertEqual(data["live_status"]["quiet"], 250)         # 실제 무진행 250초 → '4분째 조용'
 
     def test_messages_봇출력_없으면_quiet는_None(self):
         # 픽 직후 아직 봇 출력이 없으면 정체 판단 불가 → quiet=None(화면은 그냥 '작업 중').

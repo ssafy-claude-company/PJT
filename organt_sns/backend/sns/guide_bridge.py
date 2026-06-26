@@ -121,6 +121,8 @@ def pick(request):
         p.pop("picked_ts", None)
     else:
         p["picked"] = True
+        if request.data.get("idle") is not None:
+            p["idle_s"] = int(request.data["idle"])   # 실제 무진행(초) — 정직한 '조용'용(메시지 간격 아닌 도구활동 정지)
         if request.data.get("done"):
             p["done_ts"] = time.time()
         elif request.data.get("touch"):
