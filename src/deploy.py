@@ -17,6 +17,10 @@ from pathlib import Path
 GITHUB_API = "https://api.github.com"
 RENDER_API = "https://api.render.com/v1"
 _TERMINAL_FAIL = ("build_failed", "update_failed", "canceled", "deactivated", "pre_deploy_failed")
+# [데모 인프라 보호] 슬롯 확보용 '고아 서비스' 자동삭제가 *절대* 건드리면 안 되는 이름(데모 앱·러너 API 등).
+# organt-sns 자체는 채널이 참조하지 않아 '고아'로 오인돼 삭제될 수 있다 — 그러면 데모·러너가 통째로 죽는다.
+# env ORGANT_PROTECT_SERVICES(쉼표구분)로 추가 가능. 기본은 organt-sns.
+_PROTECT = {s.strip() for s in (os.environ.get("ORGANT_PROTECT_SERVICES") or "organt-sns").split(",") if s.strip()}
 
 
 def _http(method, url, token, data=None, retries=5):
@@ -200,7 +204,9 @@ def _free_slots(render_key, keep, want_free=2, cap=25) -> list:
     if cap - len(svcs) >= want_free:
         return []
     orphans = [s for s in svcs
-               if s["name"] not in keep and not (_onrender_subs(s["url"]) & keep)]
+               if s["name"] not in keep and not (_onrender_subs(s["url"]) & keep)
+               and s["name"] not in _PROTECT
+               and not any(p and p in (s.get("url") or "") for p in _PROTECT)]   # 보호 서비스(데모 앱)는 고아여도 절대 삭제 안 함
     orphans.sort(key=lambda s: s.get("created") or "")     # 오래된 고아부터
     need = want_free - (cap - len(svcs))
     deleted = []

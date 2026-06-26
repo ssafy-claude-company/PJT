@@ -4855,6 +4855,32 @@ def test_배포풀_슬롯충분하면_정리안함(monkeypatch):
     assert gone == [] and deleted == []
 
 
+def test_배포풀_정리는_데모인프라_organt_sns를_절대_안삭제(monkeypatch):
+    """[데모 보호] 슬롯 확보 고아삭제가 organt-sns(데모 앱·러너 API)는 '고아'여도 절대 안 지운다.
+    채널이 참조 안 해 고아로 오인되고 가장 오래돼 1순위 삭제대상이 될 뻔하지만, _PROTECT가 막는다."""
+    from src import deploy
+    svcs = [{"service": {"id": "demo", "name": "organt-sns",
+                         "serviceDetails": {"url": "https://organt-sns.onrender.com"},
+                         "createdAt": "2026-01-01"}}]                   # 가장 오래됨 = 원래라면 1순위 삭제
+    for i in range(24):
+        svcs.append({"service": {"id": f"o{i:02d}", "name": f"old-{i:02d}",
+                                 "serviceDetails": {"url": f"https://old-{i:02d}.onrender.com"},
+                                 "createdAt": f"2026-05-{i + 1:02d}"}})
+    deleted = []
+
+    def fake_http(method, url, token, *a, **k):
+        if method == "GET":
+            return 200, svcs
+        if method == "DELETE":
+            deleted.append(url.rsplit("/", 1)[-1]); return 204, {}
+        return 200, {}
+
+    monkeypatch.setattr(deploy, "_http", fake_http)
+    gone = deploy._free_slots("rk", set(), want_free=2, cap=25)    # 25/25 → 고아 정리 발동
+    assert "organt-sns" not in gone and "demo" not in deleted      # 데모 앱은 절대 삭제 안 함
+    assert len(gone) >= 1                                          # 다른 고아로 슬롯은 정상 확보
+
+
 def test_billing정지_감지로_무한재시도_차단(monkeypatch):
     """[라이브 P-021] 계정의 무료 서비스가 'billing'으로 모두 정지되면(무료 월 시간 소진) 신규 배포는
     재시도·슬롯정리로 안 풀린다 — _billing_suspended가 이를 감지해 deploy가 '잠시 후 재시도' 대신
