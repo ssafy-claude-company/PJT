@@ -210,6 +210,10 @@ class Command(BaseCommand):
             cap = max(1, int(os.environ.get("ORGANT_MAX_FLOWS", "4")))
         except ValueError:
             cap = 4
+        try:
+            max_age = max(60, int(os.environ.get("ORGANT_FLOW_MAX_AGE", "1500")))  # 흐름 최대수명(초) — 넘으면 취소해 슬롯 회수
+        except ValueError:
+            max_age = 1500
         # [동시 처리] 두뇌(Sys)는 active_flows·engaged로 이미 병렬을 지원하는데, 종전 러너는 흐름을
         # 하나씩 await해 직렬화했다 — 무관한 다른 채널·다른 봇 요청까지 큐에 막혔다(라이브 관측).
         # 이제 빈 봇의 요청은 동시 task로 띄우고(점유 충돌은 engaged.holder로 사전 차단), 같은 봇/채널만
@@ -227,7 +231,7 @@ class Command(BaseCommand):
                     except Exception:
                         pass
                     last_beat = _now
-                # ── 완료된 흐름 reap ──
+                # ── 완료된 흐름 reap + 먹통(최대수명 초과) 흐름 취소로 슬롯·봇 점유 회수(다수 접속 데모 잠금 방지) ──
                 for _mid, _info in list(inflight.items()):
                     if _info["task"].done():
                         del inflight[_mid]
@@ -236,10 +240,18 @@ class Command(BaseCommand):
                             await mark_pick(_mid, done=True)
                             self.stdout.write(f"✓ 처리 완료: msg_id={_mid}")
                         except asyncio.CancelledError:
-                            self.stdout.write(f"■ 중지됨: msg_id={_mid}")
+                            self.stdout.write(f"■ 중지됨: msg_id={_mid}")   # 취소된 요청은 picked-미완→멎음으로 떠 재큐 가능
                         except Exception as _e:
                             import traceback
                             self.stderr.write(f"✗ 처리 실패 msg_id={_mid}: {_e}\n{traceback.format_exc()}")
+                    elif _now - _info.get("t0", _now) > max_age:
+                        # 최대수명 초과한 미완 흐름 = 먹통 의심 → 협조적 취소(다음 폴 reap에서 정리). 슬롯·봇을 풀어 다른 사용자가 막히지 않게.
+                        try:
+                            sysm.request_cancel(_info["ch"])
+                            _info["task"].cancel()
+                            self.stdout.write(f"⏱ 최대수명({max_age}s) 초과 — 흐름 취소(슬롯 회수): msg={_mid} ch={_info['ch']}")
+                        except Exception:
+                            pass
                 # ── 진행 중 흐름들의 중지·개입 폴(채널별) ──
                 for _mid, _info in list(inflight.items()):
                     _ch = _info["ch"]
@@ -278,7 +290,7 @@ class Command(BaseCommand):
                         pass
                     await mark_pick(mid)
                     ORIGIN_CHANNEL.set(ch)               # task-로컬 라우팅(동시 안전 — create_task가 context 복사)
-                    inflight[mid] = {"task": asyncio.create_task(sysm.route_channel_request(ch, req)), "ch": ch}
+                    inflight[mid] = {"task": asyncio.create_task(sysm.route_channel_request(ch, req)), "ch": ch, "t0": _now}
                     busy_ch.add(ch); busy_lead.add(to_id)
                     self.stdout.write(f"▶ 요청 처리(동시 {len(inflight)}/{cap}): ch={ch} to={to_id} kind={m['kind']} body={m['body'][:42]!r}")
                 if opts["once"] and not inflight and not pend:

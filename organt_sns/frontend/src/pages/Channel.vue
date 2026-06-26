@@ -630,11 +630,6 @@ watch(() => route.params.pid, () => {
             </div>
           </template>
         </div>
-        <div class="seg" title="자동: 본문을 보고 작업/질문을 가립니다. 직접 고르면 그대로 따릅니다.">
-          <button :class="{ on: reqKind === 'auto' }" @click="reqKind = 'auto'">자동</button>
-          <button :class="{ on: reqKind === 'W' }" @click="reqKind = 'W'">작업</button>
-          <button :class="{ on: reqKind === 'I' }" @click="reqKind = 'I'">질문</button>
-        </div>
         <button class="btn ghost sm" :disabled="recLoading || !reqBody.trim()" @click="suggest" title="이 일에 잘 맞는 직원 추천">
           <Icon name="target" :size="15" />{{ recLoading ? '…' : '추천 받기' }}
         </button>
@@ -647,7 +642,7 @@ watch(() => route.params.pid, () => {
         </button>
       </div>
       <div class="row">
-        <input class="field" v-model="reqBody" :placeholder="reqKind === 'I' ? '무엇을 물어볼지' : reqKind === 'W' ? '무엇을 만들지 / 할지' : '무엇을 맡길지 — 자동으로 작업·질문을 가립니다'" @keyup.enter="sendRequest" :disabled="reqSending" />
+        <input class="field" v-model="reqBody" placeholder="무엇을 맡길지 — 담당 직원이 보고 작업이든 답변이든 알아서 합니다" @keyup.enter="sendRequest" :disabled="reqSending" />
         <button class="btn" @click="sendRequest" :disabled="reqSending || !reqBody.trim()"><Icon name="send" :size="15" />{{ reqSending ? '…' : '요청' }}</button>
       </div>
     </template>
