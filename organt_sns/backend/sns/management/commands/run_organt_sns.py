@@ -65,13 +65,25 @@ def _local_models():
     return {int(a.bot_id): a.model.strip() for a in Agent.objects.exclude(model="") if a.model.strip()}
 
 
+def _route_to(channel_id):
+    """봇 미지정 요청의 기본 담당 — ① 채널(프로젝트)에 지정된 리더, ② 없으면 그 채널에서 최근 활동한 봇.
+    전역 임의 리더(8명이 is_leader라 그중 하나=고은호로 쏠림) 대신 '이 채널의 담당'으로. 둘 다 없으면 None."""
+    from sns.models import Project, GuideMessage
+    p = Project.objects.filter(id=channel_id).first()
+    if p and p.leader_id:
+        return int(p.leader.bot_id)
+    last = (GuideMessage.objects.filter(channel_id=channel_id).exclude(sender_id=0)
+            .order_by("-msg_id").first())
+    return int(last.sender_id) if last and last.sender_id else None
+
+
 def _local_pending(seen):
     out = []
     for m in GuideMessage.objects.filter(msg_type="request", sender_id=0).order_by("msg_id"):
         if m.msg_id in seen or (m.payload or {}).get("picked"):
             continue
         out.append({"msg_id": m.msg_id, "channel_id": m.channel_id, "to_id": m.to_id,
-                    "kind": m.kind, "body": m.body})
+                    "kind": m.kind, "body": m.body, "route_to": _route_to(m.channel_id)})
     return out
 
 
@@ -343,7 +355,9 @@ class Command(BaseCommand):
                     if len(inflight) >= cap:
                         break
                     mid = m["msg_id"]
-                    to_id = int(m["to_id"]) if m["to_id"] else leader
+                    # [A] 봇 미지정이면: 그 채널의 담당(route_to=지정 리더/최근 활동 봇) → 없을 때만 전역 리더.
+                    # 종전엔 무조건 전역 리더(고은호)로 가 음식 추천이 '게임 기획자'에게 가던 문제.
+                    to_id = int(m["to_id"]) if m["to_id"] else (int(m["route_to"]) if m.get("route_to") else leader)
                     ch = int(m["channel_id"])
                     # 같은 채널이 진행 중이거나 대상 봇이 타 흐름 점유 중이면 큐에 남김(두뇌가 직렬화) — seen 미추가로 다음 폴 재검토.
                     # ('진행 중 흐름에 개입으로 즉시 전달'은 단일턴 흐름에선 다음 턴이 없어 유실되므로 안 함 — 큐가 안전하게 각각 응답.)

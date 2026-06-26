@@ -72,12 +72,20 @@ def pending(request):
     """미처리 사용자/스튜디오 요청(sender_id=0). 봇 위임(sender_id=bot)은 흐름 내부라 제외."""
     if not _authed(request):
         return _deny()
+    def _route_to(channel_id):
+        # 봇 미지정 요청의 기본 담당 — ① 채널 지정 리더, ② 없으면 그 채널 최근 활동 봇(전역 임의 리더 쏠림 방지).
+        from .models import Project
+        pr = Project.objects.filter(id=channel_id).first()
+        if pr and pr.leader_id:
+            return int(pr.leader.bot_id)
+        last = GuideMessage.objects.filter(channel_id=channel_id).exclude(sender_id=0).order_by("-msg_id").first()
+        return int(last.sender_id) if last and last.sender_id else None
     out = []
     for m in GuideMessage.objects.filter(msg_type="request", sender_id=0).order_by("msg_id"):
         if (m.payload or {}).get("picked"):
             continue
         out.append({"msg_id": m.msg_id, "channel_id": m.channel_id, "to_id": m.to_id,
-                    "kind": m.kind, "body": m.body})
+                    "kind": m.kind, "body": m.body, "route_to": _route_to(m.channel_id)})
     return Response({"pending": out})
 
 

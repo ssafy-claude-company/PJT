@@ -341,15 +341,24 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                         # ts는 픽 시각(picked_ts) 기준 — '작업 중' 창을 사용자 전송이 아닌 실제 착수부터 잼.
                         live_status = {"state": "working", "ts": p.get("picked_ts") or gm.ts,
                                        "goal": to_native(gm.body)[:80]}
+                        # [B] actor = '담당'(요청 받은 봇) — 마지막 발화자로 잡으면 협업 중 리더↔동료로 라벨이
+                        # 뒤바뀐다(라이브: 고은호 일하는데 이서준 작업중). 요청 to_id를 안정 담당으로 쓴다.
+                        _ta = ag.get(gm.to_id) if gm.to_id else None
+                        if _ta:
+                            live_status["actor"] = _ta.name or _ta.role
                     else:
                         live_status = None           # 대기 — 상태 없음(요청만 표시)
                 else:
-                    last_agent_id = gm.sender_id
-                    last_agent_ts = gm.ts            # 마지막 봇 활동 시각 — 정체(조용함) 측정 기준
                     a = ag.get(gm.sender_id); ta = ag.get(gm.to_id) if gm.to_id else None
                     # 회의/표결 발언(_say)이면 네이티브 kind로 승격 + 라벨 접두 제거 — 협업이 채널에 보이게
                     native = to_native(gm.body)
                     ck, body = collab_kind(native)
+                    # [C] 라벨만 있고 본문이 빈 메시지(예 '[회의 1R]')는 아이콘만 뜨는 빈 버블로 남는다 → 버린다.
+                    # 빈 출력은 '활동'으로도 안 침(정체 측정은 실제 출력 기준).
+                    if not (body or "").strip():
+                        continue
+                    last_agent_id = gm.sender_id
+                    last_agent_ts = gm.ts            # 마지막 봇 활동 시각 — 정체(조용함) 측정 기준(실출력만)
                     kind = ck or ("consultation" if (gm.msg_type == "request" and gm.kind == "I") else _km.get(gm.msg_type, "work"))
                     msgs.append({"type": "agent", "key": f"g{gm.msg_id}", "ts": gm.ts, "kind": kind,
                                  "actor_role": a.role if a else None,
@@ -358,10 +367,10 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                                  "target_role": ta.role if ta else None,
                                  "target_name": ta.name if ta else None, "summary": body,
                                  "round": collab_round(native) if ck == "meeting" else None})
-            if live_status and live_status.get("state") == "working" and last_agent_id:
-                a = ag.get(last_agent_id)            # 진행 중이면 최근 활동 직원
-                if a:
-                    live_status["actor"] = a.name or a.role
+            # [B] 담당(to_id)이 없으면 프로젝트 리더를 안정 actor로 — 마지막 발화자(스왑 원인)는 더 안 씀.
+            if live_status and live_status.get("state") == "working" \
+                    and not live_status.get("actor") and proj.leader:
+                live_status["actor"] = proj.leader.name or proj.leader.role
         for thread in proj.threads.all():          # 모든 스레드의 코멘트 병합(첫 스레드만 보던 버그)
             for c in thread.comments.all():
                 msgs.append({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),

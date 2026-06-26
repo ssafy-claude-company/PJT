@@ -471,3 +471,75 @@ class StopChannelTest(TestCase):
         chans = _local_all_stops()
         self.assertIn(proj.id, chans); self.assertIn(999123, chans)
         self.assertFalse(StopSignal.objects.exists())      # 전부 소거(전역 스캔 1회 소비)
+
+
+class DisplayAndRoutingTest(TestCase):
+    """B(actor 스왑)·C(빈 버블)·A(자동 리더) 회귀 가드."""
+
+    def _proj(self, pid="S-9700", leader=None):
+        from sns.models import Project, Person, Membership
+        proj = Project.objects.create(pid=pid, name="ch", visibility="public", leader=leader)
+        Person.objects.get_or_create(handle="dr", defaults={"name": "디알", "token": "tok_dr"})
+        Membership.objects.get_or_create(person=Person.objects.get(handle="dr"), project=proj,
+                                         defaults={"status": "active"})
+        return proj
+
+    def _gm(self, proj, sender, mtype="plain", to=None, kind="", body="x", payload=None):
+        from sns.models import GuideMessage
+        return GuideMessage.objects.create(channel_id=proj.id, thread_id=proj.id, sender_id=sender,
+            msg_type=mtype, to_id=to, kind=kind, body=body, ts=time.time(), payload=payload or {})
+
+    def _client(self):
+        c = APIClient(); c.credentials(HTTP_AUTHORIZATION="Token tok_dr"); return c
+
+    def test_B_actor는_담당_to_id_고정_마지막발화자_아님(self):
+        from sns.models import Agent, EngineHeartbeat
+        EngineHeartbeat.beat("t")
+        be = Agent.objects.create(bot_id=11, role="백엔드", name="고은호", visibility="public")
+        fe = Agent.objects.create(bot_id=12, role="프론트", name="이서준", visibility="public")
+        proj = self._proj()
+        # 고은호(11)에게 맡긴 작업 중 요청
+        self._gm(proj, 0, "request", to=11, kind="W", body="게임 만들어줘",
+                 payload={"picked": True, "picked_ts": time.time()})
+        self._gm(proj, 12, "plain", body="제가 프론트 먼저 봤습니다")   # 이서준이 '마지막 발화'
+        d = self._client().get(f"/api/projects/{proj.pid}/messages/").data
+        self.assertEqual(d["live_status"]["state"], "working")
+        self.assertEqual(d["live_status"]["actor"], "고은호")   # 담당(to_id) — 마지막 발화자 이서준 아님
+
+    def test_B_담당없으면_프로젝트_리더(self):
+        from sns.models import Agent, EngineHeartbeat
+        EngineHeartbeat.beat("t")
+        lead = Agent.objects.create(bot_id=21, role="기획", name="강주원", visibility="public")
+        proj = self._proj(pid="S-9701", leader=lead)
+        self._gm(proj, 0, "request", to=None, kind="W", body="추천좀",
+                 payload={"picked": True, "picked_ts": time.time()})
+        self._gm(proj, 99, "plain", body="누군가 발화")
+        d = self._client().get(f"/api/projects/{proj.pid}/messages/").data
+        self.assertEqual(d["live_status"]["actor"], "강주원")   # 담당 없음 → 프로젝트 리더
+
+    def test_C_빈_본문_라벨만_메시지는_버블로_안남는다(self):
+        from sns.models import Agent
+        Agent.objects.create(bot_id=11, role="백엔드", name="고은호", visibility="public")
+        proj = self._proj(pid="S-9702")
+        self._gm(proj, 11, "plain", body="[회의 1R]")        # 라벨만 — collab_kind 후 본문 빈다
+        self._gm(proj, 11, "plain", body="[회의 1R] 실제 내용 있음")
+        d = self._client().get(f"/api/projects/{proj.pid}/messages/").data
+        bodies = [m.get("summary") or m.get("body") or "" for m in d["messages"] if m.get("type") == "agent"]
+        self.assertNotIn("", [b.strip() for b in bodies])     # 빈 버블 없음
+        self.assertTrue(any("실제 내용" in b for b in bodies)) # 내용 있는 건 남음
+
+    def test_A_route_to_채널리더_없으면_최근봇_없으면_None(self):
+        from sns.management.commands.run_organt_sns import _route_to, _local_pending
+        from sns.models import Agent
+        lead = Agent.objects.create(bot_id=31, role="기획", name="리더봇", visibility="public")
+        p1 = self._proj(pid="S-9703", leader=lead)
+        self.assertEqual(_route_to(p1.id), 31)                # 지정 리더 우선
+        p2 = self._proj(pid="S-9704")                          # 리더 없음
+        self._gm(p2, 42, "plain", body="최근 활동 봇")
+        self.assertEqual(_route_to(p2.id), 42)                # 최근 활동 봇
+        p3 = self._proj(pid="S-9705")                          # 리더도 봇활동도 없음
+        self.assertIsNone(_route_to(p3.id))
+        # 미지정 요청의 pending에 route_to 실림
+        self._gm(p1, 0, "request", to=None, kind="W", body="추천")
+        row = [r for r in _local_pending(set()) if r["channel_id"] == p1.id][0]
+        self.assertEqual(row["route_to"], 31)
