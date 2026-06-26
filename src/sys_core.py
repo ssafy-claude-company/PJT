@@ -1020,7 +1020,14 @@ class Sys:
         # 종전엔 모든 메시지가 담당자=프로젝트 프롬프트(create_project·recruit·회의·_PRINCIPLE)를 받아
         # "배고파"에도 "뭘 만들까요"가 나왔다(라이브 규명). 캐주얼은 캐주얼하게 — 동료처럼 한 턴에 답.
         _is_info = str(getattr(kind, "value", kind)).upper().startswith("I")
-        if _is_info and role == "leader":
+        # [근본·미배포 안전] 미디어 분류(kind)에 더해 두뇌도 캐주얼을 직접 감지 — classify 미배포 환경에서도
+        # 일상 발화가 대화로 처리되게. 보수적으로: 분명한 캐주얼 신호 + 빌드 '동사' 없을 때만.
+        _bl = body or ""
+        _casual_hint = any(c in _bl for c in ("배고", "출출", "추천", "점심", "저녁", "아침", "뭐 먹", "뭐먹",
+                                              "심심", "안녕", "맛집", "졸려", "피곤", "ㅎㅇ", "ㅋㅋ"))
+        _build_verb = any(c in _bl for c in ("만들", "제작", "구현", "개발", "배포", "구축", "짜줘", "짜 줘",
+                                             "세워", "고쳐", "리팩", "디버그"))
+        if (_is_info or (_casual_hint and not _build_verb)) and role == "leader":
             return (
                 f"당신은 {domain or '직원'}입니다. 사용자가 이 채널에서 당신에게 말을 걸었습니다.\n"
                 f"{origin_note}{situation_note}{inbound_note}{human_info_note}"

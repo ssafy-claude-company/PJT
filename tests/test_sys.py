@@ -5187,7 +5187,10 @@ def test_Info_캐주얼은_프로젝트기계_없는_대화프롬프트():
     assert "팀은 당신이 동적으로 짠다" not in p               # 무거운 팀 기계 없음
     assert "set_goal은" not in p                              # 프로젝트 게이트 지시 없음
     pw = s._prompt("게임 만들어줘", Kind.WORK, "leader", 11, leader_id=11)
-    assert "담당자" in pw and "팀은 당신이 동적으로 짠다" in pw  # Work는 프로젝트 기계 유지
+    assert "담당자" in pw and "팀은 당신이 동적으로 짠다" in pw  # Work는 프로젝트 기계 유지(빌드동사)
+    # [미배포 안전] 분류가 W로 와도(classify 미배포) 캐주얼 신호면 두뇌가 직접 대화로 — '배고파' kind=W
+    pc = s._prompt("배고파", Kind.WORK, "leader", 11, leader_id=11)
+    assert "대화로" in pc and "팀은 당신이 동적으로 짠다" not in pc
 
 
 def test_per_agent_persona가_organt_시스템프롬프트까지_도달():
