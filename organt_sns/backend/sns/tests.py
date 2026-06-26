@@ -351,3 +351,18 @@ class InterjectTest(TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["text"], "hi")
         self.assertFalse(InterjectSignal.objects.filter(channel_id=proj.id).exists())
+
+
+class SqliteConcurrencyPragmaTest(TestCase):
+    """다중 접속 안정화 — 모든 SQLite 연결에 WAL+busy_timeout이 걸려 'database is locked'를 막는다.
+    (apps.SnsConfig.ready의 connection_created 시그널 회귀 방지.)"""
+
+    def test_연결에_busy_timeout과_WAL이_걸린다(self):
+        from django.db import connection
+        if connection.vendor != "sqlite":
+            self.skipTest("SQLite 전용 — Postgres(자체 서버)에선 no-op")
+        with connection.cursor() as c:
+            c.execute("PRAGMA busy_timeout;"); bt = c.fetchone()[0]
+            c.execute("PRAGMA journal_mode;"); jm = str(c.fetchone()[0]).lower()
+        self.assertGreaterEqual(int(bt), 20000)          # 잠금 시 대기(기본 0/5초 → 20초) — 시그널이 적용됨
+        self.assertIn(jm, ("wal", "memory"))             # 디스크면 WAL, 테스트 인메모리면 memory
