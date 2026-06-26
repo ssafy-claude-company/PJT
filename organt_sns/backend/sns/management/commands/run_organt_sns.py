@@ -99,11 +99,15 @@ def _local_pending(seen):
     return out
 
 
-def _local_pick(msg_id, done=False, touch=False):
+def _local_pick(msg_id, done=False, touch=False, unpick=False):
     m = GuideMessage.objects.filter(msg_id=msg_id).first()
     if not m:
         return
     p = dict(m.payload or {})
+    if unpick:                                   # 백스톱 컷 재개 — 픽 해제(다시 큐로, 같은 러너가 이어받게)
+        p.pop("picked", None); p.pop("done_ts", None); p.pop("picked_ts", None)
+        GuideMessage.objects.filter(msg_id=msg_id).update(payload=p)
+        return
     p["picked"] = True
     if done:
         p["done_ts"] = time.time()
@@ -202,8 +206,8 @@ class Command(BaseCommand):
                 data = await guide._get("/api/guide/pending/")
                 return [p for p in data.get("pending", []) if p["msg_id"] not in seen]
 
-            async def mark_pick(mid, done=False, touch=False):
-                await guide._post("/api/guide/pick/", {"msg_id": mid, "done": done, "touch": touch})
+            async def mark_pick(mid, done=False, touch=False, unpick=False):
+                await guide._post("/api/guide/pick/", {"msg_id": mid, "done": done, "touch": touch, "unpick": unpick})
 
             async def _beat():
                 await guide._post("/api/guide/heartbeat/", {"note": "remote"})
@@ -231,8 +235,8 @@ class Command(BaseCommand):
             async def fetch_pending(seen):
                 return await sync_to_async(_local_pending)(seen)
 
-            async def mark_pick(mid, done=False, touch=False):
-                await sync_to_async(_local_pick)(mid, done, touch)
+            async def mark_pick(mid, done=False, touch=False, unpick=False):
+                await sync_to_async(_local_pick)(mid, done, touch, unpick)
 
             async def _beat():
                 from sns.models import EngineHeartbeat
@@ -276,6 +280,7 @@ class Command(BaseCommand):
             return
 
         seen = set()
+        cut_resumes = {}                                 # msg_id → 백스톱 컷 후 재개 횟수(무한 루프 방지 상한)
         last_beat = 0.0
         inflight = {}                                    # msg_id → {"task":Task, "ch":int} — 동시 진행 흐름
         try:
@@ -283,9 +288,9 @@ class Command(BaseCommand):
         except ValueError:
             cap = 4
         try:
-            max_age = max(60, int(os.environ.get("ORGANT_FLOW_MAX_AGE", "1500")))  # 절대 상한(초) — 병적 케이스 백스톱
-        except ValueError:
-            max_age = 1500
+            max_age = max(60, int(os.environ.get("ORGANT_FLOW_MAX_AGE", "7200")))  # 절대 백스톱(초) — 긴 빌드 보호(2h 기본).
+        except ValueError:                                                        # 컷돼도 '체크포인트 후 재개'라 치명적 아님.
+            max_age = 7200
         try:
             # 무진행(조용함) 상한(초) — 봇 활동(last_activity)이 이만큼 멈추면 '먹통'으로 보고 취소.
             # 나이가 아니라 '실제 정체'로 자른다(잘 도는 긴 빌드는 절대 안 끊음). 워커 턴 8분·리더 워치독
@@ -331,12 +336,23 @@ class Command(BaseCommand):
                         idle = _flow_idle(sysm, _info["ch"])
                         stalled = idle is not None and idle > stall_timeout
                         too_old = _now - _info.get("t0", _now) > max_age      # 절대 백스톱(병적 케이스)
-                        if stalled or too_old:
+                        if (stalled or too_old) and not _info.get("cut"):
                             try:
-                                sysm.request_cancel(_info["ch"])
+                                _info["cut"] = True               # 같은 흐름 중복 컷/카운트 방지(취소 완료까지 폴 여러 번)
+                                # [백스톱 컷 ≠ 사용자 중지] request_cancel은 flow.cancelled를 세워 두뇌가 '사용자가
+                                # 작업을 중지했습니다'로 *오표기*한다(사용자는 안 눌렀는데). 백스톱은 흐름 task만 취소해
+                                # 두뇌가 '흐름 자동 중단'으로 정확히 보고하게 한다(_await_with_idle_watchdog가 내부 task 정리).
                                 _info["task"].cancel()
                                 _why = f"무진행 {int(idle)}s" if stalled else f"최대수명 {max_age}s"
-                                self.stdout.write(f"⏱ {_why} 초과 — 흐름 취소(슬롯 회수): msg={_mid} ch={_info['ch']}")
+                                # [재개] 컷된 요청을 seen에서 빼고 픽 해제 → 다음 폴에 같은 러너가 다시 집어 '이어서'
+                                # 계속(워크스페이스·스레드 보존). seen에 남으면 영영 재픽 안 됨(=재시작 안되던 근본). 상한으로 무한루프 차단.
+                                _n = cut_resumes.get(_mid, 0) + 1; cut_resumes[_mid] = _n
+                                if _n <= 5:
+                                    seen.discard(_mid)
+                                    await mark_pick(_mid, unpick=True)
+                                    self.stdout.write(f"⏱ {_why} — 체크포인트 후 재개 예약({_n}/5): msg={_mid} ch={_info['ch']}")
+                                else:
+                                    self.stdout.write(f"⏱ {_why} — 재개 상한 도달({_n-1}회), 중단: msg={_mid} ch={_info['ch']}")
                             except Exception:
                                 pass
                 # ── 작업 중지: 매 폴 '모든' 미처리 중지신호를 확인(inflight 아닌 채널 포함) ──

@@ -610,3 +610,23 @@ class ResumeCutBuildTest(TestCase):
         proj = self._proj(pid="S-9803")
         stale = self._gm(proj, 0, payload={"picked": True, "picked_ts": time.time() - 600})
         self.assertNotIn(stale.msg_id, {r["msg_id"] for r in _local_pending({stale.msg_id})})
+
+
+class BackstopResumeTest(TestCase):
+    """[백스톱 컷 재개] _local_pick(unpick=True)가 픽을 해제해 다시 큐로 돌리는지 — 1시간컷/정체컷 후
+    같은 러너가 이어받게 하는 핵심(seen만 비우면 pending이 다시 내보냄)."""
+
+    def test_unpick_clears_picked_state(self):
+        from sns.management.commands.run_organt_sns import _local_pick, _local_pending
+        from sns.models import Project, GuideMessage
+        proj = Project.objects.create(pid="S-9900", name="ch", visibility="public")
+        gm = GuideMessage.objects.create(channel_id=proj.id, thread_id=proj.id, sender_id=0,
+            msg_type="request", kind="W", body="fps 이어서", ts=time.time(),
+            payload={"picked": True, "picked_ts": time.time(), "done_ts": time.time()})
+        _local_pick(gm.msg_id, unpick=True)
+        p = GuideMessage.objects.get(msg_id=gm.msg_id).payload or {}
+        self.assertNotIn("picked", p)
+        self.assertNotIn("done_ts", p)
+        self.assertNotIn("picked_ts", p)
+        # 픽 해제됐으니 pending에 다시 뜬다(재개 가능)
+        self.assertIn(gm.msg_id, {r["msg_id"] for r in _local_pending(set())})
