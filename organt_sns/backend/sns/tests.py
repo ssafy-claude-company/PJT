@@ -388,3 +388,27 @@ class ReadThreadResponseTest(TransactionTestCase):
         resp = rows[-1]
         self.assertEqual(resp.body, "순두부찌개 어떠세요")
         self.assertEqual(resp.replies_to, str(req.msg_id))   # 올바른 필드에 매핑
+
+
+class FlowIdleReaperTest(TestCase):
+    """정체 기준 슬롯 회수 — 흐름의 '무진행 시간'(last_activity 정지)으로 먹통을 가린다(나이 아님).
+    잘 도는 흐름(최근 활동)은 작은 값, 멈춘 흐름은 큰 값, 흐름 없으면 None — '10분 넘게 일하면 무조건
+    끊김'(나이 컷) 대신 진짜 멈춤만 회수하게 한 회귀 가드."""
+
+    def test_flow_idle_무진행시간으로_먹통만_가린다(self):
+        import time as _t
+        from sns.management.commands.run_organt_sns import _flow_idle
+
+        class _Flow:
+            def __init__(self, ch, la, done=False):
+                self.user_channel, self.last_activity, self.done = ch, la, done
+
+        class _Sys:
+            def __init__(self, flows): self.active_flows = dict(enumerate(flows))
+
+        now = _t.monotonic()
+        sysm = _Sys([_Flow(500, now - 1200), _Flow(600, now - 5)])
+        self.assertGreater(_flow_idle(sysm, 500), 1000)   # 20분 전 활동 → 멈춤(큰 값 → 회수 대상)
+        self.assertLess(_flow_idle(sysm, 600), 60)        # 방금 활동 → 진행 중(작은 값 → 안 끊음)
+        self.assertIsNone(_flow_idle(sysm, 999))          # 그 채널 활성 흐름 없음
+        self.assertIsNone(_flow_idle(_Sys([_Flow(700, now - 1200, done=True)]), 700))  # 완료는 제외

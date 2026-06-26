@@ -105,6 +105,16 @@ def _local_interject_pending(channel_id):
     return [{"target_id": s.target_id, "text": s.text} for s in sigs]
 
 
+def _flow_idle(sysm, ch):
+    """이 채널 활성 흐름의 '무진행 시간'(초) — 봇 활동(last_activity)이 멈춘 지 얼마나 됐나. 흐름 없으면 None.
+    채널→흐름 매칭은 request_cancel과 동일(user_channel). 정체 기준 슬롯 회수의 신호."""
+    for f in list(getattr(sysm, "active_flows", {}).values()):
+        if getattr(f, "user_channel", None) == int(ch) and not getattr(f, "done", False):
+            la = getattr(f, "last_activity", None)
+            return None if la is None else max(0.0, time.monotonic() - la)
+    return None
+
+
 class Command(BaseCommand):
     help = "Organt SYS를 SnsGuide로 띄워 채널 요청을 라이브 협업으로 처리한다(디스코드 비의존)."
 
@@ -211,9 +221,16 @@ class Command(BaseCommand):
         except ValueError:
             cap = 4
         try:
-            max_age = max(60, int(os.environ.get("ORGANT_FLOW_MAX_AGE", "1500")))  # 흐름 최대수명(초) — 넘으면 취소해 슬롯 회수
+            max_age = max(60, int(os.environ.get("ORGANT_FLOW_MAX_AGE", "1500")))  # 절대 상한(초) — 병적 케이스 백스톱
         except ValueError:
             max_age = 1500
+        try:
+            # 무진행(조용함) 상한(초) — 봇 활동(last_activity)이 이만큼 멈추면 '먹통'으로 보고 취소.
+            # 나이가 아니라 '실제 정체'로 자른다(잘 도는 긴 빌드는 절대 안 끊음). 워커 턴 8분·리더 워치독
+            # 12분보다 길게 잡아 정상 턴 오살 방지 — 기본 900초(15분). 진짜 멈춤만 회수.
+            stall_timeout = max(120, int(os.environ.get("ORGANT_FLOW_STALL", "900")))
+        except ValueError:
+            stall_timeout = 900
         # [동시 처리] 두뇌(Sys)는 active_flows·engaged로 이미 병렬을 지원하는데, 종전 러너는 흐름을
         # 하나씩 await해 직렬화했다 — 무관한 다른 채널·다른 봇 요청까지 큐에 막혔다(라이브 관측).
         # 이제 빈 봇의 요청은 동시 task로 띄우고(점유 충돌은 engaged.holder로 사전 차단), 같은 봇/채널만
@@ -244,14 +261,22 @@ class Command(BaseCommand):
                         except Exception as _e:
                             import traceback
                             self.stderr.write(f"✗ 처리 실패 msg_id={_mid}: {_e}\n{traceback.format_exc()}")
-                    elif _now - _info.get("t0", _now) > max_age:
-                        # 최대수명 초과한 미완 흐름 = 먹통 의심 → 협조적 취소(다음 폴 reap에서 정리). 슬롯·봇을 풀어 다른 사용자가 막히지 않게.
-                        try:
-                            sysm.request_cancel(_info["ch"])
-                            _info["task"].cancel()
-                            self.stdout.write(f"⏱ 최대수명({max_age}s) 초과 — 흐름 취소(슬롯 회수): msg={_mid} ch={_info['ch']}")
-                        except Exception:
-                            pass
+                    else:
+                        # [정체 기준 회수] '나이'가 아니라 '실제 무진행'으로 자른다 — 잘 도는 긴 빌드(계획→구현
+                        # →검증→배포는 10분+ 정상)는 절대 안 끊고, 봇 활동(last_activity)이 멈춘 먹통만 회수한다.
+                        # last_activity는 도구활동·턴시작마다 갱신되므로, 멈춰 있으면 = 진짜 정체(리더 워치독이
+                        # 못 잡는 리더-턴 이후 정체 포함). 채널→흐름 조회는 request_cancel과 같은 user_channel 매칭.
+                        idle = _flow_idle(sysm, _info["ch"])
+                        stalled = idle is not None and idle > stall_timeout
+                        too_old = _now - _info.get("t0", _now) > max_age      # 절대 백스톱(병적 케이스)
+                        if stalled or too_old:
+                            try:
+                                sysm.request_cancel(_info["ch"])
+                                _info["task"].cancel()
+                                _why = f"무진행 {int(idle)}s" if stalled else f"최대수명 {max_age}s"
+                                self.stdout.write(f"⏱ {_why} 초과 — 흐름 취소(슬롯 회수): msg={_mid} ch={_info['ch']}")
+                            except Exception:
+                                pass
                 # ── 진행 중 흐름들의 중지·개입 폴(채널별) ──
                 for _mid, _info in list(inflight.items()):
                     _ch = _info["ch"]
