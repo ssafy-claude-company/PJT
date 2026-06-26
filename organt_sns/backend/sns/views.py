@@ -317,6 +317,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             ag = {a.bot_id: a for a in Agent.objects.exclude(bot_id=0)}   # 유령 bot_id=0 제외
             _km = {"request": "delegation", "response": "work", "plain": "work"}
             last_agent_id = None
+            last_agent_ts = 0                    # 마지막 봇 메시지 시각 — '작업 중'인데 조용한 시간(정체) 표시용
             for gm in gms:
                 # 디스코드식 상태 요약(sender=0·plain "● 작업 중 / ✅ 완료")은 표시·파싱 안 함 —
                 # 상태는 아래 '구조화된 처리 상태(payload)'에서 직접 뽑는다(이모지 패턴 의존 X).
@@ -342,6 +343,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                         live_status = None           # 대기 — 상태 없음(요청만 표시)
                 else:
                     last_agent_id = gm.sender_id
+                    last_agent_ts = gm.ts            # 마지막 봇 활동 시각 — 정체(조용함) 측정 기준
                     a = ag.get(gm.sender_id); ta = ag.get(gm.to_id) if gm.to_id else None
                     # 회의/표결 발언(_say)이면 네이티브 kind로 승격 + 라벨 접두 제거 — 협업이 채널에 보이게
                     native = to_native(gm.body)
@@ -375,6 +377,11 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         if live_status and live_status.get("state") == "working" \
                 and live_pick_mid(gms, _now, responded, engine_live) is None:
             live_status = None                        # 엔진 꺼짐/5분 초과면 '작업 중' 아님 → 멎음으로 잡힘
+        # 정직한 정체 신호 — '작업 중'이라도 마지막 봇 메시지 이후 흐른 시간(quiet)을 함께 싣는다.
+        # 러너가 picked_ts를 touch로 새로 고쳐 '작업 중'이 녹색으로 유지돼도, 실제로 봇 출력이 끊긴
+        # 시간을 화면이 직접 보여줘(=거짓 녹색 방지). 화면은 이 값이 크면 'N분째 무응답'을 띄운다.
+        if live_status and live_status.get("state") == "working":
+            live_status["quiet"] = max(0, round(_now - last_agent_ts)) if last_agent_ts else None
         # 멎은 요청 — 픽·무응답·미완이며 활성 작업도 아닌 채 멈춘 것(러너 사망 등). 한 helper로 일관.
         stuck = len(stuck_requests(gms, _now, engine_live))
         # 프로젝트 한눈에 — 목표·상태·산출물(라이브 링크). 채팅 안 읽어도 맥락 파악.

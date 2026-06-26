@@ -166,6 +166,14 @@ const liveStatus = computed(() => {
   if (ls.state === 'done' ? age >= 1800 : age >= 300) return null   // 완료 30분 / 작업중 5분
   return ls
 })
+// 정체(조용함) 라벨 — '작업 중'이라도 마지막 봇 출력 이후 오래 조용하면 정직하게 알린다.
+// 90초 미만은 정상 생성 중으로 보고 숨김(턴이 길 수 있음), 그 이상이면 'N분째 조용'.
+const quietLabel = computed(() => {
+  const q = liveStatus.value?.quiet
+  if (liveStatus.value?.state !== 'working' || q == null || q < 90) return null
+  const m = Math.floor(q / 60)
+  return m >= 1 ? `${m}분째 조용` : `${q}초째 조용`
+})
 // 협업 엔진(러너) 가동 여부 — 정적 안내문 대신 실제 heartbeat 기반.
 const engineLive = computed(() => !!stats.value?.engine?.live)
 const batonHere = computed(() => {
@@ -477,9 +485,9 @@ watch(() => route.params.pid, () => {
   </div>
 
   <!-- 엔진 상태(네이티브) — 구조화 상태에서 조립, 이모지 아님 -->
-  <div v-if="liveStatus" class="live-strip" :class="{ done: liveStatus.state === 'done' }">
+  <div v-if="liveStatus" class="live-strip" :class="{ done: liveStatus.state === 'done', stalled: quietLabel }">
     <Icon v-if="liveStatus.state === 'done'" name="check" :size="14" class="ls-ic" /><i v-else class="pulse"></i>
-    <span class="live-strip-t"><b>{{ liveStatus.state === 'done' ? '완료' : (liveStatus.actor || '직원') + ' 작업 중' }}</b><span v-if="liveStatus.goal" class="ls-goal"> · {{ liveStatus.goal }}</span></span>
+    <span class="live-strip-t"><b>{{ liveStatus.state === 'done' ? '완료' : (liveStatus.actor || '직원') + ' 작업 중' }}</b><span v-if="liveStatus.goal" class="ls-goal"> · {{ liveStatus.goal }}</span><span v-if="quietLabel" class="ls-quiet"> · {{ quietLabel }}</span></span>
     <button v-if="liveStatus.state === 'working' && (data?.is_owner || data?.is_member)" class="ls-stop" :disabled="stopping" @click="doStop" title="진행 중인 작업을 멈춥니다">{{ stopping ? '…' : '중지' }}</button>
   </div>
 
