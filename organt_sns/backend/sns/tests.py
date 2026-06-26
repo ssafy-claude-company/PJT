@@ -1,7 +1,7 @@
 """SNS 단위 테스트 — 추천 알고리즘(F1301)의 결정 로직을 DB 없이 검증."""
 import time
 
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
 
 from sns.recommend import score_candidates, tokens
@@ -366,3 +366,25 @@ class SqliteConcurrencyPragmaTest(TestCase):
             c.execute("PRAGMA journal_mode;"); jm = str(c.fetchone()[0]).lower()
         self.assertGreaterEqual(int(bt), 20000)          # 잠금 시 대기(기본 0/5초 → 20초) — 시그널이 적용됨
         self.assertIn(jm, ("wal", "memory"))             # 디스크면 WAL, 테스트 인메모리면 memory
+
+
+class ReadThreadResponseTest(TransactionTestCase):
+    """read_thread 회귀 — 응답(response) 메시지가 든 스레드를 읽을 때 던지지 않는다.
+    (async ORM(sync_to_async)이 스레드 연결을 쓰므로 TransactionTestCase로 — 원자 트랜잭션 잠금 회피.)
+    이전엔 Response(reply_to=…)로 잘못 생성해 TypeError → 봇이 답한 채널은 read_thread가 통째로 실패했고,
+    브레인 '상황 인지'(채널 최근 대화 주입)가 조용히 빈손이 됐다. 필드명은 replies_to."""
+
+    def test_응답이_든_스레드도_던지지_않고_replies_to를_채운다(self):
+        import asyncio
+        from sns.models import GuideMessage
+        from sns.sns_guide import SnsGuide
+        tid = 778899
+        req = GuideMessage.objects.create(channel_id=tid, thread_id=tid, sender_id=0, ts=time.time(),
+                                          msg_type="request", kind="I", body="오늘 저녁 추천좀")
+        GuideMessage.objects.create(channel_id=tid, thread_id=tid, sender_id=12, msg_type="response",
+                                    ts=time.time(), reply_to=req.msg_id, body="순두부찌개 어떠세요")
+        rows = asyncio.run(SnsGuide().read_thread(tid, include_plain=True))   # 던지면 실패
+        self.assertEqual(len(rows), 2)
+        resp = rows[-1]
+        self.assertEqual(resp.body, "순두부찌개 어떠세요")
+        self.assertEqual(resp.replies_to, str(req.msg_id))   # 올바른 필드에 매핑

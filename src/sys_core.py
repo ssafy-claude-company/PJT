@@ -921,16 +921,44 @@ class Sys:
         rows.sort(key=lambda t: t[0])              # P-001, P-002 … 안정 정렬
         shown = [ln for _, ln in rows[-16:]]       # 길어지면 최근 것 위주(프롬프트 비대 방지)
         return (
-            "[회사가 지금까지 만든 것 — 사실 목록(추측·환각 금지)] 아래는 우리 회사가 실제로 진행/배포한 "
-            "프로젝트입니다(괄호 안 P-번호는 **시스템이 자동 부여하는 식별자** — 새 프로젝트 이름엔 번호를 "
-            "넣지 마세요). 요청이 '안 쓰던 분야로/새롭게/지금까지와 다른' 같은 신규성을 요구하면 "
-            "**이 목록에 없는 도메인**이라야 신규입니다(데이터 출처만 바꿔 같은 분야를 반복하는 건 신규가 "
-            "아닙니다). **단, 어떤 도메인·데이터를 쓸지(주제)를 당신이 혼자 정하지 마세요** — 사용자가 "
-            "도메인을 명시하지 않은 열린 요청이면, 이 목록을 '중복 회피' 근거로 팀과 공유하고 **회의에서 "
-            "전문가들에게 도메인·데이터 후보를 제안받아 수렴해 정합니다('나는 X로 한다'고 통보 금지 — 당신은 "
-            "퍼실리테이터). 주제 선정 자체가 회의의 산물입니다.** 반대로 기존 작품을 발전·수정하라는 요청이면 "
-            "그 P-번호 채널에서 이어가세요. 목록에 없는 걸 '이미 했다'고 짐작하지 마세요 — 여기 적힌 것만이 사실입니다:\n"
+            "[참고 — 회사 이력(배경 정보)] 아래는 우리 회사가 진행/배포한 프로젝트 목록입니다. **이건 배경 "
+            "참고일 뿐이며, 지금 이 채널에서 사용자가 실제로 요청한 일이 무엇인지가 항상 우선입니다.** 이 채널의 "
+            "상황·원문과 무관하면 **무시하세요** — 단순 질문·추천·잡담에 과거 프로젝트를 억지로 엮지 마세요"
+            "(라이브 사례: 음식 추천 채널에서 엉뚱한 게임 프로젝트 기준으로 답함). **사용자가 '새 소프트웨어를 "
+            "만들어/기존 작품을 발전시켜' 같은 프로젝트성 요청을 한 경우에만** 아래를 근거로 쓰세요: 신규성 판단"
+            "(이 목록에 없는 도메인이라야 신규 — 출처만 바꿔 같은 분야 반복은 신규 아님), 중복 회피, 기존 작품 "
+            "이어가기(그 P-번호 채널에서). 그때도 도메인·주제는 통보 말고 회의에서 전문가 제안을 수렴해 정하세요"
+            "(당신은 퍼실리테이터). 괄호 안 P-번호는 시스템이 자동 부여하는 식별자입니다(새 프로젝트 이름엔 넣지 말 것):\n"
             + "\n".join(shown) + "\n\n")
+
+    async def _channel_situation(self, channel_id, exclude_root=None, limit=14) -> str:
+        """이 채널의 최근 대화를 짧게 추려 흐름에 부착할 텍스트로 — 봇이 '지금 이 채널이 무엇을 주고받는
+        자리이고 어떤 맥락인지'를 알고 답하게 한다. 신규 흐름은 세션이 비어 채널 맥락을 모르므로(라이브:
+        음식 추천 채널에서 'FPS 게임 밸런스'로 답한 버그) read_thread로 최근 대화를 끌어온다. 매체 중립
+        (Discord·SNS 모두 read_thread 보유). 실패해도 흐름을 막지 않는다(빈 문자열 폴백)."""
+        try:
+            msgs = await self.guide.read_thread(channel_id, limit=limit, include_plain=True)
+        except Exception:
+            return ""
+        lines = []
+        for m in msgs or []:
+            body = (getattr(m, "body", "") or "").strip().replace("\n", " ")
+            if not body:
+                continue
+            if exclude_root and str(getattr(m, "message_id", "")) == str(exclude_root):
+                continue   # 방금 들어온 그 요청 자신은 제외(원문은 origin_note가 따로 보여줌)
+            fid = getattr(m, "from_id", None)
+            who = ("사람" if fid in (0, None)
+                   else (str(self.bot_info.get(fid) or "").split("·")[0].strip() or f"동료{fid}"))
+            if len(body) > 100:
+                body = body[:100].rstrip() + "…"
+            lines.append(f"- {who}: {body}")
+        if not lines:
+            return ""
+        return ("[이 채널의 지금 상황 — 최근 대화] 아래는 이 채널에서 최근 오간 대화입니다. **여기가 무엇을 하는 "
+                "자리이고 지금 무슨 맥락인지**를 이걸로 파악해 그 맥락에 맞게 답하세요 — 회사의 다른 프로젝트 "
+                "이력보다 '지금 이 채널의 상황'이 우선입니다(무관한 과거 프로젝트로 새지 말 것):\n"
+                + "\n".join(lines[-10:]) + "\n\n")
 
     def _env_note(self) -> str:
         """[이 환경의 능력·경계 — 담당자가 '닿는 범위에서 최고 품질' 경로로 팀을 이끌게 하는 사실]
@@ -965,6 +993,8 @@ class Sys:
         origin_note = (f"[사용자 원문 요청 — 진짜 의도(누구의 요약·해석도 아닌, 사용자가 실제로 한 말)]: {orig}\n"
                        f"이 원문이 기준입니다. 받은 지시·질문이 원문과 어긋나 보이면 원문 의도를 우선하고, 모호하면 되물으세요.\n\n"
                        if orig else "")
+        # [상황 인지] 흐름 시작 때 채널 최근 대화를 부착해둔 것(handle_user_input). 봇이 '지금 이 채널 상황'을 알게 한다.
+        situation_note = (getattr(flow, "channel_situation", "") if flow is not None else "") or ""
         # [파일 전송 — 인바운드] 사용자가 첨부한 파일은 작업공간 inbox/에 staging됨 → 봇이 Read로 확인해 쓰게 안내.
         _inb = (getattr(flow, "inbound_files", None) if flow is not None else None) or []
         inbound_note = ((f"[사용자가 첨부한 파일 — 작업공간 inbox/에 있습니다] "
@@ -1005,6 +1035,7 @@ class Sys:
                 f"이번 흐름의 담당이 된 것이며(다른 흐름에선 한 직원으로 참여), 특별한 권력자가 아닙니다. "
                 f"당신의 역할: {my_role}\n"
                 f"{origin_note}"
+                f"{situation_note}"
                 f"{inbound_note}"
                 f"{human_info_note}"
                 f"{portfolio_note}"
@@ -1762,6 +1793,13 @@ class Sys:
         # (asyncio 단일 스레드 — 게이트 검사~여기까지 await 없음). start_root의 재등록은 멱등.
         self.engaged.engage(lead, scope_key)
         flow.comm.attach_engagement(self.engaged, scope_key)
+        # [상황 인지] 이 채널의 최근 대화를 흐름에 부착 — 봇이 '지금 이 채널·이 상황'을 알고 답하게 한다.
+        # 스코프 점유(active_flows·engage) 뒤라 await 안전(이중 흐름 레이스 없음 — 위 [선점] 불변식 유지).
+        # 신규 흐름은 세션이 비어 채널 맥락을 모르므로, 이게 없으면 눈앞의 회사 포트폴리오에 앵커링한다.
+        try:
+            flow.channel_situation = await self._channel_situation(channel_id, exclude_root=root_id)
+        except Exception:
+            flow.channel_situation = ""
         def _reg(ch, name):
             # [신원 재사용 권한] 개입(proj)은 자기 프로젝트 연장이 자명 → 무제한(None).
             # 메인 채널 신규 흐름은 사용자 원문에 명시된 P-번호만 재사용 가능(주소 지정의 이치).

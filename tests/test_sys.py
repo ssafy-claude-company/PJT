@@ -514,19 +514,49 @@ def test_담당자는_회사_포트폴리오를_사실로_본다():
     없으면 주입하지 않는다(하위호환)."""
     s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "백엔드", 12: "프론트엔드"})
     # 만든 게 없으면 포트폴리오 주입 없음
-    assert "회사가 지금까지 만든 것" not in s._prompt("x", Kind.WORK, "leader", 11, leader_id=11)
+    assert "회사 이력" not in s._prompt("x", Kind.WORK, "leader", 11, leader_id=11)
     # 프로젝트가 쌓이면 담당자는 그 사실 목록을 본다(id·이름·요지)
     s.projects = {
         100: {"id": "P-005", "name": "대기질 지도", "purpose": "에어코리아 미세먼지 현황 시각화", "summary": ""},
         101: {"id": "P-016", "name": "지방선거 분석", "purpose": "선거 공공데이터 대시보드", "summary": ""},
     }
     p_lead = s._prompt("안 쓰던 분야 공공데이터로 만들어줘", Kind.WORK, "leader", 11, leader_id=11)
-    assert "회사가 지금까지 만든 것" in p_lead
+    assert "회사 이력" in p_lead
     assert "P-005" in p_lead and "대기질 지도" in p_lead and "P-016" in p_lead
     assert "신규성" in p_lead                      # 신규 요청이면 목록에 없는 도메인을 고르라는 안내
+    # [reframe] 포트폴리오는 '배경'으로 강등 — 채널 상황과 무관하면 무시하라는 종속 프레이밍이 있어야 한다
+    # (라이브: 음식 추천에 게임 프로젝트로 답한 앵커링 방지). 데이터는 그대로, 강제 앵커만 제거.
+    assert "배경" in p_lead and ("무관하면" in p_lead or "무시" in p_lead)
     # 팀원 프롬프트엔 포트폴리오를 주입하지 않는다(도메인 선택은 담당자의 몫)
     p_mem = s._prompt("x", Kind.INFO, "member", 12, leader_id=11)
-    assert "회사가 지금까지 만든 것" not in p_mem
+    assert "회사 이력" not in p_mem
+
+
+def test_봇은_이_채널의_상황을_보고_답한다():
+    """[상황 인지] 신규 흐름은 세션이 비어 채널 맥락을 모른다 → 눈앞의 회사 포트폴리오에 앵커링(라이브:
+    음식 추천 채널에서 'FPS 게임 밸런스'로 답함). 흐름 시작 때 read_thread로 이 채널 최근 대화를
+    flow.channel_situation에 부착하고, 담당자 프롬프트가 그걸 '회사 이력보다 우선'으로 싣는다."""
+    import asyncio
+    from src.protocol import Request, Response
+
+    class _Guide(FakeGuide):
+        async def read_thread(self, thread_id, limit=50, include_plain=False):
+            # 음식 추천 채널의 최근 대화(사람 요청 + 봇 답)
+            return [
+                Request(to_id=11, kind=Kind.INFO, body="오늘 저녁 추천좀", from_id=0, message_id="1"),
+                Response(from_id=12, body="순두부찌개 어떠세요", replies_to="1", message_id="2"),
+                Request(to_id=11, kind=Kind.INFO, body="오늘 아침 추천", from_id=0, message_id="9"),  # 방금 요청(제외)
+            ]
+
+    s = Sys(_Guide(), guild_id=1, organt_builder=None, bot_info={11: "기획자", 12: "백엔드"})
+    sit = asyncio.run(s._channel_situation(500, exclude_root="9"))
+    assert "이 채널의 지금 상황" in sit
+    assert "저녁 추천" in sit and "순두부찌개" in sit      # 과거 대화 맥락이 들어온다
+    assert "오늘 아침 추천" not in sit                     # 방금 들어온 그 요청 자신은 제외(원문 노트가 따로 보여줌)
+    # 담당자 프롬프트가 이 상황을 싣는다(flow.channel_situation 경유)
+    flow = type("F", (), {"channel_situation": sit, "origin_request": "오늘 아침 추천", "leader": 11})()
+    p = s._prompt("오늘 아침 추천", Kind.INFO, "leader", 11, leader_id=11, flow=flow)
+    assert "이 채널의 지금 상황" in p and "순두부찌개" in p
 
 
 def test_owner는_work수신자_goal합의후():

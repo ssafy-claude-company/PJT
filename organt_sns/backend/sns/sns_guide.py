@@ -117,7 +117,7 @@ class SnsGuide:
                                        body=m.body, from_id=m.sender_id, message_id=str(m.msg_id)))
                 elif m.msg_type == "response":
                     out.append(Response(from_id=m.sender_id, body=m.body,
-                                        reply_to=str(m.reply_to) if m.reply_to else None,
+                                        replies_to=str(m.reply_to) if m.reply_to else None,
                                         message_id=str(m.msg_id)))
                 elif m.msg_type == "plain" and include_plain and (m.body or "").strip():
                     out.append(Request(to_id=None, kind=Kind.WORK, body=m.body.strip(),
