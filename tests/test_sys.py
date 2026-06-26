@@ -5176,6 +5176,20 @@ def test_per_agent_모델이_organt_옵션까지_도달():
     assert base(111, {}, "백엔드").options.model == "sonnet"       # 동작 불변
 
 
+def test_Info_캐주얼은_프로젝트기계_없는_대화프롬프트():
+    """[근본] Info(질문·추천·잡담)는 담당자=프로젝트 프롬프트가 아니라 가벼운 대화 프롬프트를 받는다 —
+    팀 구성/set_goal 같은 기계 지시가 없고 '대화로 답하라'가 있다(라이브: '배고파'에 '뭘 만들까요' 방지).
+    Work는 여전히 무거운 담당자 프롬프트를 받는다."""
+    from src.protocol import Kind
+    s = Sys(FakeGuide(), guild_id=1, organt_builder=None, bot_info={11: "백엔드"})
+    p = s._prompt("배고파", Kind.INFO, "leader", 11, leader_id=11)
+    assert "대화로" in p and "쓰지 마세요" in p               # 대화 경로 지침
+    assert "팀은 당신이 동적으로 짠다" not in p               # 무거운 팀 기계 없음
+    assert "set_goal은" not in p                              # 프로젝트 게이트 지시 없음
+    pw = s._prompt("게임 만들어줘", Kind.WORK, "leader", 11, leader_id=11)
+    assert "담당자" in pw and "팀은 당신이 동적으로 짠다" in pw  # Work는 프로젝트 기계 유지
+
+
 def test_per_agent_persona가_organt_시스템프롬프트까지_도달():
     """per-agent 인격(스튜디오에서 봇별 정체성 지정) — _make_builder(persona_map)이 지정 봇의 system_prompt
     뒤에 그 개성을 덧붙여 Organt 옵션까지 도달하고, 미지정 봇·디스코드 경로는 기본 인격 그대로.

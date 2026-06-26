@@ -243,6 +243,18 @@ class ClassifyKindTest(TestCase):
         for w in ["로그인 페이지 만들어줘", "서버에 캐시 붙여", "2인 협동 게임 제작", "버튼 색을 보라색으로 바꿔"]:
             self.assertEqual(classify_kind(w), "W", w)
 
+    def test_캐주얼_발화는_Info(self):
+        # [근본] 일상 발화·추천·짧은 진술은 Work가 아니라 Info(대화) — 프로젝트 기계가 안 돌게.
+        from sns.views import classify_kind
+        for c in ["배고파", "예산이 2억7천만원 있어", "오늘 점심 추천좀", "안녕", "저녁 뭐 먹지", "출출하다"]:
+            self.assertEqual(classify_kind(c), "I", c)
+
+    def test_빌드동사_들어간_질문은_Info(self):
+        # '배포 됐나요?'는 질문 — 빌드동사(배포)보다 질문 신호가 우선.
+        from sns.views import classify_kind
+        for q in ["배포 됐나요", "만들어졌어?", "수정됐는지 확인해줄래"]:
+            self.assertEqual(classify_kind(q), "I", q)
+
     def test_make_request_auto는_본문분류_명시는_override(self):
         from sns.models import Project, Person
         proj = Project.objects.create(pid="S-9200", name="분류 채널", visibility="public")

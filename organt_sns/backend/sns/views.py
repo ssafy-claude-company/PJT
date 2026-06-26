@@ -23,18 +23,32 @@ _Q_WORDS = ("뭐", "무엇", "무슨", "어떻게", "어떡", "어째", "왜", "
 _Q_ENDINGS = ("나요", "까요", "을까", "ㄹ까", "는가", "은가", "인가", "ㄴ가", "냐", "니", "래", "지요", "죠")
 
 
+# 명시적 '빌드/수정 지시'에만 Work — 그 외(질문·추천·캐주얼 발화)는 Info(대화)로. 종전엔 default가 W라
+# "배고파"·"예산 있어"·"추천좀" 같은 일상 발화까지 작업으로 분류돼 프로젝트 기계가 발동했다(라이브 버그).
+_BUILD_VERBS = ("만들", "제작", "구현", "개발", "짜줘", "짜 줘", "붙여", "고쳐", "고치", "수정", "추가해", "추가하",
+                "배포", "바꿔", "세워", "구축", "설계", "리팩", "디버그", "빌드", "작성해", "작성하", "완성")
+_CASUAL = ("추천", "배고", "뭐 먹", "뭐먹", "심심", "졸려", "피곤", "안녕", "하이", "ㅎㅇ", "고마", "수고",
+           "ㅋㅋ", "ㅎㅎ", "출출", "맛집", "점심", "저녁", "아침", "메뉴")
+
+
 def classify_kind(body):
-    """본문으로 W/I 자동 분류. 토글이 명시(W/I)면 그쪽을 쓰고, 'auto'/미지정일 때만 호출."""
+    """본문으로 W/I 자동 분류 — Work는 '명시적 빌드/수정 지시'에만, 그 외는 Info(대화). 토글 명시면 그쪽 우선."""
     b = (body or "").strip()
     if not b:
         return "W"
-    if "?" in b or "？" in b:
+    if "?" in b or "？" in b:                    # 질문 신호를 빌드동사보다 먼저 — '배포 됐나요?'는 질문
         return "I"
     head = b[:24]
     if any(head.startswith(w) or (" " + w) in head for w in _Q_WORDS):
         return "I"
     last = b.rstrip(" .!~…").splitlines()[-1].strip() if b else b
     if any(last.endswith(e) for e in _Q_ENDINGS):
+        return "I"
+    if any(v in b for v in _BUILD_VERBS):       # 명시적 빌드/수정 지시 → Work
+        return "W"
+    if any(c in b for c in _CASUAL):            # 추천·캐주얼 발화 → Info(대화)
+        return "I"
+    if len(b) <= 20:                            # 짧은 비명령 발화(예 '예산 있어')는 대화
         return "I"
     return "W"
 
