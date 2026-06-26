@@ -30,7 +30,7 @@ if _PJT not in sys.path:
     sys.path.insert(0, _PJT)
 
 from sns.sns_guide import SnsGuide                  # noqa: E402
-from sns.http_sns_guide import HttpSnsGuide         # noqa: E402
+from sns.http_sns_guide import HttpSnsGuide, ORIGIN_CHANNEL   # noqa: E402
 from sns.models import Agent, GuideMessage          # noqa: E402
 
 SNS_GUILD_ID = 1
@@ -205,74 +205,85 @@ class Command(BaseCommand):
 
         seen = set()
         last_beat = 0.0
-        self.stdout.write("요청 폴링 시작 — 채널/스튜디오에서 봇에게 요청하면 라이브로 처리됩니다. (Ctrl+C 종료)")
+        inflight = {}                                    # msg_id → {"task":Task, "ch":int} — 동시 진행 흐름
+        try:
+            cap = max(1, int(os.environ.get("ORGANT_MAX_FLOWS", "4")))
+        except ValueError:
+            cap = 4
+        # [동시 처리] 두뇌(Sys)는 active_flows·engaged로 이미 병렬을 지원하는데, 종전 러너는 흐름을
+        # 하나씩 await해 직렬화했다 — 무관한 다른 채널·다른 봇 요청까지 큐에 막혔다(라이브 관측).
+        # 이제 빈 봇의 요청은 동시 task로 띄우고(점유 충돌은 engaged.holder로 사전 차단), 같은 봇/채널만
+        # 자연 직렬화한다. 출력 라우팅은 contextvar(ORIGIN_CHANNEL)로 흐름별 격리(공유속성 레이스 제거).
+        self.stdout.write(f"요청 폴링 시작(동시 처리 — 상한 {cap}) — 빈 봇이면 여러 흐름이 함께 돕니다. (Ctrl+C 종료)")
         while True:
             try:
-                _now = asyncio.get_event_loop().time()      # 엔진 생존 신호 — 폴마다(8초 throttle)
+                _now = asyncio.get_event_loop().time()
+                # ── 엔진 생존(heartbeat) + 진행(picked_ts) 갱신 — 모든 진행 중 요청(8초 throttle) ──
                 if _now - last_beat > 8:
                     try:
                         await _beat()
+                        for _mid in list(inflight):
+                            await mark_pick(_mid, touch=True)
                     except Exception:
                         pass
                     last_beat = _now
+                # ── 완료된 흐름 reap ──
+                for _mid, _info in list(inflight.items()):
+                    if _info["task"].done():
+                        del inflight[_mid]
+                        try:
+                            _info["task"].result()       # 예외 표출
+                            await mark_pick(_mid, done=True)
+                            self.stdout.write(f"✓ 처리 완료: msg_id={_mid}")
+                        except asyncio.CancelledError:
+                            self.stdout.write(f"■ 중지됨: msg_id={_mid}")
+                        except Exception as _e:
+                            import traceback
+                            self.stderr.write(f"✗ 처리 실패 msg_id={_mid}: {_e}\n{traceback.format_exc()}")
+                # ── 진행 중 흐름들의 중지·개입 폴(채널별) ──
+                for _mid, _info in list(inflight.items()):
+                    _ch = _info["ch"]
+                    try:
+                        if await _check_stop(_ch):
+                            sysm.request_cancel(_ch)
+                            self.stdout.write(f"■ 작업 중지 요청 수신 — ch={_ch}")
+                    except Exception:
+                        pass
+                    try:
+                        for _x in await _check_interject(_ch):
+                            ok = sysm.deliver_human_info(_ch, _x.get("target_id"), _x.get("text"))
+                            self.stdout.write(f"✎ 사람 개입 {'주입' if ok else '미주입(흐름없음)'} — ch={_ch}")
+                    except Exception:
+                        pass
+                # ── 빈 봇 요청 픽 → 동시 흐름 띄우기(상한까지) ──
                 pend = await fetch_pending(seen)
+                busy_ch = {_i["ch"] for _i in inflight.values()}
+                busy_lead = set()                        # 이번 폴에 막 띄운 리더(아직 engage 전 보호)
                 for m in pend:
+                    if len(inflight) >= cap:
+                        break
                     mid = m["msg_id"]
-                    seen.add(mid)
                     to_id = int(m["to_id"]) if m["to_id"] else leader
+                    ch = int(m["channel_id"])
+                    # 같은 채널이 진행 중이거나 대상 봇이 타 흐름 점유 중이면 큐에 남김(두뇌가 직렬화) — seen 미추가로 다음 폴 재검토
+                    if ch in busy_ch or to_id in busy_lead or sysm.engaged.holder(to_id) is not None:
+                        continue
+                    seen.add(mid)
                     kind = Kind.WORK if (m["kind"] or "W") == "W" else Kind.INFO
                     req = Request(to_id=to_id, kind=kind, body=m["body"], from_id=0, message_id=str(mid))
-                    await mark_pick(mid)
-                    self.stdout.write(f"▶ 요청 처리: ch={m['channel_id']} to={to_id} kind={m['kind']} body={m['body'][:46]!r}")
-                    # 협업을 '요청이 온 채널'에 라우팅 — 위임·작업이 사용자 채널에 보이게.
-                    ch = int(m["channel_id"])
-                    setattr(guide, "_origin_channel", ch)
                     try:
-                        # [stale stop 방지] 픽 직전 잔여(이전 흐름의) 중지 신호를 소거 — 짧은 흐름이 폴 전에
-                        # 끝나 신호가 남았다가, 같은 채널의 새 흐름을 시작하자마자 죽이는 것 차단.
-                        try:
-                            await _check_stop(ch)
-                        except Exception:
-                            pass
-                        # 흐름을 태스크로 돌리며 '작업 중지' 신호를 폴 — 사용자 트리거를 진행 중 흐름에
-                        # 협조적 취소(SYS.request_cancel)로 잇는다(러너=두뇌와 같은 이벤트루프).
-                        flow_task = asyncio.create_task(sysm.route_channel_request(ch, req))
-                        while not flow_task.done():
-                            d, _ = await asyncio.wait({flow_task}, timeout=2)
-                            if flow_task in d:
-                                break
-                            try:
-                                if await _check_stop(ch):
-                                    sysm.request_cancel(ch)
-                                    self.stdout.write(f"■ 작업 중지 요청 수신 — ch={ch}")
-                            except Exception:
-                                pass
-                            try:
-                                # 사람 '진행 중 개입' — 폴해서 대상 봇 다음 턴 프롬프트에 주입(deliver_human_info).
-                                for info in await _check_interject(ch):
-                                    ok = sysm.deliver_human_info(ch, info.get("target_id"), info.get("text"))
-                                    self.stdout.write(f"✎ 사람 개입 {'주입' if ok else '미주입(흐름없음)'} — ch={ch}")
-                            except Exception:
-                                pass
-                            # 긴 흐름 동안에도 엔진 생존(heartbeat)·진행(picked_ts)을 갱신 — 외곽 폴이 흐름에
-                            # 막혀 있어 여기서 안 하면 5분+ 협업이 '엔진 꺼짐'·'멎은 요청'으로 오표시된다.
-                            _nb = asyncio.get_event_loop().time()
-                            if _nb - last_beat > 8:
-                                try:
-                                    await _beat()
-                                    await mark_pick(mid, touch=True)
-                                except Exception:
-                                    pass
-                                last_beat = _nb
-                        await flow_task
-                        await mark_pick(mid, done=True)
-                        self.stdout.write(f"✓ 처리 완료: msg_id={mid}")
-                    except Exception as e:
-                        import traceback
-                        self.stderr.write(f"✗ 처리 실패 msg_id={mid}: {e}\n{traceback.format_exc()}")
-                if opts["once"]:
-                    self.stdout.write(f"[--once] {'대기 요청 없음' if not pend else '처리 완료'} — 종료.")
+                        await _check_stop(ch)            # stale stop 소거(이전 흐름 잔여 신호)
+                    except Exception:
+                        pass
+                    await mark_pick(mid)
+                    ORIGIN_CHANNEL.set(ch)               # task-로컬 라우팅(동시 안전 — create_task가 context 복사)
+                    inflight[mid] = {"task": asyncio.create_task(sysm.route_channel_request(ch, req)), "ch": ch}
+                    busy_ch.add(ch); busy_lead.add(to_id)
+                    self.stdout.write(f"▶ 요청 처리(동시 {len(inflight)}/{cap}): ch={ch} to={to_id} kind={m['kind']} body={m['body'][:42]!r}")
+                if opts["once"] and not inflight and not pend:
+                    self.stdout.write("[--once] 대기·진행 요청 없음 — 종료.")
                     return
+                await asyncio.sleep(2)
             except KeyboardInterrupt:
                 self.stdout.write("종료 신호 — 폴링 중단.")
                 return

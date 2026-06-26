@@ -8,6 +8,7 @@
   동기 requests 호출은 asyncio.to_thread로 감싸 이벤트 루프를 막지 않는다.
 """
 import asyncio
+import contextvars
 import itertools
 import os
 import sys
@@ -24,6 +25,11 @@ try:
     from src.protocol import Request, Response, Kind  # noqa
 except Exception:
     Request = Response = Kind = None
+
+# [동시 흐름 라우팅 안전] 진행 중 요청의 origin 채널을 task-로컬로 — 공유 속성(self._origin_channel)은
+# 여러 흐름이 동시에 돌면 서로 덮어써 출력이 엉뚱한 채널로 샌다. contextvar는 asyncio task가 생성 시
+# context를 복사하므로 각 동시 흐름이 자기 채널만 본다(시그니처·두뇌 무변경).
+ORIGIN_CHANNEL = contextvars.ContextVar("organt_origin_channel", default=None)
 
 
 class HttpSnsGuide:
@@ -77,8 +83,9 @@ class HttpSnsGuide:
     async def create_project_channel(self, guild_id, name):
         # SNS-네이티브: 프로젝트 협업을 '요청이 온 채널'에 그대로 — 디스코드처럼 새 채널을 따로 안 만들고
         # 사용자가 보는 채널에 위임·작업·완료가 라이브로 뜨게 한다. origin 없으면 합성 id(폴백).
-        if self._origin_channel:
-            return int(self._origin_channel)
+        oc = ORIGIN_CHANNEL.get() or self._origin_channel   # task-로컬 우선(동시 흐름 안전), 없으면 구 호환 속성
+        if oc:
+            return int(oc)
         return self._new_id()
 
     async def open_task(self, channel_id, status):
