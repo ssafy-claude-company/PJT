@@ -158,12 +158,16 @@ def test_run_파일작성_백도어_차단():
     assert "거부" not in ok and "built" in ok
 
 
-def test_run_셸은_배포비밀을_못_읽는다(monkeypatch):
-    """[봇 키 유출 차단] run 셸은 배포 자격증명(RENDER_KEY·GH_PAT·ORGANT_GUIDE_TOKEN 등)을 못 본다 —
-    env에 키가 있어도 `echo $RENDER_KEY`/`env`로 새지 않는다(deny-list는 rm/git만 막지 env 노출은 못 막음).
-    deploy 도구는 인프로세스로 os.environ을 직접 읽으므로 배포 능력은 그대로(이 게이트는 셸 서브프로세스만)."""
+def test_run_셸은_배포비밀을_못_읽는다(tmp_path, monkeypatch):
+    """[봇 비밀 유출 차단 — 다층] run 셸은 배포·인증 비밀을 못 읽는다.
+    ① env-scrub: env에 키가 있어도 `echo $RENDER_KEY`로 안 샌다(자기 env에서 제거).
+    ② deny-list: `.guide_env`·`/proc/…/environ`·`/tmp/claude-0` 같은 비밀 경로 읽기를 거부.
+    ③ 권한강등: 러너가 root면 run을 비특권(nobody)로 떨어뜨려 600 root 파일·root proc environ을
+       *권한 자체로* 못 읽게 한다(env-scrub 우회로 `cat .guide_env`를 막는 근본 방어).
+    deploy 도구는 인프로세스로 os.environ을 직접 읽으므로 배포 능력은 그대로(게이트는 셸만)."""
+    import os as _os
     from src.guide_tools import _scrubbed_run_env, _is_secret_env
-    # ① 단위 — 비밀만 지우고 PATH 등 빌드 필수 env는 보존
+    # ① env-scrub 단위 — 비밀만 지우고 PATH 등 빌드 필수 env는 보존
     for k, v in (("RENDER_KEY", "rnd_SECRET"), ("GH_PAT", "ghp_SECRET"),
                  ("RENDER_OWNER", "own"), ("ORGANT_GUIDE_TOKEN", "tok"),
                  ("ANTHROPIC_API_KEY", "sk-SECRET"), ("MY_BUILD_FLAG", "ok")):
@@ -174,12 +178,25 @@ def test_run_셸은_배포비밀을_못_읽는다(monkeypatch):
         assert _is_secret_env(secret)
     assert env.get("MY_BUILD_FLAG") == "ok" and "PATH" in env       # 일반 env는 유지
     assert not _is_secret_env("MY_BUILD_FLAG") and not _is_secret_env("PATH")
-    # ② 종단 — 실제 run 셸로 키를 출력 시도 → 비어 있음(유출 0)
     f = _flow(FakeGuide())
-    f.workspace = "/tmp"
+    f.workspace = str(tmp_path)
     rt = {t.name: t for t in make_guide_tools(f, 12, "member")}["run"]
+    # ② 종단 env-scrub — 실제 run 셸로 키 출력 시도 → 비어 있음(유출 0)
     out = asyncio.run(rt.handler({"command": "echo \"KEY=[$RENDER_KEY]\""}))["content"][0]["text"]
     assert "KEY=[]" in out and "rnd_SECRET" not in out
+    # ② deny-list — 비밀 경로 읽기 거부(권한강등 불가 환경의 폴백)
+    for bad in ("cat /x/.guide_env", "cat /proc/1/environ", "ls /tmp/claude-0/x"):
+        o = asyncio.run(rt.handler({"command": bad}))["content"][0]["text"]
+        assert "거부" in o, bad
+    # ③ 권한강등(러너가 root일 때만 의미) — 작업공간 *밖* 600 root 파일을 못 읽는다
+    if _os.geteuid() == 0:
+        secret = tmp_path.parent / f"outside_secret_{_os.getpid()}.txt"
+        secret.write_text("TOPSECRET"); _os.chmod(str(secret), 0o600)
+        try:
+            o2 = asyncio.run(rt.handler({"command": f"cat {secret}"}))["content"][0]["text"]
+            assert "TOPSECRET" not in o2, "권한강등 실패 — nobody가 600 root 파일을 읽음"
+        finally:
+            secret.unlink(missing_ok=True)
 
 
 def test_run_백그라운드_프로세스_그룹째_정리():

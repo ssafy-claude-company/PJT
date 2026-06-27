@@ -53,7 +53,9 @@ LEADER_TOOLS = [f"mcp__guide__{n}" for n in
 # run 툴 안전 차단: 파괴/탈출/저장소·시스템 경로/네트워크 외 명령은 막는다(npm·node·curl·python은 허용).
 _RUN_DENY = ("rm -rf", "rm -r ", "sudo", "shutdown", "reboot", "mkfs", "dd if=", ":(){",
              "git ", "/home/user/pjt", "/etc/", "/usr/", "/root", "> /", "chmod ", "chown ",
-             "pkill", "kill -9 1 ", "wget ", "ssh ", "scp ", "npm publish", "history")
+             "pkill", "kill -9 1 ", "wget ", "ssh ", "scp ", "npm publish", "history",
+             # 비밀 읽기 차단(심층방어) — 권한강등이 1차 방어, 이건 비루트 폴백·명시 차단.
+             ".guide_env", "/environ", "/tmp/claude-0")
 # run으로 '파일 작성'(heredoc·cat>·tee)을 막는다 — 산출물 작성/수정은 Write/Edit로 해야 권한·협의
 # 게이트(협의 중 선구현 금지)가 적용되고 '누가 무엇을 만들었나'가 기록된다. run은 실행·빌드·검증 전용.
 # (이 백도어로 리더가 위임 없이 전부 혼자 작성해 독점하거나, 협의 단계 동료가 선구현하는 걸 차단.)
@@ -80,6 +82,44 @@ def _is_secret_env(name: str) -> bool:
 def _scrubbed_run_env() -> dict:
     """봇 run 셸용 환경 — 부모 env 복사본에서 배포·인증 비밀만 제거(PATH·HOME 등 빌드 필수 env는 유지)."""
     return {k: v for k, v in os.environ.items() if not _is_secret_env(k)}
+
+
+def _run_drop_creds():
+    """[권한강등 — 비밀 파일 읽기 근본차단] env-scrub는 봇 *자기 env*만 지운다 — 러너가 root면 봇 셸도
+    root라 `cat .guide_env`·`cat /proc/<러너>/environ`으로 비밀(RENDER_KEY·GH_PAT·AI_API_KEY·
+    ORGANT_GUIDE_TOKEN)을 우회로 읽을 수 있다(라이브 확인됨). run 셸을 비특권 사용자로 떨어뜨리면
+    600 root 파일·root 프로세스 environ을 *권한 자체로* 못 읽는다(node·npm 빌드는 HOME·캐시를
+    작업공간으로 잡아주면 정상). 루트가 아니면(로컬 개발) None — 이미 비특권. 사용자명은
+    ORGANT_RUN_USER로 교체 가능(기본 nobody). 강등불가 시 deny-list가 폴백."""
+    try:
+        if os.geteuid() != 0:
+            return None
+        import pwd
+        r = pwd.getpwnam(os.environ.get("ORGANT_RUN_USER") or "nobody")
+        return (r.pw_uid, r.pw_gid)
+    except (KeyError, AttributeError, OSError):
+        return None
+
+
+_NO_CHOWN = {"/", "/tmp", "/var", "/var/tmp", "/home", "/usr", "/etc", "/root", "/opt", "/srv"}
+
+
+def _chown_tree(path, uid, gid):
+    """작업공간을 강등 사용자 소유로 — 산출물·node_modules·빌드 출력 기록 가능하게. 실패는 무시(최선).
+    공유/시스템 루트(/tmp 등)는 통째 chown 금지 — 격리된 흐름별 작업공간만 대상(오용·테스트 방어)."""
+    try:
+        rp = os.path.realpath(path)
+        if rp in _NO_CHOWN or rp.count(os.sep) < 2:
+            return                                          # 공유 루트 → 강등은 하되 chown은 건너뜀
+        os.chown(rp, uid, gid)
+        for root, dirs, files in os.walk(rp):
+            for n in dirs + files:
+                try:
+                    os.chown(os.path.join(root, n), uid, gid, follow_symlinks=False)
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def _resolve_members(spec, flow, allowed) -> List[int]:
@@ -1564,9 +1604,18 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 백그라운드 서버가 init으로 reparent돼 누수되는 일이 없다.
             # 출력은 파이프 대신 임시파일로 — 백그라운드 자식이 파이프를 잡고 있어도 wait가 안 막힌다.
             of, ef = tempfile.TemporaryFile(), tempfile.TemporaryFile()
+            env = _scrubbed_run_env()           # 봇 자기 env에서 비밀 제거
+            drop = _run_drop_creds()            # root면 비특권 강등 (uid,gid) — 비밀 파일/proc 읽기 근본차단
+            popen_extra = {}
+            if drop:
+                uid, gid = drop
+                _chown_tree(str(flow.workspace), uid, gid)              # 작업공간을 강등 사용자가 쓰게
+                env["HOME"] = str(flow.workspace)                       # npm·도구 dotfile 루트(쓰기 가능)
+                env.setdefault("npm_config_cache", os.path.join(str(flow.workspace), ".npm"))
+                popen_extra = {"user": uid, "group": gid, "extra_groups": []}   # root 보조그룹까지 제거
             p = subprocess.Popen(cmd, shell=True, cwd=str(flow.workspace),
                                  stdout=of, stderr=ef, start_new_session=True,
-                                 env=_scrubbed_run_env())   # 배포 비밀 차단 — 봇이 키를 읽지 못하게
+                                 env=env, **popen_extra)   # 배포 비밀 차단 + 비특권 강등(봇이 비밀 못 읽음)
             timed_out = False
             try:
                 rc = p.wait(timeout=60)        # 직속 셸 종료까지만 대기
