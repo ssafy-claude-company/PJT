@@ -59,6 +59,28 @@ _RUN_DENY = ("rm -rf", "rm -r ", "sudo", "shutdown", "reboot", "mkfs", "dd if=",
 # (이 백도어로 리더가 위임 없이 전부 혼자 작성해 독점하거나, 협의 단계 동료가 선구현하는 걸 차단.)
 _RUN_AUTHOR = ("<<", "cat >", "cat>", "tee ", "tee\t")
 
+# [run 셸 비밀 차단 — 봇 키 유출 방지] run은 작업공간 검증용 셸이지만 부모(러너) 환경을 그대로 물려받아,
+# RENDER_KEY·GH_PAT 같은 배포 자격증명이 env에 있으면 `echo $RENDER_KEY`/`env`/`curl -X DELETE`로 읽혀
+# 악용될 수 있다(deny-list는 rm/git/sudo만 막지 env 노출은 못 막음). deploy 도구는 *인프로세스*로 키를 쓰므로
+# (os.environ 직접 읽음·서브프로세스 아님) 배포 능력은 그대로 두고, run 서브프로세스 env에서만 비밀을 지운다
+# → 봇은 배포는 할 수 있어도(deploy 도구) 키를 읽을 수는 없다. PATH 등 빌드에 필요한 일반 env는 보존.
+_SECRET_ENV_EXACT = {
+    "RENDER_KEY", "RENDER_API_KEY", "RENDER_OWNER", "GH_PAT", "GH_USER",
+    "GITHUB_TOKEN", "GITHUB_PAT", "ORGANT_GUIDE_TOKEN", "ORGANT_GUIDE_TOKENS",
+}
+_SECRET_ENV_SUBSTR = ("SECRET", "TOKEN", "PASSWORD", "PASSWD", "_API_KEY", "APIKEY",
+                      "PRIVATE_KEY", "RENDER_KEY", "GH_PAT")
+
+
+def _is_secret_env(name: str) -> bool:
+    u = (name or "").upper()
+    return u in _SECRET_ENV_EXACT or any(s in u for s in _SECRET_ENV_SUBSTR)
+
+
+def _scrubbed_run_env() -> dict:
+    """봇 run 셸용 환경 — 부모 env 복사본에서 배포·인증 비밀만 제거(PATH·HOME 등 빌드 필수 env는 유지)."""
+    return {k: v for k, v in os.environ.items() if not _is_secret_env(k)}
+
 
 def _resolve_members(spec, flow, allowed) -> List[int]:
     """'12, 백엔드A' 처럼 id 또는 역할명으로 동료를 지정 → allowed 안의 id 리스트(중복 제거)."""
@@ -1543,7 +1565,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             # 출력은 파이프 대신 임시파일로 — 백그라운드 자식이 파이프를 잡고 있어도 wait가 안 막힌다.
             of, ef = tempfile.TemporaryFile(), tempfile.TemporaryFile()
             p = subprocess.Popen(cmd, shell=True, cwd=str(flow.workspace),
-                                 stdout=of, stderr=ef, start_new_session=True)
+                                 stdout=of, stderr=ef, start_new_session=True,
+                                 env=_scrubbed_run_env())   # 배포 비밀 차단 — 봇이 키를 읽지 못하게
             timed_out = False
             try:
                 rc = p.wait(timeout=60)        # 직속 셸 종료까지만 대기

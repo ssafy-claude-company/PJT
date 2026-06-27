@@ -158,6 +158,30 @@ def test_run_파일작성_백도어_차단():
     assert "거부" not in ok and "built" in ok
 
 
+def test_run_셸은_배포비밀을_못_읽는다(monkeypatch):
+    """[봇 키 유출 차단] run 셸은 배포 자격증명(RENDER_KEY·GH_PAT·ORGANT_GUIDE_TOKEN 등)을 못 본다 —
+    env에 키가 있어도 `echo $RENDER_KEY`/`env`로 새지 않는다(deny-list는 rm/git만 막지 env 노출은 못 막음).
+    deploy 도구는 인프로세스로 os.environ을 직접 읽으므로 배포 능력은 그대로(이 게이트는 셸 서브프로세스만)."""
+    from src.guide_tools import _scrubbed_run_env, _is_secret_env
+    # ① 단위 — 비밀만 지우고 PATH 등 빌드 필수 env는 보존
+    for k, v in (("RENDER_KEY", "rnd_SECRET"), ("GH_PAT", "ghp_SECRET"),
+                 ("RENDER_OWNER", "own"), ("ORGANT_GUIDE_TOKEN", "tok"),
+                 ("ANTHROPIC_API_KEY", "sk-SECRET"), ("MY_BUILD_FLAG", "ok")):
+        monkeypatch.setenv(k, v)
+    env = _scrubbed_run_env()
+    for secret in ("RENDER_KEY", "GH_PAT", "RENDER_OWNER", "ORGANT_GUIDE_TOKEN", "ANTHROPIC_API_KEY"):
+        assert secret not in env, secret
+        assert _is_secret_env(secret)
+    assert env.get("MY_BUILD_FLAG") == "ok" and "PATH" in env       # 일반 env는 유지
+    assert not _is_secret_env("MY_BUILD_FLAG") and not _is_secret_env("PATH")
+    # ② 종단 — 실제 run 셸로 키를 출력 시도 → 비어 있음(유출 0)
+    f = _flow(FakeGuide())
+    f.workspace = "/tmp"
+    rt = {t.name: t for t in make_guide_tools(f, 12, "member")}["run"]
+    out = asyncio.run(rt.handler({"command": "echo \"KEY=[$RENDER_KEY]\""}))["content"][0]["text"]
+    assert "KEY=[]" in out and "rnd_SECRET" not in out
+
+
 def test_run_백그라운드_프로세스_그룹째_정리():
     """run이 백그라운드로 띄운 자식(서버 등)을 끝나면 그룹째 정리 → 포트/프로세스 누수 없음."""
     import os
