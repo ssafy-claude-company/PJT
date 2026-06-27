@@ -18,7 +18,9 @@ SECRET_KEY = os.environ.get(
     "DJANGO_SECRET_KEY",
     "django-insecure-0t*v^mut!q7k+5+&(4zc)_gva9rs=u3x$ffdjtnyj(zsv2m*^x",
 )
-DEBUG = os.environ.get("DJANGO_DEBUG", "1") not in ("0", "false", "False")
+# 안전기본값: 미설정 시 False(프로덕션 안전) — DEBUG=True는 트레이스백·설정·로컬변수(키 값 포함
+# 가능)를 노출하고 CORS_ALLOW_ALL을 켠다. 로컬 개발만 DJANGO_DEBUG=1로 명시. (라이브는 이미 =0)
+DEBUG = os.environ.get("DJANGO_DEBUG", "0") not in ("0", "false", "False")
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "*").split(",")
 
 INSTALLED_APPS = [
