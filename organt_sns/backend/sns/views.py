@@ -295,6 +295,28 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(project_briefing(self.get_object()))
 
     @action(detail=True)
+    def article(self, request, pid=None):
+        """프로젝트 산출물·작업 보드 — 배포/저장소(repo) 링크 + Task 단위(담당·상태·산출).
+        채팅을 안 읽어도 '결과물'과 '작업 단위'를 한눈에. /api/projects/P-032/article/"""
+        from .project_board import build_deliverables, build_tasks, project_goal, project_status
+        proj = self.get_object()
+        deliverables = build_deliverables(proj)
+        tasks = build_tasks(proj, deliverables)
+        has_msg = (GuideMessage.objects.filter(channel_id=proj.id).exists()
+                   or proj.events.exclude(kind="denied").exists())
+        return Response({
+            "pid": proj.pid, "name": proj.name,
+            "leader_role": proj.leader.role if proj.leader else None,
+            "goal": project_goal(proj), "status": project_status(proj, has_msg),
+            "deliverables": deliverables, "tasks": tasks,
+            "stats": {"deploys": proj.events.filter(kind="deploy").count(),
+                      "tasks": len(tasks),
+                      "cross_checks": sum(t["cross_checks"] for t in tasks),
+                      "live_links": sum(1 for d in deliverables if d["type"] == "deploy"),
+                      "repo_links": sum(1 for d in deliverables if d["type"] == "repo")},
+        })
+
+    @action(detail=True)
     def messages(self, request, pid=None):
         """채널(=프로젝트) 메시지 타임라인 — 봇 협업 이벤트 + 사람 코멘트를 시간순 병합."""
         proj = self.get_object()

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { kindMeta, timeFmt, dayKey, dayLabel } from '../kinds'
 import CollabPanel from '../components/CollabPanel.vue'
+import ArticlePanel from '../components/ArticlePanel.vue'
 import Icon from '../components/Icon.vue'
 import { monogram, avatarColor, avatarBg } from '../avatar'
 import { askPrompt, askConfirm } from '../dialog'
@@ -20,6 +21,7 @@ const sending = ref(false)
 const briefing = ref(null)
 const showBrief = ref(false)
 const showStruct = ref(false)
+const showArticle = ref(false)   // 산출물·작업 보드(배포/repo 링크 + Task)
 const stats = ref(null)
 const msgsEl = ref(null)
 // 입력 모드: 사람 메시지(msg) vs 봇 요청(req, Work/Info 1급)
@@ -390,7 +392,7 @@ onMounted(() => {
 onUnmounted(stopPoll)
 watch(() => route.params.pid, () => {
   live.value = false; menu.value = false; pickerOpen.value = false
-  showBrief.value = false; showStruct.value = false; showMembers.value = false
+  showBrief.value = false; showStruct.value = false; showMembers.value = false; showArticle.value = false
   load(); loadMembers()
 })
 </script>
@@ -451,7 +453,8 @@ watch(() => route.params.pid, () => {
           </div>
         </template>
       </div>
-      <button class="iconbtn" :class="{ on: showStruct }" title="협업 한눈에" aria-label="협업 한눈에" @click="showStruct = !showStruct"><Icon name="network" /></button>
+      <button class="iconbtn" :class="{ on: showArticle }" title="산출물 · 작업" aria-label="산출물 · 작업" @click="showArticle = !showArticle; showStruct = false"><Icon name="box" /></button>
+      <button class="iconbtn" :class="{ on: showStruct }" title="협업 한눈에" aria-label="협업 한눈에" @click="showStruct = !showStruct; showArticle = false"><Icon name="network" /></button>
       <button class="iconbtn" :class="{ on: showBrief }" title="AI 요약" aria-label="AI 요약" @click="loadBrief"><Icon name="spark" /></button>
       <div class="ch-menu">
         <button class="iconbtn" title="채널 관리" aria-label="채널 관리" @click="menu = !menu"><Icon name="more" /></button>
@@ -501,6 +504,7 @@ watch(() => route.params.pid, () => {
   </div>
 
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />
+  <ArticlePanel v-if="showArticle" :key="'art-' + route.params.pid" :pid="route.params.pid" />
 
   <div v-if="data && data.pending_count" class="pending-bar">
     대기 중인 요청 <b>{{ data.pending_count }}건</b> — 정상 접수됐습니다.

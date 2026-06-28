@@ -634,3 +634,58 @@ class BackstopResumeTest(TestCase):
         self.assertNotIn("picked_ts", p)
         # 픽 해제됐으니 pending에 다시 뜬다(재개 가능)
         self.assertIn(gm.msg_id, {r["msg_id"] for r in _local_pending(set())})
+
+
+class ArticleBoardTest(TestCase):
+    """프로젝트 산출물·작업 보드(/article) — 배포/저장소 링크 추출·분류 + Task 단위."""
+
+    def _client(self):
+        from sns.models import Person
+        Person.objects.get_or_create(handle="ab", defaults={"name": "에이비", "token": "tok_ab"})
+        c = APIClient(); c.credentials(HTTP_AUTHORIZATION="Token tok_ab"); return c
+
+    def test_deliverables_라이브_봇메시지_배포_repo_링크_추출_분류(self):
+        from sns.models import Project, Agent, GuideMessage
+        be = Agent.objects.create(bot_id=11, role="백엔드", name="고은호", visibility="public")
+        proj = Project.objects.create(pid="S-9800", name="보드", visibility="public", leader=be)
+        GuideMessage.objects.create(channel_id=proj.id, thread_id=proj.id, sender_id=11, msg_type="plain",
+            body="배포 완료: https://organt-p-001.onrender.com 코드: https://github.com/me/proj.",
+            ts=time.time(), payload={})
+        # sender 0(사람) URL은 산출물 아님(봇 산출만 집계)
+        GuideMessage.objects.create(channel_id=proj.id, thread_id=proj.id, sender_id=0, msg_type="request",
+            body="참고 https://example.com/ref", ts=time.time(), payload={})
+        d = self._client().get(f"/api/projects/{proj.pid}/article/").data
+        types = {x["type"]: x["url"] for x in d["deliverables"]}
+        self.assertIn("deploy", types); self.assertIn("repo", types)
+        self.assertTrue(types["deploy"].endswith("onrender.com"))     # 꼬리 구두점 제거됨
+        self.assertIn("github.com/me/proj", types["repo"])
+        self.assertFalse(any("example.com" in x["url"] for x in d["deliverables"]))  # 사람 링크 제외
+        self.assertEqual(d["deliverables"][0]["type"], "deploy")      # deploy 먼저 정렬
+        self.assertEqual(d["stats"]["live_links"], 1)
+        self.assertEqual(d["stats"]["repo_links"], 1)
+
+    def test_tasks_단위_담당_상태_노출(self):
+        from sns.models import Project, Agent, CollabTask
+        be = Agent.objects.create(bot_id=11, role="백엔드", name="고은호", visibility="public")
+        proj = Project.objects.create(pid="S-9801", name="보드2", visibility="public", leader=be)
+        CollabTask.objects.create(project=proj, task_id="T1", purpose="서버 구현",
+            owner=be, cross_checks=2, deploy_count=1, status="완료")
+        d = self._client().get(f"/api/projects/{proj.pid}/article/").data
+        self.assertEqual(len(d["tasks"]), 1)
+        t = d["tasks"][0]
+        self.assertEqual(t["task_id"], "T1")
+        self.assertEqual(t["owner_role"], "백엔드")
+        self.assertEqual(t["owner_name"], "고은호")
+        self.assertEqual(t["status"], "완료")
+        self.assertEqual(t["cross_checks"], 2)
+
+    def test_task_complete_이벤트_result_링크도_산출물_그리고_완료상태(self):
+        from sns.models import Project, Agent, Event
+        be = Agent.objects.create(bot_id=11, role="백엔드", name="고은호", visibility="public")
+        proj = Project.objects.create(pid="S-9802", name="보드3", visibility="public", leader=be)
+        Event.objects.create(seq=99501, ts=1.0, source="flow", kind="task_complete", project=proj,
+            actor=be, summary="완성", payload={"result": "라이브 https://demo.onrender.com 입니다"})
+        d = self._client().get(f"/api/projects/{proj.pid}/article/").data
+        self.assertTrue(any(x["type"] == "deploy" and "demo.onrender.com" in x["url"]
+                            for x in d["deliverables"]))
+        self.assertEqual(d["status"], "완료")     # task_complete 있으면 완료
