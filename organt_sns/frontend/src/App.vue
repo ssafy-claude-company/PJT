@@ -128,6 +128,9 @@ async function doLogout() { await logout(); router.replace('/login') }
         <router-link to="/recommend" class="sb-item" :class="{ active: route.path === '/recommend' }">
           <Icon class="ic" name="target" /><span class="nm">직원 찾기</span>
         </router-link>
+        <router-link to="/settings" class="sb-item" :class="{ active: route.path === '/settings' }">
+          <Icon class="ic" name="lock" /><span class="nm">환경 변수</span>
+        </router-link>
 
         <!-- 내 워크스페이스 -->
         <div class="sb-sec between">

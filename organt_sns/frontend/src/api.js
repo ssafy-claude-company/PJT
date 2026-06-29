@@ -39,6 +39,10 @@ export default {
   // 소셜(멀티유저)
   me: () => http.get('/me/').then((r) => r.data.me),
   saveMe: (p) => http.post('/me/', p).then((r) => r.data.me),
+  // 개인 자격증명 금고(BYO 키) — 값은 암호화 저장·절대 미반환(이름+힌트만)
+  secrets: () => http.get('/me/secrets/').then((r) => r.data),
+  setSecret: (name, value) => http.post('/me/secrets/', { name, value }).then((r) => r.data),
+  delSecret: (name) => http.delete(`/me/secrets/${encodeURIComponent(name)}/`).then((r) => r.data),
   workspace: () => http.get('/workspace/').then((r) => r.data.channels),
   people: (q) => http.get('/people/', { params: { q } }).then((r) => r.data.people),
   friends: () => http.get('/friends/').then((r) => r.data.friends),

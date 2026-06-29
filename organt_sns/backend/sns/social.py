@@ -310,3 +310,65 @@ def workspace(request):
     chans = [{"pid": m.project.pid, "name": m.project.name, "status": m.project.status,
               "role": m.role, "visibility": m.project.visibility} for m in ms]
     return Response({"channels": chans})
+
+
+# ── 개인 자격증명 금고(BYO 키) ───────────────────────────────────────
+# 배포에 쓰는 표준 키 이름 — UI 안내·완비 판정용(다른 이름도 자유 저장: 일반 환경 변수 금고).
+DEPLOY_SECRET_NAMES = ["RENDER_KEY", "RENDER_OWNER", "GH_PAT", "GH_USER"]
+_SECRET_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+
+@api_view(["GET", "POST"])
+@permission_classes([AllowAny])
+def secrets(request):
+    """GET: 내 시크릿 목록(이름+힌트만, 값 절대 미반환). POST: {name,value} 저장(암호화). 인증 필요."""
+    cur = current_person(request)
+    if not cur:
+        return Response({"detail": "로그인이 필요해요."}, status=401)
+    from .models import PersonSecret
+    from .secrets_vault import encrypt, hint as _mk_hint
+    if request.method == "POST":
+        if cur.is_guest:
+            return Response({"detail": "체험 계정은 키를 저장할 수 없어요. 회원가입 후 이용하세요."}, status=403)
+        name = (request.data.get("name") or "").strip()
+        value = request.data.get("value")
+        if not _SECRET_NAME.match(name):
+            return Response({"detail": "키 이름은 영문으로 시작, 영문/숫자/밑줄 64자 이내여야 해요."}, status=400)
+        if not value or not str(value).strip():
+            return Response({"detail": "값이 비었어요."}, status=400)
+        value = str(value).strip()
+        PersonSecret.objects.update_or_create(
+            person=cur, name=name,
+            defaults={"value_enc": encrypt(value), "hint": _mk_hint(value)})
+    out = [{"name": s.name, "hint": s.hint, "updated_at": s.updated_at.timestamp()}
+           for s in cur.secrets.all()]
+    have = {s["name"] for s in out}
+    return Response({"secrets": out, "deploy_names": DEPLOY_SECRET_NAMES,
+                     "deploy_ready": all(n in have for n in DEPLOY_SECRET_NAMES)})
+
+
+@api_view(["DELETE"])
+@permission_classes([AllowAny])
+def delete_secret(request, name):
+    """내 시크릿 1개 삭제. 인증 필요."""
+    cur = current_person(request)
+    if not cur:
+        return Response({"detail": "로그인이 필요해요."}, status=401)
+    from .models import PersonSecret
+    n = PersonSecret.objects.filter(person=cur, name=name).delete()[0]
+    return Response({"deleted": n > 0})
+
+
+def deploy_creds_for(person):
+    """프로젝트 owner의 배포 자격증명(복호화) — 배포 브리지가 러너에 넘길 값. 없으면 빈 dict.
+    (서버 내부 전용 — 절대 일반 API 응답으로 내보내지 않는다.)"""
+    if not person:
+        return {}
+    from .models import PersonSecret
+    from .secrets_vault import decrypt
+    out = {}
+    for s in PersonSecret.objects.filter(person=person, name__in=DEPLOY_SECRET_NAMES):
+        v = decrypt(s.value_enc)
+        if v:
+            out[s.name] = v
+    return out

@@ -34,6 +34,8 @@ urlpatterns = [
     path("auth/logout/", social.logout, name="logout"),
     # 소셜(멀티유저) — 정체성·친구·채널 멤버·워크스페이스
     path("me/", social.me, name="me"),
+    path("me/secrets/", social.secrets, name="secrets"),                       # 개인 자격증명 금고(BYO 키)
+    path("me/secrets/<str:name>/", social.delete_secret, name="delete-secret"),
     path("people/", social.people, name="people"),
     path("friends/", social.friends, name="friends"),
     path("friends/requests/", social.friend_requests, name="friend-requests"),

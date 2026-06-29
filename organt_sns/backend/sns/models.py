@@ -267,3 +267,21 @@ class InterjectSignal(models.Model):
     requested_at = models.FloatField(default=0.0)
     requested_by = models.CharField(max_length=30, blank=True)
     requester_name = models.CharField(max_length=60, blank=True)   # 타임라인 작성자 표시용
+
+
+class PersonSecret(models.Model):
+    """[개인 자격증명 금고 — BYO 키] 사용자가 자기 배포 키(RENDER_KEY·GH_PAT·GH_USER·RENDER_OWNER 등)를
+    *암호화해서* 맡기는 공간. 봇 배포는 '프로젝트 owner의 이 값'을 써서 그 사용자 계정에 배포한다 —
+    운영자 키로 전원 배포(비용·책임 쏠림)를 피하는 BYO 모델. 값은 평문 저장·응답 절대 금지(이름+힌트만)."""
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="secrets")
+    name = models.CharField(max_length=64, help_text="키 이름(RENDER_KEY 등)")
+    value_enc = models.TextField(help_text="Fernet 암호문 — 평문 저장 금지")
+    hint = models.CharField(max_length=12, blank=True, help_text="확인용 힌트(••••마지막4자) — 값 아님")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("person", "name")
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.person.handle}:{self.name}"

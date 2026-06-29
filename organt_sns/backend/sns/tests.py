@@ -689,3 +689,64 @@ class ArticleBoardTest(TestCase):
         self.assertTrue(any(x["type"] == "deploy" and "demo.onrender.com" in x["url"]
                             for x in d["deliverables"]))
         self.assertEqual(d["status"], "완료")     # task_complete 있으면 완료
+
+
+class SecretVaultTest(TestCase):
+    """개인 자격증명 금고(/me/secrets) — 암호화 저장·값 미반환·소유 격리·BYO 복호화."""
+
+    def _person(self, handle="vault1", guest=False):
+        from sns.models import Person
+        p, _ = Person.objects.get_or_create(
+            handle=handle, defaults={"name": "금고", "token": "tok_" + handle, "is_guest": guest})
+        return p
+
+    def _client(self, handle="vault1"):
+        c = APIClient(); c.credentials(HTTP_AUTHORIZATION=f"Token tok_{handle}"); return c
+
+    def test_저장은_암호화_되고_값은_절대_미반환(self):
+        self._person()
+        r = self._client().post("/api/me/secrets/",
+                                {"name": "RENDER_KEY", "value": "rnd_supersecret123"}, format="json")
+        self.assertEqual(r.status_code, 200)
+        s = r.data["secrets"]
+        self.assertEqual(len(s), 1)
+        self.assertEqual(s[0]["name"], "RENDER_KEY")
+        self.assertNotIn("value", s[0])
+        self.assertEqual(s[0]["hint"], "••••t123")
+        self.assertNotIn("supersecret", str(r.data))            # 값이 응답 어디에도 없음
+        from sns.models import PersonSecret
+        from sns.secrets_vault import decrypt
+        ps = PersonSecret.objects.get(name="RENDER_KEY")
+        self.assertNotIn("supersecret", ps.value_enc)           # DB는 암호문
+        self.assertEqual(decrypt(ps.value_enc), "rnd_supersecret123")   # 서버만 복호화
+
+    def test_deploy_ready는_4개_다_채우면_참(self):
+        self._person()
+        c = self._client()
+        for n, v in [("RENDER_KEY", "rnd_x"), ("RENDER_OWNER", "tea_x"), ("GH_PAT", "ghp_x")]:
+            c.post("/api/me/secrets/", {"name": n, "value": v}, format="json")
+        self.assertFalse(self._client().get("/api/me/secrets/").data["deploy_ready"])
+        r = c.post("/api/me/secrets/", {"name": "GH_USER", "value": "me"}, format="json")
+        self.assertTrue(r.data["deploy_ready"])
+
+    def test_남의_시크릿은_안보이고_삭제된다(self):
+        self._person("vault1"); self._person("vaultB")
+        self._client("vault1").post("/api/me/secrets/", {"name": "GH_PAT", "value": "ghp_a"}, format="json")
+        self.assertEqual(len(self._client("vaultB").get("/api/me/secrets/").data["secrets"]), 0)
+        self.assertTrue(self._client("vault1").delete("/api/me/secrets/GH_PAT/").data["deleted"])
+        self.assertEqual(len(self._client("vault1").get("/api/me/secrets/").data["secrets"]), 0)
+
+    def test_게스트는_저장_불가_미인증은_401(self):
+        self._person("vaultG", guest=True)
+        self.assertEqual(self._client("vaultG").post("/api/me/secrets/",
+                         {"name": "GH_PAT", "value": "x"}, format="json").status_code, 403)
+        self.assertEqual(APIClient().get("/api/me/secrets/").status_code, 401)
+
+    def test_deploy_creds_for_owner값_복호화(self):
+        from sns.social import deploy_creds_for
+        p = self._person("vaultD"); c = self._client("vaultD")
+        c.post("/api/me/secrets/", {"name": "RENDER_KEY", "value": "rnd_dep"}, format="json")
+        c.post("/api/me/secrets/", {"name": "GH_PAT", "value": "ghp_dep"}, format="json")
+        creds = deploy_creds_for(p)
+        self.assertEqual(creds["RENDER_KEY"], "rnd_dep")
+        self.assertEqual(creds["GH_PAT"], "ghp_dep")
