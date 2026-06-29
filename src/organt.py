@@ -220,10 +220,29 @@ class Organt:
                       f"이 경로가 당신의 cwd입니다 — `/workspace`가 아닙니다. 파일·디렉터리는 항상 이 절대경로로 "
                       f"확인하고, 무언가 안 보여도 '유실'로 단정하지 말고 먼저 이 경로를 Read/ls 하세요.\n\n") + prompt
 
+        # [in-flight = 워커 *생존* 보호(2026-06, 사용자 검증)] 이 하트비트는 '진행을 조작'하는 게 아니라
+        # '워커 서브프로세스가 *실제로 살아서* 이 턴을 도는 중'을 반영한다 — receive_response를 await하는
+        # 동안은 서브프로세스가 살아있다(죽으면 SDK가 예외를 던져 루프가 끝난다). 레이트리밋으로 첫 토큰까지
+        # 느리거나 긴 독립 검증 중이면 출력이 한동안 없을 수 있는데(라이브 확인: 16분+ 도는 워커 0.5%CPU),
+        # 그 침묵만으로 *살아 일하는 워커*를 잘라선 안 된다. 진짜 wedge(살았지만 영영 멈춤)는 러너 max_age로.
+        async def _inflight_alive():
+            try:
+                while True:
+                    await asyncio.sleep(20)
+                    if self.on_activity:
+                        try:
+                            self.on_activity()           # '생존' 신호 — 서브프로세스가 살아 도는 한
+                        except Exception:
+                            pass
+            except asyncio.CancelledError:
+                pass
+
         opts = dataclasses.replace(self._options_for_call(), stderr=_collect_stderr)
+        _alive = None
         try:
             async with ClaudeSDKClient(options=opts) as client:
                 await client.query(prompt)
+                _alive = asyncio.ensure_future(_inflight_alive())
                 async for msg in client.receive_response():
                     # 메시지 수신도 '활동'이다 — 도구 호출이 없는 긴 모델 생성(거대 파일 하나를 첫 Write로
                     # 만들기 직전의 장문 사고/작성)이 침묵 워치독에 '행'으로 오인되지 않게, 도구 훅(Pre/Post)
@@ -254,6 +273,9 @@ class Organt:
         except Exception as e:
             tail = " | ".join(x for x in err_tail[-3:] if x)
             raise RuntimeError(f"{e}{(' [stderr] ' + tail) if tail else ''}") from e
+        finally:
+            if _alive is not None:
+                _alive.cancel()                          # 턴 종료(서브프로세스 죽음·완료) → 생존 신호 중단
         if truncated and not _is_transient_api_error(final_text):
             final_text = (final_text + "\n(⚠ 턴 한도 도달 — 작업이 미완일 수 있음)").strip()
         return final_text, captured_sid
