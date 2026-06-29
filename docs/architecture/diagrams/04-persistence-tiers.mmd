@@ -1,0 +1,22 @@
+%% 영속 3계층과 우선순위 (04-state-persistence-recovery.md §4.1)
+flowchart LR
+    subgraph Disk["① 런타임 디스크 logs/ (최우선·휘발)"]
+        PJ["projects.json<br/>레지스트리+큐+open_task"]
+        JB["jobs.json<br/>직업 기억(예비→채용)"]
+        RP["role_profiles.json<br/>직무기준+경험"]
+        SS["organt_state_&lt;scope&gt;_&lt;bot&gt;.json<br/>LLM 세션 id + cwd"]
+        AU["audit.jsonl / flow.jsonl<br/>감사·관측"]
+    end
+    subgraph Discord["② Discord (영속 진실원·리클레임 생존)"]
+        TOP["채널 토픽<br/>[ORGANT:P-XXX] leader=.. ws=.. name=.."]
+        ROLE["역할 = 직군"]
+        NICK["닉네임 = 사람 이름(정체성)"]
+    end
+    subgraph Seed["③ 커밋 시드 (최약·과거)"]
+        SD["organt/projects.seed.json<br/>(seeded 마커)"]
+    end
+
+    Disk -->|"있으면 사용"| Boot{{"부팅 복원"}}
+    Discord -->|"디스크 없으면"| Boot
+    Seed -->|"둘 다 없으면"| Boot
+    Boot -->|"reconcile: 토픽이 시드를 이김"| Final["Sys.projects (최종 레지스트리)"]
