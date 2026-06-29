@@ -1,0 +1,17 @@
+%% Task 스냅샷 — 사실 영속 vs 재검 sanity 리셋 (04-state-persistence-recovery.md §4.4)
+flowchart TB
+    subgraph Persist["영속되는 '사실' (무슨 일이 일어났나)"]
+        F1["owner·team·goal·acceptance·standard·interfaces"]
+        F2["gate_pass·work_delegated·owner_delivered·cross_checks"]
+        F3["act_by(누가 Write/Edit/run) · run_count · evidence"]
+        F4["deploy_count·deployed_once (배포 캡)"]
+        F5["delivered_pairs·redo_counts (재위임 런어웨이 차단)"]
+        F6["active_chain (열린 베턴 프레임 전체 + 원문)"]
+    end
+    subgraph Reset["복구 시 0 리셋되는 '재검 sanity'"]
+        R1["verified (새 run 증거)"]
+    end
+    Persist --> Gate["complete_task 게이트"]
+    Reset --> Gate
+    Note["verified 리셋이 '허위완료 방지'의 단일 백스톱<br/>— 나머지 사실을 다 영속해도 마감은 fresh run에 묶여 안전"]
+    Gate -.-> Note

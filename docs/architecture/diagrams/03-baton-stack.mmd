@@ -1,0 +1,14 @@
+%% 베턴 핸드오프 — 요청 스택과 LIFO close (03-control-flow.md §3.2)
+sequenceDiagram
+    autonumber
+    participant A as 리더 A (origin의 자식)
+    participant B as 동료 B
+    participant C as 동료 C
+    Note over A,C: comm.alive = A · stack = []
+    A->>B: request(Work) → stack=[A→B], alive=B
+    Note right of B: sender A sleep / receiver B wake (communication.py:191)
+    B->>C: request(Info) → stack=[A→B, B→C], alive=C
+    C-->>B: respond(accept) → pop[B→C], alive=B (LIFO)
+    Note right of B: B가 C 산출물을 통합
+    B-->>A: respond(accept) → pop[A→B], alive=A
+    Note over A: stack=[] → done, alive=origin (시작점 복귀)
