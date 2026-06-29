@@ -786,6 +786,13 @@ class Sys:
     def _log(self, event, **f):
         rec = {"event": event, "ts": time.time(), **f}
         self.flow_log.append(rec)
+        # [관측성 — journald 노출(2026-06, 사용자)] 구조화 이벤트를 stderr(fd2)로도 한 줄 흘린다 → systemd가
+        # 저널에 담는다. flow.jsonl(파일)만으론 운영 중 '왜 멈췄나'(flow_idle_aborted·queued·flow_done 등)를
+        # 사후에 `journalctl -u organt-runner`로 못 보던 갭 교정. 파일 영속은 종전대로 유지.
+        try:
+            os.write(2, ("[organt] " + json.dumps(rec, ensure_ascii=False, default=str) + "\n").encode("utf-8", "replace"))
+        except Exception:
+            pass
         if self.flow_log_path:   # 메모리만이던 continue_incomplete/flow_done/req_sent를 디스크로 영속(관측)
             try:
                 with open(self.flow_log_path, "a", encoding="utf-8") as fp:
