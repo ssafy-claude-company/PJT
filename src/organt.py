@@ -200,6 +200,14 @@ class Organt:
         def _collect_stderr(line: str) -> None:
             if line and len(err_tail) < 20:
                 err_tail.append(str(line).strip())
+            # stderr 출력 = CLI 서브프로세스가 살아 움직인다(레이트리밋 재시도·진행 로그 등). 표준출력
+            # 메시지가 한동안 없어도(첫 토큰까지 침묵) 이 신호로 무진행 워치독의 사각을 메운다 —
+            # '살아서 대기 중'을 '행(hang)'으로 오인해 잘 돌아가는 흐름을 끊던 결함 교정.
+            if line and self.on_activity:
+                try:
+                    self.on_activity()
+                except Exception:
+                    pass
 
         # [작업공간 앵커 — cwd 오진 차단(2026-06-23, 사용자)] 봇은 자기 작업공간 절대경로를 구조적으로
         # 못 받아 모델 내장 프라이어('/workspace')로 흘러, 빈 /workspace를 보고 '이전 파일 모두 유실'로

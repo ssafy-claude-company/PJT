@@ -406,9 +406,14 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                                  "target_name": ta.name if ta else None, "summary": body,
                                  "round": collab_round(native) if ck == "meeting" else None})
             # [B] 담당(to_id)이 없으면 프로젝트 리더를 안정 actor로 — 마지막 발화자(스왑 원인)는 더 안 씀.
-            if live_status and live_status.get("state") == "working" \
-                    and not live_status.get("actor") and proj.leader:
-                live_status["actor"] = proj.leader.name or proj.leader.role
+            if live_status and live_status.get("state") == "working" and not live_status.get("actor"):
+                if proj.leader:
+                    live_status["actor"] = proj.leader.name or proj.leader.role
+                elif last_agent_id and ag.get(last_agent_id):
+                    # 담당·리더 둘 다 없는 퇴화 케이스 — 프론트 '직원' 폴백 대신 마지막 활동 봇 이름으로.
+                    # (여긴 리더가 없어 라벨 스왑 위험도 없음.) 누가 일하는지 이름이 뜨게 한다.
+                    _la = ag.get(last_agent_id)
+                    live_status["actor"] = _la.name or _la.role
         for thread in proj.threads.all():          # 모든 스레드의 코멘트 병합(첫 스레드만 보던 버그)
             for c in thread.comments.all():
                 msgs.append({"type": "human", "key": f"c{c.id}", "ts": c.created_at.timestamp(),

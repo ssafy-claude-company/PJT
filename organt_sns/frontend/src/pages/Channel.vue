@@ -517,7 +517,7 @@ watch(() => route.params.pid, (pid) => {
   <!-- 엔진 상태(네이티브) — 구조화 상태에서 조립, 이모지 아님 -->
   <div v-if="liveStatus" class="live-strip" :class="{ done: liveStatus.state === 'done', stopped: liveStatus.state === 'stopped', stalled: quietLabel }">
     <Icon v-if="liveStatus.state === 'done'" name="check" :size="14" class="ls-ic" /><Icon v-else-if="liveStatus.state === 'stopped'" name="x" :size="14" class="ls-ic" /><i v-else class="pulse"></i>
-    <span class="live-strip-t"><b>{{ liveStatus.state === 'done' ? '완료' : liveStatus.state === 'stopped' ? '중지됨' : (liveStatus.actor || '직원') + ' 작업 중' }}</b><span v-if="liveStatus.goal" class="ls-goal"> · {{ liveStatus.goal }}</span><span v-if="quietLabel" class="ls-quiet"> · {{ quietLabel }}</span></span>
+    <span class="live-strip-t"><b>{{ liveStatus.state === 'done' ? '완료' : liveStatus.state === 'stopped' ? '중지됨' : liveStatus.actor ? liveStatus.actor + ' 작업 중' : '작업 중' }}</b><span v-if="liveStatus.goal" class="ls-goal"> · {{ liveStatus.goal }}</span><span v-if="quietLabel" class="ls-quiet"> · {{ quietLabel }}</span></span>
     <button v-if="liveStatus.state === 'working' && (data?.is_owner || data?.is_member)" class="ls-stop" :disabled="stopping" @click="doStop" title="진행 중인 작업을 멈춥니다">{{ stopping ? '…' : '중지' }}</button>
   </div>
 
