@@ -8,3 +8,5 @@ gunicorn==23.0.0
 # 자체 서버 영속 DB(Postgres)용 — DATABASE_URL 설정 시에만 사용. Render(SQLite)에선 미사용.
 dj-database-url==2.3.0
 psycopg[binary]==3.2.3
+# 개인 자격증명 금고(PersonSecret) Fernet 암호화 — 누락 시 /api/me/secrets/ 가 import에서 500.
+cryptography==49.0.0
