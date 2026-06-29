@@ -19,15 +19,6 @@ const editVal = ref('')
 const secrets = computed(() => data.value?.secrets || [])
 const isGuest = computed(() => me.is_guest)
 
-// 흔한 배포/서비스 키 이름 — 자동완성 제안일 뿐, 강제 아님(어떤 이름이든 저장 가능).
-const SUGGEST = [
-  'RENDER_KEY', 'RENDER_OWNER', 'GH_PAT', 'GH_USER',
-  'VERCEL_TOKEN', 'VERCEL_ORG_ID', 'VERCEL_PROJECT_ID',
-  'NETLIFY_AUTH_TOKEN', 'NETLIFY_SITE_ID', 'FLY_API_TOKEN',
-  'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID',
-  'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'OPENAI_API_KEY',
-]
-
 async function load() {
   loading.value = true
   try { data.value = await api.secrets() } finally { loading.value = false }
@@ -92,13 +83,10 @@ onMounted(load)
 
         <!-- 추가 -->
         <div class="addrow">
-          <input class="k" v-model="newName" list="secret-suggest" placeholder="이름 (예: RENDER_KEY)" autocomplete="off" />
+          <input class="k" v-model="newName" placeholder="이름" autocomplete="off" />
           <input class="v" type="password" v-model="newVal" placeholder="값" autocomplete="off" @keyup.enter="add" />
           <button class="btn sm" :disabled="saving" @click="add">{{ saving ? '…' : '추가' }}</button>
         </div>
-        <datalist id="secret-suggest"><option v-for="n in SUGGEST" :key="n" :value="n" /></datalist>
-        <p class="tip">배포에 쓰는 키 예시 — <b>Render</b>: RENDER_KEY · RENDER_OWNER · GH_PAT · GH_USER ·
-          <b>Vercel</b>: VERCEL_TOKEN · <b>Netlify</b>: NETLIFY_AUTH_TOKEN. 그 외 어떤 이름이든 자유롭게.</p>
       </section>
 
       <p class="foot"><Icon name="shield" :size="13" /> 값은 서버에 <b>암호화 저장</b>되고 응답·화면으로 다시 나오지 않습니다. 봇 셸에서도 읽을 수 없습니다.</p>
@@ -132,6 +120,5 @@ onMounted(load)
 .addrow input.k { flex: 0 0 40% }
 .addrow input.v, .r-edit input { flex: 1 }
 .addrow input:focus, .r-edit input:focus { border-color: var(--accent-line); outline: none }
-.tip { font-size: 11.5px; color: var(--text3); line-height: 1.6; margin-top: 12px }
 .foot { margin-top: 16px; font-size: 11.5px; color: var(--text3); display: flex; align-items: center; gap: 6px; line-height: 1.5 }
 </style>
