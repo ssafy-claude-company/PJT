@@ -39,6 +39,27 @@ const pickerOpen = ref(false)
 const reqToBot = computed(() => agents.value.find((b) => String(b.bot_id) === String(reqTo.value)))
 function choose(b) { reqTo.value = b ? b.bot_id : ''; pickerOpen.value = false }
 
+// 드래프트 영속 — 디스코드처럼 채널별로 입력 보존(딴 데 갔다 와도·새로고침해도 남음). 보낼 때만 비움.
+const draftKey = (pid) => `organt:draft:${pid}`
+const reqDraftKey = (pid) => `organt:reqdraft:${pid}`
+function loadDrafts(pid) {
+  if (!pid) return
+  try {
+    draft.value = localStorage.getItem(draftKey(pid)) || ''
+    reqBody.value = localStorage.getItem(reqDraftKey(pid)) || ''
+  } catch { /* localStorage 불가 환경 무시 */ }
+}
+function persist(key, val) { try { val ? localStorage.setItem(key, val) : localStorage.removeItem(key) } catch {} }
+watch(draft, (v) => persist(draftKey(route.params.pid), v))
+watch(reqBody, (v) => persist(reqDraftKey(route.params.pid), v))
+// 모드 전환 시 입력 텍스트가 따라오게 — '메시지 쓰다 부탁으로' 넘어가도 안 사라짐(목적칸이 비었을 때만 옮김).
+function switchMode(m) {
+  if (m === mode.value) return
+  if (m === 'req' && draft.value.trim() && !reqBody.value.trim()) { reqBody.value = draft.value; draft.value = '' }
+  else if (m === 'msg' && reqBody.value.trim() && !draft.value.trim()) { draft.value = reqBody.value; reqBody.value = '' }
+  mode.value = m
+}
+
 // 대화로 보일 종류. 그 외(work/raw 등 도구활동)는 흐름을 끊지 않게 뒤로 접는다.
 const CONV = new Set(['delegation', 'consultation', 'goal_set', 'meeting', 'verification',
   'deploy', 'task_complete', 'recruit', 'agent_learned', 'convergence_alert', 'user_request', 'intervention'])
@@ -384,15 +405,17 @@ async function doRemove() {
   router.push('/')
 }
 onMounted(() => {
+  loadDrafts(route.params.pid)
   load(); loadMembers()
   api.agents({ ordering: '-event_count' }).then((a) => { agents.value = a })
   api.stats().then((s) => { stats.value = s }).catch(() => {})
   startPoll()
 })
 onUnmounted(stopPoll)
-watch(() => route.params.pid, () => {
+watch(() => route.params.pid, (pid) => {
   live.value = false; menu.value = false; pickerOpen.value = false
   showBrief.value = false; showStruct.value = false; showMembers.value = false; showArticle.value = false
+  loadDrafts(pid)                 // 채널마다 자기 드래프트 복원(채널 간 입력 안 섞이게)
   load(); loadMembers()
 })
 </script>
@@ -612,8 +635,8 @@ watch(() => route.params.pid, () => {
 
   <div class="composer">
     <div class="seg" style="margin-bottom:10px">
-      <button :class="{ on: mode === 'msg' }" @click="mode = 'msg'"><Icon name="message" :size="15" />메시지</button>
-      <button :class="{ on: mode === 'req' }" @click="mode = 'req'"><Icon name="send" :size="15" />직원에게 부탁</button>
+      <button :class="{ on: mode === 'msg' }" @click="switchMode('msg')"><Icon name="message" :size="15" />메시지</button>
+      <button :class="{ on: mode === 'req' }" @click="switchMode('req')"><Icon name="send" :size="15" />직원에게 부탁</button>
     </div>
 
     <div v-if="mode === 'msg'" class="row">
