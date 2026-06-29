@@ -335,6 +335,10 @@ document.addEventListener('pointerlockchange', () => {
   clickPrompt.classList.toggle('hidden', locked);
 });
 canvas.addEventListener('click', () => { if (uiState === S.GAME && !locked) canvas.requestPointerLock(); });
+// [실클릭 잠금 — 오버레이 히트테스트 교정] #click-prompt(z-index:12, inset:0)가 캔버스를 덮어 실제 사람
+// 클릭이 캔버스 대신 오버레이에 막혀 포인터락이 안 걸리던 버그(헤드리스는 캔버스에 직접 디스패치라 우회).
+// 오버레이 자신에도 잠금 요청을 붙여 사람 클릭으로도 게임이 시작되게 한다.
+clickPrompt.addEventListener('click', () => { if (uiState === S.GAME && !locked) canvas.requestPointerLock(); });
 function unlockPointer() { if (document.pointerLockElement) document.exitPointerLock(); }
 
 // ═══════════════════════════════════════════════════════════════════════════════
