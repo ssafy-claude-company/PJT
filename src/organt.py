@@ -220,10 +220,29 @@ class Organt:
                       f"이 경로가 당신의 cwd입니다 — `/workspace`가 아닙니다. 파일·디렉터리는 항상 이 절대경로로 "
                       f"확인하고, 무언가 안 보여도 '유실'로 단정하지 말고 먼저 이 경로를 Read/ls 하세요.\n\n") + prompt
 
+        # [활성 턴 = 살아있음 보장 — 무진행 워치독 오컷 근절(2026-06, 사용자)] 워커가 SDK 응답을 *받는 중*이면
+        # (턴 in-flight) 출력이 한동안 없어도(레이트리밋으로 첫 토큰까지 침묵·긴 검증·점유 경합 대기) 살아있는
+        # 것이다. 메시지 단위 하트비트만으론 '출력 없는 대기'를 못 메우니, 턴이 도는 동안 주기적으로(20s)
+        # 무조건 진행 신호를 쳐 *활성 흐름은 절대 무진행으로 안 잘리게* 한다. 진짜 죽음은 SDK가 예외로
+        # 알리고(아래 except), 드문 wedge는 러너 max_age 백스톱이 잡는다. → "돌고 있으면 안 끊긴다".
+        async def _inflight_heartbeat():
+            try:
+                while True:
+                    await asyncio.sleep(20)
+                    if self.on_activity:
+                        try:
+                            self.on_activity()
+                        except Exception:
+                            pass
+            except asyncio.CancelledError:
+                pass
+
         opts = dataclasses.replace(self._options_for_call(), stderr=_collect_stderr)
+        _hb = None
         try:
             async with ClaudeSDKClient(options=opts) as client:
                 await client.query(prompt)
+                _hb = asyncio.ensure_future(_inflight_heartbeat())   # 활성 턴 도는 동안 살아있음 보장
                 async for msg in client.receive_response():
                     # 메시지 수신도 '활동'이다 — 도구 호출이 없는 긴 모델 생성(거대 파일 하나를 첫 Write로
                     # 만들기 직전의 장문 사고/작성)이 침묵 워치독에 '행'으로 오인되지 않게, 도구 훅(Pre/Post)
@@ -254,6 +273,9 @@ class Organt:
         except Exception as e:
             tail = " | ".join(x for x in err_tail[-3:] if x)
             raise RuntimeError(f"{e}{(' [stderr] ' + tail) if tail else ''}") from e
+        finally:
+            if _hb is not None:
+                _hb.cancel()                          # 턴 종료(정상·예외·취소 무관) — 하트비트 정리
         if truncated and not _is_transient_api_error(final_text):
             final_text = (final_text + "\n(⚠ 턴 한도 도달 — 작업이 미완일 수 있음)").strip()
         return final_text, captured_sid
