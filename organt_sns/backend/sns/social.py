@@ -312,9 +312,9 @@ def workspace(request):
     return Response({"channels": chans})
 
 
-# ── 개인 자격증명 금고(BYO 키) ───────────────────────────────────────
-# 배포에 쓰는 표준 키 이름 — UI 안내·완비 판정용(다른 이름도 자유 저장: 일반 환경 변수 금고).
-DEPLOY_SECRET_NAMES = ["RENDER_KEY", "RENDER_OWNER", "GH_PAT", "GH_USER"]
+# ── 개인 자격증명 금고 — 범용 환경 변수 저장소(플랫폼 무관) ──────────────
+# 어떤 이름이든 NAME=VALUE로 암호화 보관. 특정 플랫폼(Render 등)을 고정하지 않는다 —
+# 배포 어댑터가 자기에게 필요한 키 이름을 알아서 골라 쓴다(deploy_creds_for(person, names)).
 _SECRET_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 
@@ -342,9 +342,7 @@ def secrets(request):
             defaults={"value_enc": encrypt(value), "hint": _mk_hint(value)})
     out = [{"name": s.name, "hint": s.hint, "updated_at": s.updated_at.timestamp()}
            for s in cur.secrets.all()]
-    have = {s["name"] for s in out}
-    return Response({"secrets": out, "deploy_names": DEPLOY_SECRET_NAMES,
-                     "deploy_ready": all(n in have for n in DEPLOY_SECRET_NAMES)})
+    return Response({"secrets": out})
 
 
 @api_view(["DELETE"])
@@ -359,15 +357,19 @@ def delete_secret(request, name):
     return Response({"deleted": n > 0})
 
 
-def deploy_creds_for(person):
-    """프로젝트 owner의 배포 자격증명(복호화) — 배포 브리지가 러너에 넘길 값. 없으면 빈 dict.
-    (서버 내부 전용 — 절대 일반 API 응답으로 내보내지 않는다.)"""
+def deploy_creds_for(person, names=None):
+    """프로젝트 owner의 자격증명(복호화) — 배포 어댑터가 필요한 키 이름(names)을 주면 그것만,
+    없으면 전부. 플랫폼 무관(Render·Vercel·Netlify… 어댑터가 자기 키를 골라 부른다).
+    서버 내부 전용 — 절대 일반 API 응답으로 내보내지 않는다."""
     if not person:
         return {}
     from .models import PersonSecret
     from .secrets_vault import decrypt
+    qs = PersonSecret.objects.filter(person=person)
+    if names:
+        qs = qs.filter(name__in=list(names))
     out = {}
-    for s in PersonSecret.objects.filter(person=person, name__in=DEPLOY_SECRET_NAMES):
+    for s in qs:
         v = decrypt(s.value_enc)
         if v:
             out[s.name] = v

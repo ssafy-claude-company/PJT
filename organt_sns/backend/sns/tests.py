@@ -720,14 +720,16 @@ class SecretVaultTest(TestCase):
         self.assertNotIn("supersecret", ps.value_enc)           # DB는 암호문
         self.assertEqual(decrypt(ps.value_enc), "rnd_supersecret123")   # 서버만 복호화
 
-    def test_deploy_ready는_4개_다_채우면_참(self):
+    def test_임의_이름_범용저장_플랫폼_무관(self):
+        # 금고는 Render 전용이 아니다 — 어떤 이름이든 저장(VERCEL_TOKEN·임의 키). 고정칸 없음.
         self._person()
         c = self._client()
-        for n, v in [("RENDER_KEY", "rnd_x"), ("RENDER_OWNER", "tea_x"), ("GH_PAT", "ghp_x")]:
-            c.post("/api/me/secrets/", {"name": n, "value": v}, format="json")
-        self.assertFalse(self._client().get("/api/me/secrets/").data["deploy_ready"])
-        r = c.post("/api/me/secrets/", {"name": "GH_USER", "value": "me"}, format="json")
-        self.assertTrue(r.data["deploy_ready"])
+        for n in ("VERCEL_TOKEN", "NETLIFY_AUTH_TOKEN", "MY_CUSTOM_VAR"):
+            c.post("/api/me/secrets/", {"name": n, "value": n.lower() + "_v"}, format="json")
+        names = {s["name"] for s in self._client().get("/api/me/secrets/").data["secrets"]}
+        self.assertEqual(names, {"VERCEL_TOKEN", "NETLIFY_AUTH_TOKEN", "MY_CUSTOM_VAR"})
+        # 응답엔 Render 고정 필드(deploy_ready/deploy_names)가 더는 없다
+        self.assertNotIn("deploy_ready", self._client().get("/api/me/secrets/").data)
 
     def test_남의_시크릿은_안보이고_삭제된다(self):
         self._person("vault1"); self._person("vaultB")
@@ -747,6 +749,8 @@ class SecretVaultTest(TestCase):
         p = self._person("vaultD"); c = self._client("vaultD")
         c.post("/api/me/secrets/", {"name": "RENDER_KEY", "value": "rnd_dep"}, format="json")
         c.post("/api/me/secrets/", {"name": "GH_PAT", "value": "ghp_dep"}, format="json")
-        creds = deploy_creds_for(p)
+        creds = deploy_creds_for(p)                       # names 없으면 전부
         self.assertEqual(creds["RENDER_KEY"], "rnd_dep")
         self.assertEqual(creds["GH_PAT"], "ghp_dep")
+        only = deploy_creds_for(p, ["RENDER_KEY"])        # 어댑터가 필요한 키만
+        self.assertEqual(only, {"RENDER_KEY": "rnd_dep"})
