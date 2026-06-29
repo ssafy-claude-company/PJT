@@ -1,0 +1,1244 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>1v1 FPS</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{background:#0a0a0f;color:#eee;font-family:'Segoe UI',Arial,sans-serif;overflow:hidden;user-select:none;}
+    #screen-lobby,#screen-waiting,#screen-game{position:fixed;inset:0;}
+    .hidden{display:none!important;}
+
+    /* ── LOBBY ── */
+    #screen-lobby{display:flex;flex-direction:column;align-items:center;justify-content:center;
+      background:radial-gradient(ellipse at center,#0f0f1e 0%,#0a0a0f 100%);gap:20px;}
+    #screen-lobby h1{font-size:3.2rem;font-weight:900;color:#e84040;letter-spacing:0.06em;
+      text-shadow:0 0 40px #e8404066,0 0 80px #e8404033;}
+    #screen-lobby .subtitle{color:#555;font-size:0.9rem;letter-spacing:0.05em;}
+    #screen-lobby input{padding:12px 20px;font-size:1rem;width:280px;background:#131320;
+      border:1px solid #2a2a45;color:#eee;border-radius:6px;outline:none;
+      transition:border 0.15s,box-shadow 0.15s;}
+    #screen-lobby input:focus{border-color:#e84040;box-shadow:0 0 0 2px #e8404033;}
+    #screen-lobby button{padding:14px 48px;font-size:1rem;font-weight:700;
+      background:linear-gradient(135deg,#e84040,#c02020);color:#fff;border:none;border-radius:6px;
+      cursor:pointer;letter-spacing:0.1em;text-transform:uppercase;
+      transition:background 0.15s,transform 0.08s,box-shadow 0.15s;
+      box-shadow:0 4px 20px #e8404044;}
+    #screen-lobby button:hover{background:linear-gradient(135deg,#ff5555,#e03030);box-shadow:0 4px 28px #e8404066;}
+    #screen-lobby button:active{transform:scale(0.97);}
+    #lobby-error{color:#f55;font-size:0.82rem;min-height:1.1em;}
+    .rules{color:#333;font-size:0.78rem;text-align:center;line-height:1.8;max-width:340px;}
+
+    /* ── WAITING ── */
+    #screen-waiting{display:flex;flex-direction:column;align-items:center;justify-content:center;
+      background:#0a0a0f;gap:18px;}
+    .spinner{width:52px;height:52px;border:4px solid #1a1a30;border-top-color:#e84040;
+      border-radius:50%;animation:spin 0.75s linear infinite;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+    #screen-waiting h2{color:#bbb;font-size:1.35rem;font-weight:400;}
+    #waiting-nick{color:#555;font-size:0.85rem;}
+
+    /* ── GAME CANVAS ── */
+    #screen-game{background:#000;}
+    #game-canvas{display:block;width:100%;height:100%;}
+
+    /* ── CLICK PROMPT ── */
+    #click-prompt{position:fixed;inset:0;z-index:12;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;background:rgba(0,0,0,0.72);gap:16px;}
+    #click-prompt h2{font-size:1.7rem;color:#fff;}
+    #click-prompt p{color:#777;font-size:0.9rem;text-align:center;line-height:1.7;}
+    .keys{margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}
+    .key{background:#1a1a30;border:1px solid #2a2a4a;border-radius:4px;padding:5px 12px;font-size:0.78rem;color:#aaa;}
+
+    /* ── HUD ── */
+    #hud{position:fixed;inset:0;pointer-events:none;z-index:6;}
+
+    /* Crosshair */
+    #crosshair{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none;width:0;height:0;}
+    .ch-arm{position:absolute;background:rgba(255,255,255,0.88);transition:transform 0.07s ease-out;}
+    #ch-t{width:2px;height:7px;left:-1px;bottom:5px;transform-origin:bottom center;}
+    #ch-b{width:2px;height:7px;left:-1px;top:5px;transform-origin:top center;}
+    #ch-l{height:2px;width:7px;right:5px;top:-1px;transform-origin:right center;}
+    #ch-r{height:2px;width:7px;left:5px;top:-1px;transform-origin:left center;}
+    #ch-dot{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+      width:3px;height:3px;background:#e84040;border-radius:50%;pointer-events:none;
+      transition:background 0.07s,transform 0.07s;}
+
+    /* Score */
+    #score{position:fixed;top:16px;left:50%;transform:translateX(-50%);
+      font-size:2.2rem;font-weight:900;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,0.9);
+      display:flex;align-items:center;gap:12px;}
+    .s-my{color:#4af;}
+    .s-sep{color:#333;font-size:1.5rem;}
+    .s-opp{color:#e84040;}
+    #score-label{position:fixed;top:57px;left:50%;transform:translateX(-50%);
+      font-size:0.68rem;color:#444;letter-spacing:0.1em;text-transform:uppercase;}
+
+    /* HP */
+    #hp-wrap{position:fixed;bottom:28px;left:26px;width:220px;}
+    #hp-label{font-size:0.65rem;color:#555;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:5px;}
+    #hp-track{width:100%;height:8px;background:#0e0e1e;border-radius:4px;overflow:hidden;
+      box-shadow:0 0 6px rgba(0,0,0,0.6);}
+    #hp-fill{height:100%;width:100%;border-radius:4px;transition:width 0.15s,background 0.25s;}
+    #hp-num{font-size:0.9rem;color:#bbb;margin-top:5px;font-weight:600;}
+
+    /* Cooldown arc */
+    #cd-arc{position:fixed;bottom:22px;right:26px;width:52px;height:52px;}
+    #cd-bg{fill:none;stroke:#1a1a2e;stroke-width:4;}
+    #cd-fg{fill:none;stroke:#e84040;stroke-width:4;stroke-linecap:round;
+      transform-origin:26px 26px;transform:rotate(-90deg);transition:stroke-dashoffset 0.04s;}
+
+    /* Kill feed */
+    #kfeed{position:fixed;top:74px;right:16px;display:flex;flex-direction:column;
+      align-items:flex-end;gap:5px;pointer-events:none;}
+    .kf-entry{background:rgba(0,0,0,0.65);border-left:2px solid #e84040;
+      padding:4px 10px;border-radius:2px;font-size:0.76rem;color:#ddd;animation:kfade 3.2s forwards;}
+    @keyframes kfade{0%,60%{opacity:1;}100%{opacity:0;}}
+
+    /* vs tag */
+    #vs-tag{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);
+      font-size:0.78rem;color:#e84040;opacity:0.65;}
+
+    /* Damage / heal flash */
+    #hit-flash{position:fixed;inset:0;opacity:0;pointer-events:none;z-index:9;transition:opacity 0.05s;}
+
+    /* Low-HP vignette */
+    #hp-vignette{position:fixed;inset:0;pointer-events:none;z-index:8;opacity:0;
+      background:radial-gradient(ellipse at center,transparent 48%,#e8404055 100%);
+      transition:opacity 0.35s;}
+
+    /* Death overlay */
+    #overlay-death{position:fixed;inset:0;z-index:15;display:flex;align-items:center;
+      justify-content:center;background:rgba(160,0,0,0.42);
+      opacity:0;pointer-events:none;transition:opacity 0.12s;}
+    #overlay-death span{font-size:3.2rem;font-weight:900;color:#fff;
+      letter-spacing:0.14em;text-shadow:0 0 30px #e84040;}
+
+    /* RESULT */
+    #overlay-result{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;background:rgba(0,0,0,0.82);gap:14px;}
+    #res-title{font-size:4.5rem;font-weight:900;letter-spacing:0.06em;}
+    .res-win{color:#4af;text-shadow:0 0 50px #4af8;}
+    .res-lose{color:#e84040;text-shadow:0 0 50px #e8404088;}
+    #res-sub{color:#aaa;font-size:1.05rem;}
+    #res-cd{color:#555;font-size:0.88rem;margin-top:6px;}
+
+    /* Opponent left */
+    #overlay-opp-left{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;background:rgba(0,0,0,0.82);gap:14px;}
+    #overlay-opp-left h2{color:#ccc;font-size:1.6rem;}
+    #overlay-opp-left p{color:#444;font-size:0.9rem;}
+
+    /* ── VFX: Kill / Death Vignette (screen-space, event-driven) ── */
+    /* z:10 — above hp-vignette(8) and hit-flash(9), below death-overlay(15) */
+    #kill-vignette{position:fixed;inset:0;pointer-events:none;z-index:10;opacity:0;}
+  </style>
+</head>
+<body>
+
+<!-- ══ LOBBY ══════════════════════════════════════════════════════════════════ -->
+<div id="screen-lobby">
+  <h1>⚔ 1 v 1 FPS</h1>
+  <p class="subtitle">선 5킬 달성 시 승리</p>
+  <input id="nick" type="text" placeholder="닉네임 입력" maxlength="16" autocomplete="off"/>
+  <button id="btn-connect">게임 참가</button>
+  <div id="lobby-error"></div>
+  <div class="rules">
+    WASD 이동 &nbsp;·&nbsp; 마우스 조준 &nbsp;·&nbsp; 좌클릭 사격<br/>
+    ESC 마우스 잠금 해제 &nbsp;·&nbsp; 두 탭 또는 두 브라우저로 접속
+  </div>
+</div>
+
+<!-- ══ WAITING ════════════════════════════════════════════════════════════════ -->
+<div id="screen-waiting" class="hidden">
+  <div class="spinner"></div>
+  <h2>상대방을 기다리는 중…</h2>
+  <p id="waiting-nick"></p>
+</div>
+
+<!-- ══ GAME ═══════════════════════════════════════════════════════════════════ -->
+<div id="screen-game" class="hidden">
+  <canvas id="game-canvas"></canvas>
+
+  <!-- Click-to-lock prompt -->
+  <div id="click-prompt">
+    <h2>클릭하여 조준 시작</h2>
+    <p>화면을 클릭하면 Pointer Lock이 활성화됩니다.<br/>ESC 키로 해제할 수 있습니다.</p>
+    <div class="keys">
+      <span class="key">W A S D</span>
+      <span class="key">마우스 조준</span>
+      <span class="key">좌클릭 사격</span>
+      <span class="key">ESC 해제</span>
+    </div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div id="crosshair">
+      <div class="ch-arm" id="ch-t"></div>
+      <div class="ch-arm" id="ch-b"></div>
+      <div class="ch-arm" id="ch-l"></div>
+      <div class="ch-arm" id="ch-r"></div>
+    </div>
+    <div id="ch-dot"></div>
+
+    <div id="score">
+      <span class="s-my"  id="score-my">0</span>
+      <span class="s-sep">:</span>
+      <span class="s-opp" id="score-opp">0</span>
+    </div>
+    <div id="score-label">나&nbsp;/&nbsp;상대 · 선 <span id="score-max">5</span>킬 승리</div>
+
+    <div id="hp-wrap">
+      <div id="hp-label">HP</div>
+      <div id="hp-track"><div id="hp-fill"></div></div>
+      <div id="hp-num">100</div>
+    </div>
+
+    <svg id="cd-arc" viewBox="0 0 52 52">
+      <circle id="cd-bg" cx="26" cy="26" r="20"/>
+      <circle id="cd-fg" cx="26" cy="26" r="20"
+              stroke-dasharray="125.7" stroke-dashoffset="0"/>
+    </svg>
+
+    <div id="kfeed"></div>
+    <div id="vs-tag"></div>
+  </div>
+
+  <!-- Overlay layers (inside game screen) -->
+  <div id="hit-flash"></div>
+  <div id="hp-vignette"></div>
+  <div id="overlay-death"><span>ELIMINATED</span></div>
+  <div id="kill-vignette"></div>
+</div>
+
+<!-- ══ RESULT ═════════════════════════════════════════════════════════════════ -->
+<div id="overlay-result" class="hidden">
+  <div id="res-title"></div>
+  <div id="res-sub"></div>
+  <div id="res-cd"></div>
+</div>
+
+<!-- ══ OPP LEFT ═══════════════════════════════════════════════════════════════ -->
+<div id="overlay-opp-left" class="hidden">
+  <h2>상대방이 나갔습니다</h2>
+  <p>잠시 후 로비로 돌아갑니다…</p>
+</div>
+
+<script type="module">
+import * as THREE from '/three.module.js';
+import AudioManager from '/audio-manager.js';
+import VFXSystem from '/vfx.js';
+
+// AudioManager 는 /audio-manager.js 에서 import 됨 (상단 변경 1 참고)
+document.addEventListener('click', () => AudioManager.resume(), { once: true });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FSM  — explicit states, explicit transitions
+// ═══════════════════════════════════════════════════════════════════════════════
+const S = { LOBBY:'LOBBY', WAITING:'WAITING', GAME:'GAME', RESULT:'RESULT', OPP_LEFT:'OPP_LEFT' };
+let uiState = S.LOBBY;
+
+const elLobby   = document.getElementById('screen-lobby');
+const elWaiting = document.getElementById('screen-waiting');
+const elGame    = document.getElementById('screen-game');
+const elResult  = document.getElementById('overlay-result');
+const elOppLeft = document.getElementById('overlay-opp-left');
+
+/** Only valid transitions are explicit here */
+const SHOW_GAME = new Set([S.GAME, S.RESULT, S.OPP_LEFT]);
+function gotoState(next) {
+  uiState = next;
+  elLobby.classList.toggle('hidden',   next !== S.LOBBY);
+  elWaiting.classList.toggle('hidden', next !== S.WAITING);
+  elGame.classList.toggle('hidden',    !SHOW_GAME.has(next));
+  elResult.classList.toggle('hidden',  next !== S.RESULT);
+  elOppLeft.classList.toggle('hidden', next !== S.OPP_LEFT);
+  if (next !== S.GAME && next !== S.RESULT) unlockPointer();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DOM REFS
+// ═══════════════════════════════════════════════════════════════════════════════
+const canvas      = document.getElementById('game-canvas');
+const nickInput   = document.getElementById('nick');
+const btnConnect  = document.getElementById('btn-connect');
+const lobbyError  = document.getElementById('lobby-error');
+const elWaitNick  = document.getElementById('waiting-nick');
+const clickPrompt = document.getElementById('click-prompt');
+const hpFill      = document.getElementById('hp-fill');
+const hpNum       = document.getElementById('hp-num');
+const scoreMy     = document.getElementById('score-my');
+const scoreOpp    = document.getElementById('score-opp');
+const hitFlash    = document.getElementById('hit-flash');
+const hpVignette  = document.getElementById('hp-vignette');
+const kfeed       = document.getElementById('kfeed');
+const vsTag       = document.getElementById('vs-tag');
+const resTitle    = document.getElementById('res-title');
+const resSub      = document.getElementById('res-sub');
+const resCd       = document.getElementById('res-cd');
+const chDot       = document.getElementById('ch-dot');
+const chT         = document.getElementById('ch-t');
+const chB         = document.getElementById('ch-b');
+const chL         = document.getElementById('ch-l');
+const chR         = document.getElementById('ch-r');
+const cdFg        = document.getElementById('cd-fg');
+const overlayDeath = document.getElementById('overlay-death');
+const killVignette = document.getElementById('kill-vignette');
+const scoreMax    = document.getElementById('score-max');
+const CD_CIRC     = 125.7; // 2π × r=20
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NETWORK
+// ═══════════════════════════════════════════════════════════════════════════════
+let ws = null;
+function wsConnect(name) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}`);
+  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name }));
+  ws.onmessage = (e) => { try { onMsg(JSON.parse(e.data)); } catch {} };
+  ws.onerror   = () => { showLobbyError('서버 연결 실패'); gotoState(S.LOBBY); };
+  ws.onclose   = () => { if (uiState !== S.LOBBY && uiState !== S.OPP_LEFT) gotoState(S.LOBBY); };
+}
+function wsSend(data) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GAME STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+let myId = '', oppId = '', myName = '', oppName = '';
+let _prevOppX = null, _prevOppZ = null;  // 적 이전 위치 (발자국 감지용)
+let myHp = 100, myKills = 0, oppKills = 0, maxKills = 5;
+let mySpawn = { x: -8, y: 1, z: 0 };
+
+// Client-predicted position (authoritative for rendering own player)
+let px = 0, py = 1, pz = 0, yaw = 0, pitch = 0;
+
+// Opponent: target = latest server state, current = lerp result
+const oppTarget  = { x: 8, y: 1, z: 0, yaw: 0 };
+const oppCurrent = { x: 8, y: 1, z: 0, yaw: 0 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUT
+// ═══════════════════════════════════════════════════════════════════════════════
+const keys = {};
+let locked = false, mdx = 0, mdy = 0;
+
+document.addEventListener('keydown', e => { keys[e.code] = true; });
+document.addEventListener('keyup',   e => { keys[e.code] = false; });
+document.addEventListener('mousemove', e => { if (locked) { mdx += e.movementX; mdy += e.movementY; } });
+document.addEventListener('mousedown', e => { if (e.button === 0 && locked && uiState === S.GAME) doShoot(); });
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === canvas;
+  clickPrompt.classList.toggle('hidden', locked);
+});
+canvas.addEventListener('click', () => { if (uiState === S.GAME && !locked) canvas.requestPointerLock(); });
+function unlockPointer() { if (document.pointerLockElement) document.exitPointerLock(); }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// THREE.JS SCENE
+// ═══════════════════════════════════════════════════════════════════════════════
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+let spawnP1Disc, spawnP2Disc; // 스폰 마커 pulse 애니메이션용
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07080f);
+scene.fog = new THREE.Fog(0x07080f, 20, 58);
+
+const camera = new THREE.PerspectiveCamera(75, 1, 0.05, 200);
+camera.rotation.order = 'YXZ';
+scene.add(camera);
+
+// ─ 아레나 상수 (조명에서 WH 참조하므로 먼저 선언) ───────────────────────────
+const ARENA = 40, WH = 5.5, HA = ARENA / 2;
+
+// ─ 조명 ──────────────────────────────────────────────────────────────────────
+// 차갑고 어두운 앰비언트 (다크 사이파이 기본 톤)
+scene.add(new THREE.AmbientLight(0x5566bb, 0.32));
+// 상단 쿨 필 라이트
+const dL  = new THREE.DirectionalLight(0x7788cc, 0.42);
+dL.position.set(6, 18, 4); scene.add(dL);
+const dL2 = new THREE.DirectionalLight(0x223355, 0.18);
+dL2.position.set(-8, 10, -6); scene.add(dL2);
+// 천장 픽스처 포인트 라이트 × 3 (따뜻한 황금빛 — 차가운 앰비언트와 대비)
+[-9, 0, 9].forEach(lx => {
+  const pl = new THREE.PointLight(0xffcc77, 2.6, 15, 1.8);
+  pl.position.set(lx, WH - 0.25, 0);
+  scene.add(pl);
+});
+// 중앙 기둥 포인트 라이트 (시안 — emissive stripe 연동)
+const pillarAccent = new THREE.PointLight(0x00ddff, 1.2, 8.5, 2.2);
+pillarAccent.position.set(0, 2.1, 0);
+scene.add(pillarAccent);
+
+// ─ 맵 헬퍼 ───────────────────────────────────────────────────────────────────
+function mkBox(w, h, d, x, y, z, col) {
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshLambertMaterial({ color: col })
+  );
+  m.position.set(x, y, z); scene.add(m); return m;
+}
+
+// ─ 바닥 — 절차적 사이파이 타일 CanvasTexture ──────────────────────────────────
+{
+  const SZ = 512, TILES = 8, T = SZ / TILES;
+  const cv = document.createElement('canvas'); cv.width = cv.height = SZ;
+  const ctx = cv.getContext('2d');
+
+  // 어두운 네이비 베이스
+  ctx.fillStyle = '#090d1a';
+  ctx.fillRect(0, 0, SZ, SZ);
+
+  // 체커 패턴 (짝수 타일 미세하게 밝음 → 깊이감)
+  ctx.fillStyle = '#0c1224';
+  for (let r = 0; r < TILES; r++)
+    for (let c = 0; c < TILES; c++)
+      if ((r + c) % 2 === 0) ctx.fillRect(c * T + 1, r * T + 1, T - 2, T - 2);
+
+  // 주 그리드 라인
+  ctx.strokeStyle = '#1b2d48'; ctx.lineWidth = 2;
+  for (let i = 0; i <= TILES; i++) {
+    ctx.beginPath(); ctx.moveTo(i * T, 0); ctx.lineTo(i * T, SZ); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i * T); ctx.lineTo(SZ, i * T); ctx.stroke();
+  }
+
+  // 하프-타일 서브그리드 (희미)
+  ctx.strokeStyle = '#111e34'; ctx.lineWidth = 0.9;
+  for (let i = 0; i < TILES; i++) {
+    const mid = (i + 0.5) * T;
+    ctx.beginPath(); ctx.moveTo(mid, 0); ctx.lineTo(mid, SZ); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(SZ, mid); ctx.stroke();
+  }
+
+  // 짝수 타일 코너 L-브래킷 (사이파이 디테일)
+  ctx.strokeStyle = '#26406a'; ctx.lineWidth = 1.8;
+  const OFF = 7, LEN = 12;
+  for (let r = 0; r < TILES; r++) {
+    for (let c = 0; c < TILES; c++) {
+      if ((r + c) % 2 === 0) {
+        const tx = c * T, ty = r * T;
+        [
+          [tx+OFF, ty+OFF+LEN, tx+OFF, ty+OFF, tx+OFF+LEN, ty+OFF],
+          [tx+T-OFF-LEN, ty+OFF, tx+T-OFF, ty+OFF, tx+T-OFF, ty+OFF+LEN],
+          [tx+OFF, ty+T-OFF-LEN, tx+OFF, ty+T-OFF, tx+OFF+LEN, ty+T-OFF],
+          [tx+T-OFF, ty+T-OFF-LEN, tx+T-OFF, ty+T-OFF, tx+T-OFF-LEN, ty+T-OFF]
+        ].forEach(([x1,y1,x2,y2,x3,y3]) => {
+          ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.lineTo(x3,y3); ctx.stroke();
+        });
+      }
+    }
+  }
+
+  const floorTex = new THREE.CanvasTexture(cv);
+  floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
+  floorTex.repeat.set(5, 5); // 5 × 8타일 = 40 → 40유닛 아레나에 1유닛당 1타일
+
+  const floorM = new THREE.Mesh(
+    new THREE.PlaneGeometry(ARENA, ARENA, 1, 1),
+    new THREE.MeshLambertMaterial({ map: floorTex })
+  );
+  floorM.rotation.x = -Math.PI / 2;
+  scene.add(floorM);
+}
+
+// ─ 천장 ───────────────────────────────────────────────────────────────────────
+const ceilM = new THREE.Mesh(new THREE.PlaneGeometry(ARENA, ARENA),
+  new THREE.MeshLambertMaterial({ color: 0x05060e }));
+ceilM.rotation.x = Math.PI / 2; ceilM.position.y = WH; scene.add(ceilM);
+
+// ─ 벽 — 딥 다크 네이비 슬레이트 ─────────────────────────────────────────────
+const WC = 0x0b1222;
+mkBox(ARENA + 1.2, WH, 1.2,  0, WH / 2, -HA, WC);
+mkBox(ARENA + 1.2, WH, 1.2,  0, WH / 2,  HA, WC);
+mkBox(1.2, WH, ARENA + 1.2, -HA, WH / 2, 0,  WC);
+mkBox(1.2, WH, ARENA + 1.2,  HA, WH / 2, 0,  WC);
+
+// ─ 중앙 기둥 — MeshStandard + 시안 emissive 스트라이프 ──────────────────────
+{
+  const cpMat = new THREE.MeshStandardMaterial({ color: 0x0a0e26, roughness: 0.6, metalness: 0.5 });
+  const cpMesh = new THREE.Mesh(new THREE.BoxGeometry(1.4, 4.2, 5.5), cpMat);
+  cpMesh.position.set(0, 2.1, 0); scene.add(cpMesh);
+
+  // 수평 emissive 스트라이프 × 3 (시안 에너지 밴드)
+  const sMat = new THREE.MeshStandardMaterial({
+    color: 0x009ab8, emissive: 0x00e5ff, emissiveIntensity: 2.8,
+    roughness: 0.2, metalness: 0.9
+  });
+  const sGeo = new THREE.BoxGeometry(1.42, 0.10, 5.52);
+  [0.35, 2.1, 3.85].forEach(sy => {
+    const s = new THREE.Mesh(sGeo, sMat); s.position.set(0, sy, 0); scene.add(s);
+  });
+}
+
+// ─ 사이드 크레이트 — 다크 스틸 블루-틸 (벽과 구분) ──────────────────────────
+const CC = 0x142534;
+mkBox(3.2, 2.2, 1.4, -6, 1.1,  4.5, CC); mkBox(3.2, 2.2, 1.4, -6, 1.1, -4.5, CC);
+mkBox(3.2, 2.2, 1.4,  6, 1.1,  4.5, CC); mkBox(3.2, 2.2, 1.4,  6, 1.1, -4.5, CC);
+
+// ─ 스폰-사이드 로우 커버 — 더 어두운 틸 (낮고 작은 톤) ───────────────────────
+const LC = 0x0d1c2a;
+mkBox(2.2, 1.1, 0.5, -11, 0.55,  3, LC); mkBox(2.2, 1.1, 0.5, -11, 0.55, -3, LC);
+mkBox(2.2, 1.1, 0.5,  11, 0.55,  3, LC); mkBox(2.2, 1.1, 0.5,  11, 0.55, -3, LC);
+
+// ─ 대각선 미드 커버 — 미드나잇 블루 ─────────────────────────────────────────
+mkBox(0.5, 2.5, 3.5, -3.5, 1.25,  2, 0x101c30);
+mkBox(0.5, 2.5, 3.5,  3.5, 1.25, -2, 0x101c30);
+
+// ─ 원형 기둥 — 딥 인디고 (벽과 명확히 구분) ─────────────────────────────────
+const pilMat = new THREE.MeshLambertMaterial({ color: 0x141638 });
+const pilGeo = new THREE.CylinderGeometry(0.5, 0.55, WH, 8);
+[[-3, -8], [3, 8], [-3, 8], [3, -8]].forEach(([x, z]) => {
+  const p = new THREE.Mesh(pilGeo, pilMat); p.position.set(x, WH / 2, z); scene.add(p);
+});
+
+// ─ 천장 조명 픽스처 (시각 전용) ─────────────────────────────────────────────
+const ltMat = new THREE.MeshBasicMaterial({ color: 0xfff8e0 });
+const ltGeo = new THREE.BoxGeometry(0.3, 0.07, 1.0);
+[-9, 0, 9].forEach(x => { const l = new THREE.Mesh(ltGeo, ltMat); l.position.set(x, WH - 0.04, 0); scene.add(l); });
+
+// ─ 스폰 포인트 마커 — 바닥 글로우 디스크 (P1 파랑, P2 빨강) ─────────────────
+{
+  function makeSpawnDisc(r, g, b) {
+    const SZ = 256;
+    const cv = document.createElement('canvas'); cv.width = cv.height = SZ;
+    const ctx = cv.getContext('2d');
+    const cx = SZ / 2, cy = SZ / 2;
+
+    // 방사형 글로우
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, cx);
+    grad.addColorStop(0,    `rgba(${r},${g},${b},0.60)`);
+    grad.addColorStop(0.30, `rgba(${r},${g},${b},0.35)`);
+    grad.addColorStop(0.65, `rgba(${r},${g},${b},0.10)`);
+    grad.addColorStop(1.0,  `rgba(${r},${g},${b},0)`);
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, SZ, SZ);
+
+    // 바깥 링
+    ctx.strokeStyle = `rgba(${r},${g},${b},0.90)`;
+    ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.arc(cx, cy, cx * 0.70, 0, Math.PI * 2); ctx.stroke();
+
+    // 틱 마크 × 12
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * cx * 0.60, cy + Math.sin(a) * cx * 0.60);
+      ctx.lineTo(cx + Math.cos(a) * cx * 0.80, cy + Math.sin(a) * cx * 0.80);
+      ctx.stroke();
+    }
+
+    // 중앙 다이아몬드
+    ctx.strokeStyle = `rgba(${r},${g},${b},0.65)`;
+    ctx.lineWidth = 1.5;
+    const d = cx * 0.22;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - d); ctx.lineTo(cx + d, cy);
+    ctx.lineTo(cx, cy + d); ctx.lineTo(cx - d, cy);
+    ctx.closePath(); ctx.stroke();
+
+    return new THREE.CanvasTexture(cv);
+  }
+
+  const discGeo = new THREE.PlaneGeometry(3.6, 3.6);
+
+  // P1 — 파랑 (x = -8)
+  spawnP1Disc = new THREE.Mesh(discGeo,
+    new THREE.MeshBasicMaterial({ map: makeSpawnDisc(70, 150, 255), transparent: true, opacity: 0.85, depthWrite: false })
+  );
+  spawnP1Disc.rotation.x = -Math.PI / 2;
+  spawnP1Disc.position.set(-8, 0.014, 0);
+  scene.add(spawnP1Disc);
+
+  // P2 — 빨강 (x = +8)
+  spawnP2Disc = new THREE.Mesh(discGeo,
+    new THREE.MeshBasicMaterial({ map: makeSpawnDisc(255, 55, 55), transparent: true, opacity: 0.85, depthWrite: false })
+  );
+  spawnP2Disc.rotation.x = -Math.PI / 2;
+  spawnP2Disc.position.set(8, 0.014, 0);
+  scene.add(spawnP2Disc);
+}
+
+// ── Opponent mesh ──────────────────────────────────────────────────────────────
+const oppGroup = new THREE.Group(); oppGroup.visible = false; scene.add(oppGroup);
+// Body (AABB matches server HB: 0.6×1.8×0.6 at y+0.9)
+const oppBody = new THREE.Mesh(
+  new THREE.BoxGeometry(0.6, 1.8, 0.6),
+  new THREE.MeshLambertMaterial({ color: 0xe84040 })
+);
+oppBody.position.y = 0.9; oppGroup.add(oppBody);
+// Head
+const oppHead = new THREE.Mesh(
+  new THREE.BoxGeometry(0.48, 0.38, 0.48),
+  new THREE.MeshLambertMaterial({ color: 0xff6060 })
+);
+oppHead.position.y = 1.98; oppGroup.add(oppHead);
+// Name tag (canvas sprite)
+let ntSprite = null;
+function buildNameTag(name) {
+  const ntc = document.createElement('canvas'); ntc.width = 256; ntc.height = 44;
+  const ctx = ntc.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0.58)';
+  ctx.fillRect(4, 4, 248, 36);
+  ctx.font = 'bold 19px Arial'; ctx.fillStyle = '#ff9090';
+  ctx.textAlign = 'center'; ctx.fillText(name.slice(0, 14), 128, 28);
+  const tex = new THREE.CanvasTexture(ntc);
+  ntSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  ntSprite.scale.set(1.5, 0.26, 1); ntSprite.position.y = 2.5;
+  oppGroup.add(ntSprite);
+}
+
+// ── Player weapon (camera child) ───────────────────────────────────────────────
+const gunGroup = new THREE.Group(); gunGroup.position.set(0.19, -0.14, -0.36); camera.add(gunGroup);
+// Receiver
+const receiver = new THREE.Mesh(
+  new THREE.BoxGeometry(0.07, 0.065, 0.24),
+  new THREE.MeshLambertMaterial({ color: 0x282838 })
+);
+gunGroup.add(receiver);
+// Barrel
+const barrel = new THREE.Mesh(
+  new THREE.BoxGeometry(0.025, 0.025, 0.16),
+  new THREE.MeshLambertMaterial({ color: 0x1a1a28 })
+);
+barrel.position.set(0, 0.022, -0.2); gunGroup.add(barrel);
+// Grip
+const grip = new THREE.Mesh(
+  new THREE.BoxGeometry(0.045, 0.09, 0.055),
+  new THREE.MeshLambertMaterial({ color: 0x1e1e2e })
+);
+grip.position.set(0, -0.075, 0.05); gunGroup.add(grip);
+// Muzzle flash
+const muzzleFlash = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.1, 0.1),
+  new THREE.MeshBasicMaterial({ color: 0xffffaa, transparent: true, opacity: 0, depthTest: false, side: THREE.DoubleSide })
+);
+muzzleFlash.position.set(0, 0.022, -0.29); gunGroup.add(muzzleFlash);
+
+// Gun animation state
+let gunSwayT  = 0;
+let gunRecoil = 0; // 1 = just fired, decays to 0
+
+// Pre-allocated Vector3 for muzzle world-position query (avoids GC per shot)
+const _muzzleWP = new THREE.Vector3();
+const vfxSys = new VFXSystem({ THREE, scene, renderer, camera });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VFX SYSTEM — Object-Pooled Three.js Particle Effects
+// All pools pre-allocated at startup: zero per-event allocation → GC-safe
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Configuration constants (no magic numbers anywhere else) ─────────────────
+const VFX_CFG = {
+  // Muzzle flash burst
+  MUZZLE_PARTICLES:  24,   // particles per burst
+  MUZZLE_DURATION:  100,   // ms lifetime
+  MUZZLE_POOL_SIZE:   3,   // max concurrent instances (oldest recycled if full)
+  MUZZLE_SPEED_MIN:  2.0,  // units/sec
+  MUZZLE_SPEED_MAX:  5.5,  // units/sec
+  MUZZLE_SIZE:       9.0,  // point render size (px, world-attenuated)
+  MUZZLE_SPREAD:     0.28, // cone half-angle radians (~16°)
+
+  // Hit / impact spray
+  HIT_PARTICLES:     32,   // particles per burst
+  HIT_DURATION:     300,   // ms lifetime
+  HIT_POOL_SIZE:      6,   // max concurrent instances
+  HIT_SPEED_MIN:    3.0,   // units/sec
+  HIT_SPEED_MAX:    7.5,   // units/sec
+  HIT_SIZE:          6.5,  // point render size (px)
+
+  // Kill/death screen vignette (CSS, synced to server 'kill' event)
+  KILL_VIG_HOLD:    120,   // ms at full opacity before fade
+  KILL_VIG_FADE:    480,   // ms fade-out duration
+
+  // QA / Debug toggles — false disables that effect without removing code
+  DBG_MUZZLE_FLASH:  true,  // particle burst + muzzle plane on every shot
+  DBG_HIT_SPRAY:     true,  // red omnidirectional particle burst on hit-confirm
+  DBG_HIT_FLASH:     true,  // screen-space overlays: yellow(hit enemy) / red(take damage)
+  DBG_DEATH_OVERLAY: true,  // ELIMINATED fullscreen overlay on player death
+  DBG_RESPAWN_FLASH: true,  // blue teleport flash on respawn (600ms after death)
+  // NOTE: Kill/death vignette (gold/red radial) → VFX_CFG.DBG_KILL_VIGNETTE in vfx.js
+  // NOTE: Bloom, camera shake, muzzle PointLight  → VFX_CFG.DBG_* in vfx.js
+};
+
+// ─── Single pre-allocated particle effect instance ─────────────────────────────
+class VFXParticleEffect {
+  constructor(count, size) {
+    this.count  = count;
+    this.posArr = new Float32Array(count * 3);
+    this.velArr = new Float32Array(count * 3);
+    this.colArr = new Float32Array(count * 3); // per-particle RGB (vertex colors)
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.posArr, 3));
+    geo.setAttribute('color',    new THREE.BufferAttribute(this.colArr, 3));
+
+    this.mat = new THREE.PointsMaterial({
+      vertexColors:    true,   // per-particle color; mat.color (white) acts as multiplier
+      size,
+      transparent:     true,
+      opacity:         0,
+      depthTest:       true,
+      depthWrite:      false,
+      sizeAttenuation: true,
+    });
+
+    this.mesh = new THREE.Points(geo, this.mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.visible       = false;
+    scene.add(this.mesh);
+
+    this.active    = false;
+    this.startTime = 0;
+    this.duration  = 0;
+  }
+
+  // All particles start at origin (ox, oy, oz); velArr set by activateXxx
+  _init(ox, oy, oz, duration) {
+    this.active    = true;
+    this.startTime = performance.now();
+    this.duration  = duration;
+    this.mesh.visible = true;
+    this.mat.opacity  = 1.0;
+    for (let i = 0; i < this.count; i++) {
+      const i3 = i * 3;
+      this.posArr[i3]     = ox;
+      this.posArr[i3 + 1] = oy;
+      this.posArr[i3 + 2] = oz;
+    }
+    this.mesh.geometry.attributes.position.needsUpdate = true;
+  }
+
+  /** Muzzle flash: forward-cone spray aligned to shoot direction */
+  activateMuzzle(ox, oy, oz, fwx, fwy, fwz) {
+    this._init(ox, oy, oz, VFX_CFG.MUZZLE_DURATION);
+    // Build two vectors perpendicular to forward (for cone spread)
+    const len = Math.sqrt(fwx*fwx + fwy*fwy + fwz*fwz) || 1;
+    const nx = fwx/len, ny = fwy/len, nz = fwz/len;
+    let ux, uy, uz;
+    if (Math.abs(nx) <= Math.abs(ny) && Math.abs(nx) <= Math.abs(nz)) {
+      ux = 0; uy = -nz; uz =  ny;
+    } else if (Math.abs(ny) <= Math.abs(nz)) {
+      ux = nz; uy = 0; uz = -nx;
+    } else {
+      ux = -ny; uy = nx; uz = 0;
+    }
+    const ul = Math.sqrt(ux*ux + uy*uy + uz*uz) || 1;
+    ux /= ul; uy /= ul; uz /= ul;
+    const vx = ny*uz - nz*uy, vy = nz*ux - nx*uz, vz = nx*uy - ny*ux;
+    const sprd = VFX_CFG.MUZZLE_SPREAD;
+    for (let i = 0; i < this.count; i++) {
+      const i3    = i * 3;
+      const theta = Math.random() * Math.PI * 2;
+      const r     = Math.random() * sprd;
+      const sp    = VFX_CFG.MUZZLE_SPEED_MIN + Math.random() * (VFX_CFG.MUZZLE_SPEED_MAX - VFX_CFG.MUZZLE_SPEED_MIN);
+      const dx = nx + (ux * Math.cos(theta) + vx * Math.sin(theta)) * r;
+      const dy = ny + (uy * Math.cos(theta) + vy * Math.sin(theta)) * r;
+      const dz = nz + (uz * Math.cos(theta) + vz * Math.sin(theta)) * r;
+      const dl = Math.sqrt(dx*dx + dy*dy + dz*dz) || 1;
+      this.velArr[i3]     = (dx/dl) * sp;
+      this.velArr[i3 + 1] = (dy/dl) * sp;
+      this.velArr[i3 + 2] = (dz/dl) * sp;
+    }
+    // Per-particle colors: warm yellow core → hot white tip
+    for (let i = 0; i < this.count; i++) {
+      const t = Math.random(); const c3 = i * 3;
+      this.colArr[c3]     = 1.0;                 // R: always full
+      this.colArr[c3 + 1] = 0.78 + t * 0.22;    // G: 0.78–1.0 (yellow→white)
+      this.colArr[c3 + 2] = t * 0.40;            // B: 0–0.40 (hot-white tint)
+    }
+    this.mesh.geometry.attributes.color.needsUpdate = true;
+  }
+
+  /** Hit spray: omnidirectional burst with upward bias (impact debris) */
+  activateHit(ox, oy, oz) {
+    this._init(ox, oy, oz, VFX_CFG.HIT_DURATION);
+    for (let i = 0; i < this.count; i++) {
+      const i3    = i * 3;
+      const theta = Math.random() * Math.PI * 2;
+      const phi   = Math.acos(2 * Math.random() - 1); // uniform sphere
+      const sp    = VFX_CFG.HIT_SPEED_MIN + Math.random() * (VFX_CFG.HIT_SPEED_MAX - VFX_CFG.HIT_SPEED_MIN);
+      this.velArr[i3]     = Math.sin(phi) * Math.cos(theta) * sp;
+      this.velArr[i3 + 1] = Math.cos(phi) * sp + 2.0; // +2 m/s upward bias
+      this.velArr[i3 + 2] = Math.sin(phi) * Math.sin(theta) * sp;
+    }
+    // Per-particle colors: bright red → dark crimson, 15% chance orange spark
+    for (let i = 0; i < this.count; i++) {
+      const t = Math.random(); const c3 = i * 3;
+      if (Math.random() < 0.15) {
+        this.colArr[c3]     = 1.0;
+        this.colArr[c3 + 1] = 0.38 + t * 0.30;  // orange spark
+        this.colArr[c3 + 2] = 0.0;
+      } else {
+        this.colArr[c3]     = 0.60 + t * 0.40;  // R: 0.60–1.0
+        this.colArr[c3 + 1] = 0.0;
+        this.colArr[c3 + 2] = 0.0;              // crimson → bright red
+      }
+    }
+    this.mesh.geometry.attributes.color.needsUpdate = true;
+  }
+
+  /** Called every render frame with dt in seconds */
+  update(dt) {
+    if (!this.active) return;
+    const elapsed = performance.now() - this.startTime;
+    if (elapsed >= this.duration) { this.deactivate(); return; }
+    this.mat.opacity = Math.max(0, 1 - elapsed / this.duration);
+    const drag = Math.exp(-3.5 * dt); // exponential velocity damping
+    for (let i = 0; i < this.count; i++) {
+      const i3 = i * 3;
+      this.posArr[i3]     += this.velArr[i3]     * dt;
+      this.posArr[i3 + 1] += this.velArr[i3 + 1] * dt;
+      this.posArr[i3 + 2] += this.velArr[i3 + 2] * dt;
+      this.velArr[i3]     *= drag;
+      this.velArr[i3 + 1]  = this.velArr[i3 + 1] * drag - 9.8 * dt; // gravity
+      this.velArr[i3 + 2] *= drag;
+    }
+    this.mesh.geometry.attributes.position.needsUpdate = true;
+  }
+
+  deactivate() {
+    this.active       = false;
+    this.mesh.visible = false;
+    this.mat.opacity  = 0;
+  }
+}
+
+// ─── VFX Manager — owns pools, provides public API ───────────────────────────
+const vfx = (() => {
+  const muzzlePool = [];
+  const hitPool    = [];
+
+  // Pre-allocate at module load (no allocation per shot/hit)
+  for (let i = 0; i < VFX_CFG.MUZZLE_POOL_SIZE; i++)
+    muzzlePool.push(new VFXParticleEffect(VFX_CFG.MUZZLE_PARTICLES, VFX_CFG.MUZZLE_SIZE));
+  for (let i = 0; i < VFX_CFG.HIT_POOL_SIZE; i++)
+    hitPool.push(new VFXParticleEffect(VFX_CFG.HIT_PARTICLES, VFX_CFG.HIT_SIZE));
+
+  function _free(pool) {
+    for (const p of pool) if (!p.active) return p;
+    let oldest = pool[0];
+    for (const p of pool) if (p.startTime < oldest.startTime) oldest = p;
+    oldest.deactivate();
+    return oldest;
+  }
+
+  return {
+    spawnMuzzleFlash(ox, oy, oz, fwx, fwy, fwz) {
+      if (!VFX_CFG.DBG_MUZZLE_FLASH) return;
+      _free(muzzlePool).activateMuzzle(ox, oy, oz, fwx, fwy, fwz);
+    },
+    spawnHit(ox, oy, oz) {
+      if (!VFX_CFG.DBG_HIT_SPRAY) return;
+      _free(hitPool).activateHit(ox, oy, oz);
+    },
+    update(dt) {
+      for (const p of muzzlePool) p.update(dt);
+      for (const p of hitPool)    p.update(dt);
+    },
+  };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MESSAGE HANDLER
+// ═══════════════════════════════════════════════════════════════════════════════
+let cdTimer = null, resultShown = false;
+
+function onMsg(msg) {
+  switch (msg.type) {
+
+    case 'waiting':
+      gotoState(S.WAITING);
+      elWaitNick.textContent = myName ? `접속 중: ${myName}` : '';
+      break;
+
+    case 'init': {
+      clearTimeout(cdTimer); resultShown = false;
+      myId     = msg.yourId;
+      oppId    = myId === 'p1' ? 'p2' : 'p1';
+      oppName  = msg.opponentName || '상대방';
+      maxKills = msg.maxKills || 5;
+      myHp     = 100; myKills = 0; oppKills = 0;
+      const sp = msg.spawnPos || (myId === 'p1' ? { x:-8, y:1, z:0 } : { x:8, y:1, z:0 });
+      mySpawn  = sp;
+      px = sp.x; py = sp.y; pz = sp.z; yaw = 0; pitch = 0;
+      const osp = myId === 'p1' ? { x:8, y:1, z:0 } : { x:-8, y:1, z:0 };
+      Object.assign(oppTarget,  { x:osp.x, y:osp.y, z:osp.z, yaw:0 });
+      Object.assign(oppCurrent, { x:osp.x, y:osp.y, z:osp.z, yaw:0 });
+      oppGroup.position.set(osp.x, osp.y, osp.z); oppGroup.visible = true;
+      // (re)build name tag
+      if (ntSprite) { oppGroup.remove(ntSprite); ntSprite = null; }
+      buildNameTag(oppName);
+      vsTag.textContent = `vs ${oppName}`;
+      if (scoreMax) scoreMax.textContent = String(maxKills);
+      refreshHUD();
+      _prevOppX = null; _prevOppZ = null;
+      AudioManager.play('game_start');
+      gotoState(S.GAME);
+      clickPrompt.classList.remove('hidden');
+      break;
+    }
+
+    case 'state': {
+      if (!msg.players) break;
+      const od = msg.players[oppId];
+      if (od) {
+        oppTarget.x   = od.x;
+        oppTarget.y   = od.y;
+        oppTarget.z   = od.z;
+        oppTarget.yaw = od.yaw || 0;
+        oppKills       = od.kills || 0;
+        // 적 이동 감지 → 3D 발자국 재생 (전술 정보)
+        if (_prevOppX !== null) {
+          const dx = od.x - _prevOppX, dz = od.z - _prevOppZ;
+          if (dx * dx + dz * dz > 0.004) {
+            AudioManager.play('footstep_opp', [od.x, od.y || 1, od.z]);
+          }
+        }
+        _prevOppX = od.x; _prevOppZ = od.z;
+      }
+      const md = msg.players[myId];
+      if (md) {
+        // Server HP is authoritative — reconcile (server may differ on respawn)
+        if (md.hp !== undefined) myHp = md.hp;
+        if (md.kills !== undefined) myKills = md.kills;
+      }
+      refreshHUD();
+      break;
+    }
+
+    case 'hit_confirm': {
+      if (msg.killerId === myId) {
+        // I hit the opponent — VFX: impact spray at opponent current position
+        vfx.spawnHit(oppCurrent.x, oppCurrent.y + 0.9, oppCurrent.z);
+        if (VFX_CFG.DBG_HIT_FLASH) flashCrosshair();
+        if (msg.remainHp <= 0) AudioManager.play('kill');
+        else { AudioManager.play('hit'); if (VFX_CFG.DBG_HIT_FLASH) flashScreen('#ffff55', 0.22, 85); addKF(`💥 히트! (상대 HP: ${msg.remainHp})`); }
+      }
+      if (msg.targetId === myId) {
+        // I was hit — immediate client update (don't wait for state tick)
+        myHp = msg.remainHp;
+        refreshHUD();
+        if (VFX_CFG.DBG_HIT_FLASH) flashScreen('#e84040', 0.52, 230);
+        AudioManager.play('damage');
+        vfxSys.triggerShake('hit'); // camera shake on damage
+      }
+      break;
+    }
+
+    case 'kill': {
+      const k = msg.kills || {};
+      myKills  = (myId  ? k[myId]  ?? myKills  : myKills);
+      oppKills = (oppId ? k[oppId] ?? oppKills : oppKills);
+      refreshHUD();
+      const iKilled = msg.killer === myId;
+      const iDied   = msg.victim === myId;
+      addKF(`☠ ${iKilled ? myName : oppName} → ${iDied ? myName : oppName}`);
+      if (iKilled) { vfxSys.triggerKillVignette(true); }  // Kill confirmation: gold flash
+      if (iDied) {
+        // Client-side respawn: show death effect + VFX death vignette
+        AudioManager.play('death');
+        if (VFX_CFG.DBG_DEATH_OVERLAY) showDeathEffect();
+        vfxSys.triggerKillVignette(false); // Death: red edge vignette
+        vfxSys.triggerShake('death');      // camera shake on death
+        setTimeout(() => {
+          px = mySpawn.x; py = mySpawn.y; pz = mySpawn.z;
+          yaw = 0; pitch = 0;
+          myHp = 100;
+          refreshHUD();
+          // Respawn teleport flash — brief blue-white burst to signal position reset
+          if (VFX_CFG.DBG_RESPAWN_FLASH) flashScreen('#6699ff', 0.32, 210);
+        }, 600);
+      }
+      break;
+    }
+
+    case 'win':
+    case 'game_end': {
+      if (resultShown) break;
+      resultShown = true;
+      const wid = msg.winner || msg.winnerId;
+      showResult(wid === myId);
+      break;
+    }
+
+    case 'opponent_left':
+      // Always cancel any pending rematch countdown first
+      clearTimeout(cdTimer); unlockPointer();
+      if (uiState === S.RESULT) {
+        // Game just ended normally and opponent left during result screen —
+        // update subtitle and auto-return to lobby (no rematch coming)
+        resSub.textContent += ' (상대방 퇴장)';
+        resCd.textContent = '잠시 후 로비로 돌아갑니다…';
+        setTimeout(() => { oppGroup.visible = false; gotoState(S.LOBBY); }, 2800);
+      } else {
+        gotoState(S.OPP_LEFT);
+        setTimeout(() => { oppGroup.visible = false; gotoState(S.LOBBY); }, 2800);
+      }
+      break;
+
+    case 'error':
+      showLobbyError(msg.message || '오류 발생');
+      gotoState(S.LOBBY);
+      break;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HUD HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+function refreshHUD() {
+  const pct = Math.max(0, myHp) / 100;
+  hpFill.style.width      = (pct * 100) + '%';
+  hpFill.style.background = pct > 0.5
+    ? 'linear-gradient(to right,#2a9d50,#50dd78)'
+    : pct > 0.25
+      ? 'linear-gradient(to right,#cc8800,#ffbb22)'
+      : 'linear-gradient(to right,#cc2000,#ff4422)';
+  hpNum.textContent        = Math.max(0, myHp);
+  scoreMy.textContent      = myKills;
+  scoreOpp.textContent     = oppKills;
+  // Low-HP vignette
+  hpVignette.style.opacity = pct < 0.4 ? String(((1 - pct / 0.4) * 0.6).toFixed(2)) : '0';
+}
+
+let flashTO = null;
+function flashScreen(col, alpha, ms) {
+  hitFlash.style.background = col;
+  hitFlash.style.opacity    = String(alpha);
+  clearTimeout(flashTO);
+  flashTO = setTimeout(() => { hitFlash.style.opacity = '0'; }, ms);
+}
+
+// Crosshair hit-marker: dot turns bright yellow, then back
+let chTO = null;
+function flashCrosshair() {
+  chDot.style.background = '#ffff00';
+  chDot.style.transform  = 'translate(-50%,-50%) scale(2.4)';
+  clearTimeout(chTO);
+  chTO = setTimeout(() => {
+    chDot.style.background = '#e84040';
+    chDot.style.transform  = 'translate(-50%,-50%) scale(1)';
+  }, 110);
+}
+// Crosshair spread on shoot
+function spreadCrosshair(spread) {
+  const s = `scale(${spread})`;
+  [chT, chB, chL, chR].forEach(el => el.style.transform = s);
+  setTimeout(() => { [chT, chB, chL, chR].forEach(el => el.style.transform = ''); }, 95);
+}
+
+function addKF(text) {
+  const d = document.createElement('div');
+  d.className   = 'kf-entry';
+  d.textContent = text;
+  kfeed.appendChild(d);
+  setTimeout(() => d.remove(), 3200);
+}
+function showLobbyError(msg) { lobbyError.textContent = msg; }
+
+function showResult(win) {
+  unlockPointer();
+  AudioManager.play(win ? 'win' : 'lose');
+  gotoState(S.RESULT);
+  resTitle.className   = win ? 'res-win' : 'res-lose';
+  resTitle.textContent = win ? '승리!' : '패배';
+  resSub.textContent   = win
+    ? `${myKills}킬로 승리했습니다!`
+    : `${oppName}이(가) ${oppKills}킬로 승리했습니다.`;
+  let sec = 5;
+  resCd.textContent = `${sec}초 후 자동 재시작…`;
+  const tick = () => {
+    sec--;
+    if (sec <= 0) { resCd.textContent = '재시작 중…'; return; }
+    resCd.textContent = `${sec}초 후 자동 재시작…`;
+    cdTimer = setTimeout(tick, 1000);
+  };
+  cdTimer = setTimeout(tick, 1000);
+}
+
+let deathTO = null;
+function showDeathEffect() {
+  overlayDeath.style.opacity = '1';
+  clearTimeout(deathTO);
+  deathTO = setTimeout(() => { overlayDeath.style.opacity = '0'; }, 680);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHOOTING
+// ═══════════════════════════════════════════════════════════════════════════════
+const SHOOT_CD = 180; // ms
+let lastShot = 0, muzzleTO = null;
+
+function doShoot() {
+  const now = performance.now();
+  if (now - lastShot < SHOOT_CD) return;
+  lastShot = now;
+  AudioManager.play('shoot', [px, py + 1.6, pz]);
+
+  const cp = Math.cos(pitch);
+  wsSend({
+    type:   'shoot',
+    origin: [px, py + 1.6, pz],
+    dir:    [-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp]
+  });
+
+  // Muzzle flash (plane) + VFX particle burst
+  muzzleFlash.material.opacity = 1.0;
+  clearTimeout(muzzleTO);
+  muzzleTO = setTimeout(() => { muzzleFlash.material.opacity = 0; }, 46);
+  muzzleFlash.getWorldPosition(_muzzleWP);
+  vfx.spawnMuzzleFlash(_muzzleWP.x, _muzzleWP.y, _muzzleWP.z,
+    -Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp);
+  vfxSys.onShoot(); // muzzle flash PointLight burst
+
+  // Visual effects
+  spreadCrosshair(1.7);
+  if (VFX_CFG.DBG_MUZZLE_FLASH) flashScreen('#ffffcc', 0.04, 55);
+  gunRecoil = 1.0;
+
+  // Cooldown arc animation
+  updateCdArc(0);
+  const start = now;
+  const animCd = () => {
+    const t = Math.min(1, (performance.now() - start) / SHOOT_CD);
+    updateCdArc(t);
+    if (t < 1) requestAnimationFrame(animCd);
+  };
+  requestAnimationFrame(animCd);
+}
+function updateCdArc(t) {
+  cdFg.style.strokeDashoffset = String(CD_CIRC * (1 - t));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RENDER LOOP
+// ═══════════════════════════════════════════════════════════════════════════════
+const SPEED   = 5.0;
+const SENS    = 0.0018;
+const PLIMIT  = Math.PI / 2 * 0.93;
+const LERP_K  = 18; // opp lerp stiffness (higher = snappier)
+let lastTS = 0, lastSendTS = 0;
+
+function loop(ts) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((ts - lastTS) / 1000, 0.05);
+  lastTS = ts;
+
+  // ── Mouse look ──
+  if (locked && uiState === S.GAME) {
+    yaw   -= mdx * SENS;
+    pitch -= mdy * SENS;
+    pitch  = Math.max(-PLIMIT, Math.min(PLIMIT, pitch));
+  }
+  mdx = 0; mdy = 0;
+
+  // ── Client-predicted movement ──
+  if (locked && uiState === S.GAME) {
+    let mx = 0, mz = 0;
+    if (keys['KeyW']    || keys['ArrowUp'])    mz += 1;  // forward: +mz → fw*mz moves toward look-dir
+    if (keys['KeyS']    || keys['ArrowDown'])  mz -= 1;  // backward
+    if (keys['KeyA']    || keys['ArrowLeft'])  mx -= 1;
+    if (keys['KeyD']    || keys['ArrowRight']) mx += 1;
+    if (mx || mz) {
+      const l = Math.sqrt(mx * mx + mz * mz); mx /= l; mz /= l;
+      const fw = -Math.sin(yaw), fr = -Math.cos(yaw);
+      const rw =  Math.cos(yaw), rr = -Math.sin(yaw);
+      px = clamp(px + (fw * mz + rw * mx) * SPEED * dt, -(HA - 0.8), HA - 0.8);
+      pz = clamp(pz + (fr * mz + rr * mx) * SPEED * dt, -(HA - 0.8), HA - 0.8);
+      AudioManager.play('footstep_self');
+    }
+    py = 1;
+  }
+
+  // ── Camera ──
+  camera.position.set(px, py + 1.6, pz);
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+
+  // ── Gun sway + recoil ──
+  if (uiState === S.GAME || uiState === S.RESULT) {
+    gunSwayT += dt * 2.1;
+    const swayX = Math.sin(gunSwayT * 1.25) * 0.003;
+    const swayY = Math.sin(gunSwayT) * 0.002;
+    gunRecoil = Math.max(0, gunRecoil - dt * 9);
+    gunGroup.position.set(
+      0.19 + swayX,
+      -0.14 + swayY + gunRecoil * 0.014,
+      -0.36 + gunRecoil * 0.065
+    );
+    gunGroup.rotation.x = -gunRecoil * 0.13;
+  }
+
+  // ── Send position to server (~60Hz, gated) ──
+  if (uiState === S.GAME && ts - lastSendTS > 16) {
+    wsSend({ type: 'move', x: px, y: py, z: pz, yaw, pitch });
+    lastSendTS = ts;
+  }
+
+  // ── Opponent interpolation (frame-rate independent exponential lerp) ──
+  const la = 1 - Math.exp(-LERP_K * dt);
+  oppCurrent.x += (oppTarget.x - oppCurrent.x) * la;
+  oppCurrent.y += (oppTarget.y - oppCurrent.y) * la;
+  oppCurrent.z += (oppTarget.z - oppCurrent.z) * la;
+  // Shortest-angle yaw lerp
+  let dyaw = oppTarget.yaw - oppCurrent.yaw;
+  while (dyaw >  Math.PI) dyaw -= Math.PI * 2;
+  while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+  oppCurrent.yaw += dyaw * la;
+  oppGroup.position.set(oppCurrent.x, oppCurrent.y, oppCurrent.z);
+  oppGroup.rotation.y = oppCurrent.yaw;
+
+  // ── Resize on demand ──
+  // Guard: skip if canvas is hidden (display:none → clientWidth=0) to avoid
+  // zero-size WebGL framebuffer incomplete errors during lobby/waiting screens.
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  if (cw > 0 && ch > 0 && (renderer.domElement.width !== cw || renderer.domElement.height !== ch)) {
+    renderer.setSize(cw, ch, false);
+    camera.aspect = cw / ch;
+    camera.updateProjectionMatrix();
+    vfxSys.setSize(cw, ch); // bloom render targets resize
+  }
+
+  if (uiState === S.GAME) AudioManager.setListener(px, py + 1.6, pz, yaw);
+  // 스폰 디스크 pulse (0.78±0.16 범위 opacity로 은은하게 숨쉬는 글로우)
+  if (spawnP1Disc) spawnP1Disc.material.opacity = 0.78 + Math.sin(ts * 0.0018) * 0.16;
+  if (spawnP2Disc) spawnP2Disc.material.opacity = 0.78 + Math.sin(ts * 0.0018 + Math.PI) * 0.16;
+  // ── VFX particle systems tick (pooled, zero allocation per frame) ──
+  vfx.update(dt);
+  vfxSys.renderWithBloom(scene, camera, dt); // bloom pipeline
+}
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LOBBY UI
+// ═══════════════════════════════════════════════════════════════════════════════
+btnConnect.addEventListener('click', () => {
+  AudioManager.play('ui_click');
+  const name = nickInput.value.trim() || `Player${Math.floor(Math.random() * 9000) + 1000}`;
+  myName = name;
+  lobbyError.textContent = '';
+  gotoState(S.WAITING);
+  elWaitNick.textContent = name;
+  wsConnect(name);
+});
+nickInput.addEventListener('keydown', e => { if (e.key === 'Enter') btnConnect.click(); });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════════════════════
+gotoState(S.LOBBY);
+renderer.setSize(window.innerWidth, window.innerHeight, false);
+camera.aspect = window.innerWidth / window.innerHeight;
+camera.updateProjectionMatrix();
+refreshHUD();
+updateCdArc(1); // arc full = ready to shoot
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
