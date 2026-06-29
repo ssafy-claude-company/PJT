@@ -7,7 +7,7 @@ import Dialog from './components/Dialog.vue'
 import SignIn from './components/SignIn.vue'
 import NewChannel from './components/NewChannel.vue'
 import { me, isAuthed, logout } from './user'
-import { toasts } from './toast'
+import { toasts, toast } from './toast'
 import { avatarColor } from './avatar'
 
 const route = useRoute()
@@ -31,7 +31,8 @@ async function onCreateChannel(payload) {
     drawer.value = false
     await load()
     router.push(`/channels/${c.pid}`)
-  } finally { creatingChan.value = false }
+  } catch (e) { toast(e?.response?.data?.detail || '채널을 만들지 못했어요', 'err') }
+  finally { creatingChan.value = false }
 }
 
 async function load() {

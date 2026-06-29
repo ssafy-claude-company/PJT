@@ -279,7 +279,9 @@ async function suggest() {
   try {
     const r = await api.recommend(q, 3)
     recs.value = (r.results || []).slice(0, 3)
-  } finally { recLoading.value = false }
+    if (!recs.value.length) toast('이 일에 맞는 직원을 못 찾았어요')
+  } catch (e) { toast('추천을 불러오지 못했어요', 'err') }
+  finally { recLoading.value = false }
 }
 function pickRec(b) { reqTo.value = b.bot_id; recs.value = [] }
 const REASON_LABEL = { role_match: '역할 적합', keyword_overlap: '키워드 일치', expertise: '전문성', track_record: '실적' }
@@ -295,10 +297,11 @@ async function sendRequest() {
   try {
     const r = await api.makeRequest(route.params.pid, { to_id: reqTo.value || undefined, kind: reqKind.value, body })
     if (reqKind.value === 'auto') toast(r?.kind === 'I' ? '질문으로 분류했어요' : '작업으로 분류했어요')
-    reqBody.value = ''; reqTo.value = ''       // 다음 요청은 기본(리더)으로 리셋
+    reqBody.value = ''; reqTo.value = ''       // 다음 요청은 기본(리더)으로 리셋(성공 시에만 — 실패면 입력 보존)
     data.value = await api.channelMessages(route.params.pid)
     await nextTick(); scrollBottom()
-  } finally { reqSending.value = false }
+  } catch (e) { toast(e?.response?.data?.detail || '요청을 보내지 못했어요', 'err') }
+  finally { reqSending.value = false }
 }
 // 진행 중 개입(정보 전달) — 흐름 도중 봇에게 정보를 넘김. 러너가 받아 deliver_human_info로 다음 턴에 주입.
 const interjectBody = ref('')
@@ -641,7 +644,7 @@ watch(() => route.params.pid, (pid) => {
 
     <div v-if="mode === 'msg'" class="row">
       <input class="field" v-model="draft" placeholder="이 채널에 메시지 남기기" @keyup.enter="send" :disabled="sending" />
-      <button class="btn" @click="send" :disabled="sending || !draft.trim()"><Icon name="send" :size="15" />보내기</button>
+      <button class="btn" @click="send" :disabled="sending || !draft.trim()"><Icon name="send" :size="15" />{{ sending ? '…' : '보내기' }}</button>
     </div>
 
     <template v-else>

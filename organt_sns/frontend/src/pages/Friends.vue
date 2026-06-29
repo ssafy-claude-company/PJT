@@ -34,14 +34,27 @@ async function load() {
     invites.value = inv
   } finally { loading.value = false }
 }
-async function search() {
+let searchTimer = null
+function onSearchInput() {                 // 디바운스 — 키마다 API 안 때리게(300ms)
+  clearTimeout(searchTimer)
   if (!q.value.trim()) { found.value = []; return }
-  searching.value = true
-  try { found.value = await api.people(q.value.trim()) } finally { searching.value = false }
+  searchTimer = setTimeout(search, 300)
 }
+async function search() {
+  const term = q.value.trim()
+  if (!term) { found.value = []; return }
+  searching.value = true
+  try { found.value = await api.people(term) }
+  catch { found.value = [] }               // 네트워크/5xx는 전역 토스트가 알림
+  finally { searching.value = false }
+}
+const acting = ref(false)
 async function act(fn, ok, err) {
+  if (acting.value) return                  // 중복 제출 방지(왕복 중 재클릭 무시)
+  acting.value = true
   try { await fn(); toast(ok) } catch (e) { toast(e?.response?.data?.detail || err, 'err') }
   await load()
+  acting.value = false
 }
 const add = (handle) => act(() => api.addFriend(handle), '친구 요청을 보냈어요', '요청하지 못했어요')
 const acceptFriend = (handle) => act(() => api.acceptFriend(handle), '친구가 됐어요', '수락하지 못했어요')
@@ -92,7 +105,7 @@ onMounted(load)
       <div class="panel" style="margin-bottom:20px">
         <h2>친구 추가</h2>
         <div style="padding:14px">
-          <input v-model="q" placeholder="이름이나 @핸들로 검색" @input="search" />
+          <input v-model="q" placeholder="이름이나 @핸들로 검색" @input="onSearchInput" @keyup.enter="search" />
           <div v-if="found.length" class="results">
             <div v-for="p in found" :key="p.handle" class="prow">
               <span class="pav" :style="{ background: pbg(p) }">{{ ini(p) }}</span>

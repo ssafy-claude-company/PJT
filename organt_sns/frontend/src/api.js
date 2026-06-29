@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { toast } from './toast'
 
 // 개발: vite 프록시가 /api → :8000. 배포: 동일 출처에서 Django가 서빙.
 const http = axios.create({ baseURL: '/api', timeout: 20000 })
@@ -19,6 +20,12 @@ http.interceptors.response.use(
     if (err.response?.status === 401 && !url.includes('/auth/')) {
       localStorage.removeItem('organt_token')
       if (!location.pathname.startsWith('/login')) location.replace('/login')
+    } else if (!err.config?.quiet) {
+      // 조용한 실패 방지 — 네트워크 끊김/타임아웃·서버 5xx는 전역으로 알린다(중복은 toast가 억제).
+      // 4xx(검증 등)는 호출부가 구체 메시지로 처리하므로 여기선 안 띄움. quiet 옵션으로 폴링은 제외 가능.
+      const s = err.response?.status
+      if (!err.response) toast('연결이 불안정해요 — 네트워크를 확인해주세요', 'err')
+      else if (s >= 500) toast('서버에 문제가 생겼어요. 잠시 후 다시 시도해주세요', 'err')
     }
     return Promise.reject(err)
   },

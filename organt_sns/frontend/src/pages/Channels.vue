@@ -5,6 +5,7 @@ import api from '../api'
 import Icon from '../components/Icon.vue'
 import NewChannel from '../components/NewChannel.vue'
 import { monogram, avatarColor } from '../avatar'
+import { toast } from '../toast'
 
 const router = useRouter()
 const channels = ref([])
@@ -44,7 +45,8 @@ async function onCreate({ name, visibility }) {
     if (t && t.goal) { try { await api.makeRequest(c.pid, { kind: 'W', body: t.goal }) } catch (e) { /* 채널은 생성됨 */ } }
     showNew.value = false
     router.push(`/channels/${c.pid}`)
-  } finally { creating.value = false }
+  } catch (e) { toast(e?.response?.data?.detail || '채널을 만들지 못했어요', 'err') }
+  finally { creating.value = false }
 }
 
 onMounted(async () => {

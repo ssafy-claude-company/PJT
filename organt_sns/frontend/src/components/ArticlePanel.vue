@@ -10,6 +10,7 @@ import Icon from './Icon.vue'
 const props = defineProps({ pid: { type: String, required: true } })
 const d = ref(null)
 const loading = ref(true)
+const err = ref(false)
 const tab = ref('out')                       // out=산출물, task=작업(Task)
 
 // 링크 종류별 표현 — 배포는 '라이브'로 강조, 저장소는 'repo', 그 외 '링크'
@@ -18,6 +19,7 @@ const META = {
   repo: { icon: 'folder', label: '저장소', cls: 'repo' },
   link: { icon: 'link', label: '링크', cls: 'link' },
 }
+const mt = (t) => META[t] || META.link        // 알 수 없는 타입이면 'link'로(패널 크래시 방지)
 const deliv = computed(() => d.value?.deliverables || [])
 const tasks = computed(() => d.value?.tasks || [])
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''))
@@ -30,6 +32,7 @@ async function copy(url) {
 
 onMounted(async () => {
   try { d.value = await api.article(props.pid) }
+  catch { err.value = true }
   finally { loading.value = false }
 })
 </script>
@@ -38,6 +41,7 @@ onMounted(async () => {
   <div class="panel article" style="margin:12px 20px 0">
     <h2>산출물 · 작업</h2>
     <div v-if="loading" class="empty" style="padding:22px"><span class="spin"></span></div>
+    <div v-else-if="err" class="empty2" style="padding:22px">산출물을 불러오지 못했어요. 잠시 후 다시 열어보세요.</div>
     <div v-else-if="d" style="padding:14px 16px;display:grid;gap:14px">
       <!-- 목표 · 상태 -->
       <div class="head">
@@ -61,10 +65,10 @@ onMounted(async () => {
         <div v-if="!deliv.length" class="empty2">아직 공개된 산출물이 없어요. 봇이 배포·저장소 링크를 올리면 여기에 모여요.</div>
         <div v-else class="dlist">
           <a v-for="x in deliv" :key="x.url" :href="x.url" target="_blank" rel="noopener"
-             class="dcard" :class="META[x.type].cls">
-            <span class="dico"><Icon :name="META[x.type].icon" :size="16" /></span>
+             class="dcard" :class="mt(x.type).cls">
+            <span class="dico"><Icon :name="mt(x.type).icon" :size="16" /></span>
             <div class="dmain">
-              <div class="dtop"><span class="dbadge" :class="META[x.type].cls">{{ META[x.type].label }}</span>
+              <div class="dtop"><span class="dbadge" :class="mt(x.type).cls">{{ mt(x.type).label }}</span>
                 <span class="dlabel">{{ x.label }}</span></div>
               <div class="durl">{{ short(x.url) }}</div>
             </div>
@@ -94,7 +98,7 @@ onMounted(async () => {
             <div v-if="t.goal && t.goal !== t.title" class="tgoal">{{ clip(t.goal, 180) }}</div>
             <div v-if="t.deliverables && t.deliverables.length" class="tlinks">
               <a v-for="l in t.deliverables" :key="l.url" :href="l.url" target="_blank" rel="noopener"
-                 class="tlink" :class="META[l.type].cls"><Icon :name="META[l.type].icon" :size="12" />{{ l.label }}</a>
+                 class="tlink" :class="mt(l.type).cls"><Icon :name="mt(l.type).icon" :size="12" />{{ l.label }}</a>
             </div>
           </div>
         </div>

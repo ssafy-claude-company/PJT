@@ -5,6 +5,7 @@
 import { ref, onMounted, computed } from 'vue'
 import api from '../api'
 import { toast } from '../toast'
+import { askConfirm } from '../dialog'
 import { me } from '../user'
 import Icon from '../components/Icon.vue'
 
@@ -25,7 +26,7 @@ async function load() {
 }
 async function add() {
   const n = newName.value.trim(); const v = newVal.value.trim()
-  if (!n || !v) { toast('이름과 값을 모두 입력하세요'); return }
+  if (!n || !v) { toast('이름과 값을 모두 입력하세요', 'err'); return }
   saving.value = true
   try { data.value = await api.setSecret(n, v); newName.value = ''; newVal.value = ''; toast(n + ' 저장됨') }
   catch (e) { toast(e?.response?.data?.detail || '저장 실패') }
@@ -41,8 +42,9 @@ async function replace(name) {
   finally { saving.value = false }
 }
 async function remove(name) {
+  if (!await askConfirm({ title: '시크릿 삭제', message: `'${name}' 를 삭제할까요? 되돌릴 수 없어요.`, danger: true })) return
   try { await api.delSecret(name); await load(); toast(name + ' 삭제됨') }
-  catch { toast('삭제 실패') }
+  catch { toast('삭제하지 못했어요', 'err') }
 }
 onMounted(load)
 </script>
@@ -83,9 +85,9 @@ onMounted(load)
 
         <!-- 추가 -->
         <div class="addrow">
-          <input class="k" v-model="newName" placeholder="이름" autocomplete="off" />
+          <input class="k" v-model="newName" placeholder="이름" autocomplete="off" @keyup.enter="add" />
           <input class="v" type="password" v-model="newVal" placeholder="값" autocomplete="off" @keyup.enter="add" />
-          <button class="btn sm" :disabled="saving" @click="add">{{ saving ? '…' : '추가' }}</button>
+          <button class="btn sm" :disabled="saving || !newName.trim() || !newVal.trim()" @click="add">{{ saving ? '…' : '추가' }}</button>
         </div>
       </section>
 

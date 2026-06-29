@@ -8,6 +8,7 @@ import Icon from './Icon.vue'
 const props = defineProps({ pid: { type: String, required: true }, baton: { type: Object, default: null } })
 const d = ref(null)
 const loading = ref(true)
+const err = ref(false)
 
 const initials = (r) => monogram(null, r)
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''))
@@ -20,13 +21,14 @@ const tree = computed(() => {
 })
 const batonHere = computed(() => props.baton && props.baton.project === props.pid && props.baton.role)
 
-onMounted(async () => { try { d.value = await api.collab(props.pid) } finally { loading.value = false } })
+onMounted(async () => { try { d.value = await api.collab(props.pid) } catch { err.value = true } finally { loading.value = false } })
 </script>
 
 <template>
   <div class="panel collab" style="margin:12px 20px 0">
     <h2>협업 한눈에</h2>
     <div v-if="loading" class="empty" style="padding:22px"><span class="spin"></span></div>
+    <div v-else-if="err" class="empty" style="padding:22px;font-size:12.5px;color:var(--text3)">협업 정보를 불러오지 못했어요.</div>
     <div v-else-if="d" style="padding:14px 16px;display:grid;gap:18px">
       <div class="wrap-tags">
         <span v-if="batonHere" class="live-baton"><i class="pulse"></i>{{ batonHere }} 작업 중</span>
