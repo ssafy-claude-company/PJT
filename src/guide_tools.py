@@ -2930,10 +2930,25 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 # (라이브 P-026 18회·P-028 23회)의 뿌리였다. 위임과 동일하게: 즉시 반환하고 deploy_sync는
                 # 인플라이트로 돌려 SYS가 호출 *밖*에서(75초 미적용·idle 720초>빌드 480초) 완주시켜 라이브 URL로
                 # 리더를 재개한다. 베턴은 안 건드린다(배포는 위임 아님) — 동시 재배포는 deploy_inflight가 단속.
+                async def _deploy_heartbeat():
+                    # [살아있음 신호 — 무진행 워치독 오컷의 근본 교정(2026-06, 사용자)] Render 빌드(deploy_sync
+                    # 폴링 ~480초+)가 도는 동안엔 도구·메시지가 없어 last_activity가 침묵한다 → idle 워치독이
+                    # '행'으로 오인해 *잘 돌아가던 배포 흐름을 정지*시켰다. 특히 동시 배포가 여럿이면 Render가
+                    # 경합으로 느려져 빌드가 12~20분을 넘겨 '12분째 진행 없음 → 정지'가 났다(1개만 통과하던 증상).
+                    # 빌드 진행 중 주기적으로 시계를 갱신해 '침묵=죽음' 오판을 없앤다(빌드가 길어도·여러 개여도 안전).
+                    try:
+                        while True:
+                            await asyncio.sleep(30)
+                            flow.last_activity = time.monotonic()
+                    except asyncio.CancelledError:
+                        pass
+                _hb_task = asyncio.ensure_future(_deploy_heartbeat())
                 try:
                     r = await anyio.to_thread.run_sync(deploy_sync, flow.workspace, name, gh, ghu, rk, owner)
                 except Exception as e:
                     r = f"배포 처리 오류: {e}"
+                finally:
+                    _hb_task.cancel()
                 flow.deploy_inflight = False
                 flow.deployed = r                  # 배포 호출됨 기록(SYS의 배포 강제가 중복 안 하게)
                 flow._deployed_once = True
