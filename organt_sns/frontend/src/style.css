@@ -47,6 +47,9 @@ h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.02em}
 /* 작업중(돌아가는 중) vs 잠잠 구분 — 작업중 채널은 이름 또렷+초록 펄스점, 나머진 차분하게. */
 .sb-item.working .nm{color:var(--text);font-weight:600}
 .sb-item .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none;box-shadow:0 0 7px var(--ok);animation:pulse 1.6s infinite}
+/* 작업중 배지 — 밖에서 한눈에 보이게 초록 '작업중' 텍스트 + 펄스 점(점만으론 약했음). */
+.sb-item .work-badge{display:inline-flex;align-items:center;gap:5px;font-size:9.5px;font-weight:700;color:var(--ok);background:var(--ok-soft);border-radius:20px;padding:2px 7px;flex:none;white-space:nowrap}
+.sb-item .work-badge i{width:5px;height:5px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);animation:pulse 1.5s infinite;flex:none}
 .sb-item.archived{opacity:.45}.sb-item .arch-tag{color:var(--text3);font-size:14px;flex:none}
 .sb-add{margin-left:auto;color:var(--text3);cursor:pointer;display:inline-flex;padding:2px;border-radius:5px;border:0;background:none;font:inherit}
 .sb-add:hover{color:var(--text);background:var(--surface)}

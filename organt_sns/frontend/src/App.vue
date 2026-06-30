@@ -149,7 +149,7 @@ async function doLogout() { await logout(); router.replace('/login') }
           <span class="nm">{{ c.name || c.pid }}</span>
           <Icon :name="c.visibility === 'public' ? 'globe' : 'lock'" :size="12" class="vis-ic"
                 :title="c.visibility === 'public' ? '공개 채널' : '비공개 채널'" />
-          <span v-if="chanWorking(c)" class="dot" title="작업 중"></span>
+          <span v-if="chanWorking(c)" class="work-badge"><i></i>작업중</span>
           <span v-else-if="c.role === 'lead'" class="role-pill">리드</span>
         </router-link>
         <div v-if="!myChannels.length" class="sb-hint">
@@ -167,7 +167,7 @@ async function doLogout() { await logout(); router.replace('/login') }
           <span class="nm">{{ c.name || c.pid }}</span>
           <button class="sb-hide" title="내 목록에서 숨기기" @click.prevent.stop="hideChannel(c.pid)"><Icon name="x" :size="13" /></button>
           <Icon v-if="c.status === 'archived'" class="arch-tag" name="archive" :size="14" />
-          <span v-else-if="chanWorking(c)" class="dot" title="작업 중"></span>
+          <span v-else-if="chanWorking(c)" class="work-badge"><i></i>작업중</span>
         </router-link>
         <button v-if="hidden.size" class="sb-unhide" @click="unhideAll">숨긴 채널 {{ hidden.size }}개 다시 보기</button>
         <div v-if="!explore.length && !myChannels.length && !hidden.size" class="empty" style="padding:14px"><span class="spin"></span></div>
