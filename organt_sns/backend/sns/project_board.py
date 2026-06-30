@@ -13,12 +13,20 @@ import re
 from .models import Agent, Event, GuideMessage
 from .guide_format import to_native
 
-_URL = re.compile(r"https?://[^\s)>\]\"'}]+")
+_URL = re.compile(r"https?://[^\s)>\]\"'}`*]+")   # 마크다운(**·`)·코드 경계도 끊어 깨끗이
 # 배포 호스트(라이브 URL) — onrender가 데모 기본. 저장소(repo)와 구분해 '라이브'로 강조.
 _DEPLOY_HOSTS = ("onrender.com", "vercel.app", "netlify.app", "herokuapp.com", "railway.app",
                  "fly.dev", "pages.dev", "github.io", "surge.sh", "web.app", "firebaseapp.com",
                  "cloudfront.net", "deno.dev")
 _REPO_HOSTS = ("github.com", "gitlab.com", "bitbucket.org")
+# 산출물이 *아닌* 링크 — 의존성 CDN·폰트·로컬·예시 호스트는 산출물 카드에서 제외(지성 있는 필터).
+_NOISE_HOSTS = ("cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com", "esm.sh", "cdn.skypack.dev",
+                "fonts.googleapis.com", "fonts.gstatic.com", "ajax.googleapis.com", "polyfill.io",
+                "image.tmdb.org", "img.youtube.com", "via.placeholder.com", "placehold.co",
+                "localhost", "127.0.0.1", "0.0.0.0", "example.com", "example.org",
+                "schema.org", "w3.org", "tailwindcss.com", "bootstrapcdn.com")
+# 미완/템플릿 꼬리 — 의미 있는 ID 없이 끝나는 임베드·이미지 사이즈 스텁(코드에서 긁힌 예시)
+_NOISE_TAILS = ("/embed", "/embed/", "/watch", "/w500", "/w780", "/w1280", "/original", "/api/")
 
 
 def classify_link(url):
@@ -32,7 +40,38 @@ def classify_link(url):
 
 
 def _clean_url(u):
-    return (u or "").rstrip(".,;)]}'\">")
+    u = (u or "").strip()
+    return u.rstrip(".,;:!?)]}'\"> *`")        # 끝 마크다운(**·`·*)·문장부호 제거
+
+
+def _is_deliverable(url):
+    """이 URL이 *실제 산출물*인가 — 의존성 CDN·로컬·예시·템플릿 리터럴·코드조각은 제외(지성 필터)."""
+    if not url or len(url) < 12:               # http://a.bc 미만 = 의미 없음
+        return False
+    if any(t in url for t in ("${", "{{", "}}", "<", ">", "`", "[", "]", " ")):  # 템플릿/코드 조각
+        return False
+    u = url.lower()
+    host_path = re.sub(r"^https?://", "", u).rstrip("/")
+    host = host_path.split("/", 1)[0]
+    if "." not in host or host.startswith(".") or host.endswith("."):
+        return False                            # 호스트 형태 아님
+    if any(h in u for h in _NOISE_HOSTS):       # 의존성 CDN·폰트·예시·로컬
+        return False
+    if any(host_path.endswith(t) or host_path.endswith(t.rstrip("/")) for t in _NOISE_TAILS):
+        return False                            # 미완 임베드/이미지 템플릿 꼬리
+    return True
+
+
+def _site_root(url):
+    """배포 URL은 사이트 루트로 정규화 — 같은 사이트의 /·/health·여러 페이지가 카드 1개로."""
+    m = re.match(r"https?://[^/\s]+", url)
+    return m.group(0) if m else url
+
+
+def _repo_root(url):
+    """저장소 URL은 host/owner/repo로 정규화 — /blob·/tree 등 같은 repo가 카드 1개로."""
+    parts = [p for p in re.sub(r"^https?://", "", url).split("/") if p]
+    return ("https://" + "/".join(parts[:3])) if len(parts) >= 3 else url
 
 
 def _label(url, kind):
@@ -51,15 +90,19 @@ def build_deliverables(proj):
 
     def add(url, ts, role):
         url = _clean_url(url)
-        if not url:
+        if not _is_deliverable(url):         # 의존성·템플릿·예시·코드조각 걸러냄
             return
-        if url in found:                     # 이미 있으면 가장 이른 시각·역할 보존
+        kind = classify_link(url)
+        if kind == "deploy":
+            url = _site_root(url)            # 같은 사이트(/·/health·페이지들) → 카드 1개
+        elif kind == "repo":
+            url = _repo_root(url)            # 같은 repo(/blob·/tree) → 카드 1개
+        if url in found:                     # 중복: 가장 이른 시각·역할 보존
             if ts and (not found[url]["ts"] or ts < found[url]["ts"]):
                 found[url]["ts"] = ts
             if role and not found[url]["by_role"]:
                 found[url]["by_role"] = role
             return
-        kind = classify_link(url)
         found[url] = {"type": kind, "url": url, "label": _label(url, kind),
                       "ts": ts or 0, "by_role": role}
 
