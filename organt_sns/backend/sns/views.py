@@ -356,7 +356,11 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             "summary": _full(e),
         } for e in evs if not _marker(e)]
         # SNS-네이티브 라이브 메시지(GuideMessage) — 스튜디오 요청 + (러너 단계) SnsGuide 출력
-        gms = list(GuideMessage.objects.filter(channel_id=proj.id).exclude(msg_type="status").order_by("msg_id"))
+        # [무한쿼리 캡, HANDOFF §10 A] 종전엔 채널 GuideMessage *전량* 로드 → 긴 채널에서 메모리·지연 폭증
+        # (이벤트는 위에서 이미 limit 캡). 최신 limit개만 DB에서 가져와 시간순으로 — live_status·stuck은
+        # 최근 활동(픽) 기준이라 무영향.
+        gms = list(GuideMessage.objects.filter(channel_id=proj.id).exclude(msg_type="status")
+                   .order_by("-msg_id")[:limit])[::-1]
         live_status = None
         if gms:
             ag = {a.bot_id: a for a in Agent.objects.exclude(bot_id=0)}   # 유령 bot_id=0 제외
@@ -524,7 +528,8 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
         if not (is_owner(proj, cur) or is_member(proj, cur)):
             return Response({"detail": "이 채널의 멤버만 할 수 있어요."}, status=403)
         from .models import EngineHeartbeat
-        gms = list(GuideMessage.objects.filter(channel_id=proj.id))
+        # 최근 윈도우만(무한쿼리 캡) — 멎은 픽은 '작업 중'인 최근 요청이라 최근 400개로 충분.
+        gms = list(GuideMessage.objects.filter(channel_id=proj.id).order_by("-msg_id")[:400])[::-1]
         now = time.time()
         n = 0
         for g in stuck_requests(gms, now, EngineHeartbeat.is_live()):   # 멎음 판정은 messages 표시와 동일 helper로 — 활성 작업은 안 건드림

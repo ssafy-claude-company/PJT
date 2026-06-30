@@ -67,6 +67,8 @@ class SnsGuide:
     async def open_task(self, channel_id, status):
         tid = self._new_id()
         self._thread_channel[tid] = int(channel_id)
+        if len(self._thread_channel) > 2000:           # 장수 러너 메모리 누수 방지(HANDOFF §10 MED) — 오래된
+            self._thread_channel.pop(next(iter(self._thread_channel)))   # 항목 축출(라우팅 폴백 있어 안전)
         block = await sync_to_async(self._write)(
             channel_id=int(channel_id), thread_id=int(channel_id), sender_id=0,
             msg_type="status", body=f"[Task-{getattr(status,'task_id','?')}]",
