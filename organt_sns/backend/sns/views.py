@@ -1,6 +1,6 @@
 """DRF 뷰 — RESTful(F1304). Organt 파생 데이터는 읽기전용(GET), 커뮤니티(쓰레드/댓글/좋아요)는
 사용자가 생성(POST) → 적합한 HTTP Method·status code로 응답."""
-from django.db.models import Count, OuterRef, Subquery, IntegerField, FloatField
+from django.db.models import Count, OuterRef, Subquery, IntegerField, FloatField, Exists
 from django.db.models.functions import Coalesce
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -184,6 +184,10 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
     # 채널별 '마지막 활동 시각' — 사이드바에서 작업중(최근) vs 잠잠(오래됨)을 한눈에 구분하기 위함.
     _last_sq = (GuideMessage.objects.filter(channel_id=OuterRef("id")).exclude(msg_type="status")
                 .order_by("-msg_id").values("ts")[:1])
+    # 채널별 '작업중' — picked=True이고 아직 done_ts 없는 요청이 있나(채널 내부 '작업 중' 판정과 동일).
+    # last_ts(메시지 간격)는 침묵 턴 중인 작업을 놓치고 베턴은 단일·스테일이라, 이 신호가 가장 정확.
+    _work_sq = (GuideMessage.objects.filter(channel_id=OuterRef("id"), sender_id=0,
+                msg_type="request", payload__picked=True).exclude(payload__has_key="done_ts"))
     lookup_field = "pid"
     lookup_value_regex = "[A-Za-z]+-[0-9]+"   # P-(디스코드)·S-(SnsGuide)·U-(스튜디오) 모두
 
@@ -197,6 +201,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             task_count=Coalesce(Subquery(self._task_sq, output_field=IntegerField()), 0),
             message_count=Coalesce(Subquery(self._msg_sq, output_field=IntegerField()), 0),
             last_ts=Subquery(self._last_sq, output_field=FloatField()),
+            working=Exists(self._work_sq),
         ).order_by("-event_count", "-id")
         if cur:
             return qs.filter(Q(visibility="public") | Q(members__person=cur, members__status="active")).distinct()
