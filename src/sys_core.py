@@ -1336,9 +1336,23 @@ class Sys:
         전달할 본문으로 돌려준다(없으면 ''). CLI가 도구 호출을 포기해도 deliver 태스크는 계속 돌므로
         — 일하는 owner를 자르지 않고 결과를 회수하는 게 단일활성·작업 보존의 핵심이다."""
         tasks = [t for t in getattr(flow, "inflight_tasks", ()) if not t.done()]
+        err_note = ""
         if tasks:
             self._log("await_inflight_delegation", n=len(tasks))
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # [위임 실패 가시화(2026-06, 사용자)] 인플라이트 위임 턴이 예외로 죽으면 종전엔 gather가
+            # 조용히 삼켜(return_exceptions) 리더가 결과도 에러도 못 받고 무진행으로 멎어 잘렸다(라이브:
+            # 배승우→진서우 VFX 위임이 세션도 못 만들고 죽은 뒤 흐름 자동중단). 예외를 ① 로그로 남기고
+            # ② 리더에게도 알려 기다리지 말고 재위임/우회하게 한다.
+            errs = [r for r in results
+                    if isinstance(r, BaseException) and not isinstance(r, asyncio.CancelledError)]
+            for e in errs:
+                self._log("inflight_delegation_error", err=f"{type(e).__name__}: {e}"[:300])
+            if errs:
+                err_note = ("\n\n[위임 실패 — 방금 맡긴 작업이 실행 중 오류로 끝나지 못했습니다("
+                            + "; ".join(f"{type(e).__name__}: {e}" for e in errs)[:300]
+                            + "). 기다리지 말고 같은 일을 다시 request(Work)로 보내거나, 같은 직군의 다른 "
+                            "동료에게 맡기세요(필요하면 recruit).]")
         res = getattr(flow, "detached_results", None)
         if res:
             out = ("\n\n[도착한 결과 — 직전에 진행하던 작업(동료 위임·배포·표결 등)이 끝나 결과가 도착했습니다] "
@@ -1348,8 +1362,8 @@ class Sys:
                    "확인해 보고하세요.\n"
                    + "\n".join(res[-3:]))
             del res[:]
-            return out
-        return ""
+            return out + err_note
+        return err_note
 
     async def _auto_continue_owner(self, flow, lead, limit=None) -> str:
         """[구조적 이어가기] 현재 Task의 위임이 '구조적으로 미완'(owner_incomplete — 턴한도·무활동
