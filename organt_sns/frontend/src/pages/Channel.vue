@@ -257,8 +257,16 @@ async function send() {
   const body = draft.value.trim(); if (!body) return
   sending.value = true
   try {
-    const m = await api.say(route.params.pid, { body, author: '사람' })
-    if (data.value?.messages) data.value.messages.push(m)
+    if (liveStatus.value?.state === 'working') {
+      // 작업 중엔 보낸 메시지를 *일하는 봇에게 직접 전달*(끼어들기) — 봇이 다음 턴에 판단·반영한다.
+      // 별도 '개입' 칸 없이, 작업 중 메시지는 자동으로 봇이 받게 한다(봇이 알아서 판단).
+      await api.interject(route.params.pid, { body })
+      data.value = await api.channelMessages(route.params.pid)
+      toast('작업 중인 직원에게 전했어요 — 다음 턴에 반영합니다')
+    } else {
+      const m = await api.say(route.params.pid, { body, author: '사람' })
+      if (data.value?.messages) data.value.messages.push(m)
+    }
     draft.value = ''
     await nextTick(); scrollBottom()
   } catch (e) { toast('메시지를 보내지 못했어요', 'err') }
@@ -302,21 +310,6 @@ async function sendRequest() {
     await nextTick(); scrollBottom()
   } catch (e) { toast(e?.response?.data?.detail || '요청을 보내지 못했어요', 'err') }
   finally { reqSending.value = false }
-}
-// 진행 중 개입(정보 전달) — 흐름 도중 봇에게 정보를 넘김. 러너가 받아 deliver_human_info로 다음 턴에 주입.
-const interjectBody = ref('')
-const interjecting = ref(false)
-async function doInterject() {
-  const body = interjectBody.value.trim()
-  if (!body) return
-  interjecting.value = true
-  try {
-    await api.interject(route.params.pid, { body })
-    interjectBody.value = ''
-    toast('전했어요 — 봇이 다음 턴에 반영합니다')
-    data.value = await api.channelMessages(route.params.pid)
-  } catch (e) { toast(e?.response?.data?.detail || '전하지 못했어요', 'err') }
-  finally { interjecting.value = false }
 }
 
 // 작업 중지 — 진행 중인 협업 흐름을 멈춤(소유자/멤버). 러너가 신호를 받아 SYS.request_cancel.
@@ -521,14 +514,6 @@ watch(() => route.params.pid, (pid) => {
     <button v-if="liveStatus.state === 'working' && (data?.is_owner || data?.is_member)" class="ls-stop" :disabled="stopping" @click="doStop" title="진행 중인 작업을 멈춥니다">{{ stopping ? '…' : '중지' }}</button>
   </div>
 
-  <!-- 진행 중 개입 — 작업 중일 때만. 끼어들어 정보 전하면 봇이 다음 턴에 판단·반영. -->
-  <div v-if="liveStatus && liveStatus.state === 'working' && (data?.is_owner || data?.is_member)" class="interject-bar">
-    <Icon name="send" :size="13" class="ij-ic" />
-    <input class="ij-field" v-model="interjectBody" placeholder="끼어들어 정보 전하기 — 봇이 다음 턴에 반영합니다 (예: 백엔드 코드 다시 봐)"
-           @keyup.enter="doInterject" :disabled="interjecting" />
-    <button class="btn ghost sm" :disabled="interjecting || !interjectBody.trim()" @click="doInterject">{{ interjecting ? '…' : '개입' }}</button>
-  </div>
-
   <CollabPanel v-if="showStruct" :key="route.params.pid" :pid="route.params.pid" :baton="stats?.baton" />
   <ArticlePanel v-if="showArticle" :key="'art-' + route.params.pid" :pid="route.params.pid" />
 
@@ -643,7 +628,8 @@ watch(() => route.params.pid, (pid) => {
     </div>
 
     <div v-if="mode === 'msg'" class="row">
-      <input class="field" v-model="draft" placeholder="이 채널에 메시지 남기기" @keyup.enter="send" :disabled="sending" />
+      <input class="field" v-model="draft" @keyup.enter="send" :disabled="sending"
+             :placeholder="liveStatus && liveStatus.state === 'working' ? '작업 중 — 보내면 일하는 직원이 받아서 반영해요' : '이 채널에 메시지 남기기'" />
       <button class="btn" @click="send" :disabled="sending || !draft.trim()"><Icon name="send" :size="15" />{{ sending ? '…' : '보내기' }}</button>
     </div>
 
