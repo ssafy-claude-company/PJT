@@ -806,3 +806,21 @@ class PickAtomicTest(TestCase):
             # touch/done은 owner 갱신이라 claim 체크 없이 통과
             self.assertEqual(c.post("/api/guide/pick/", {"msg_id": m.msg_id, "touch": True},
                                     format="json").data.get("ok"), True)
+
+
+class QueueDepthThrottleTest(TestCase):
+    """큐 깊이 제한 — 미처리 요청 8건+이면 새 요청 429(토큰 폭주 차단, HANDOFF §10 A). 완료건은 미카운트."""
+    def test_미처리_8건이면_429_완료후_재개(self):
+        from sns.models import Person, Project, GuideMessage
+        Person.objects.create(handle="qd", name="큐", token="tok_qd")
+        proj = Project.objects.create(pid="P-8888", name="큐방", visibility="public")
+        c = APIClient(); c.credentials(HTTP_AUTHORIZATION="Token tok_qd")
+        url = f"/api/projects/{proj.pid}/request/"
+        for i in range(7):                              # 미처리 7건 적재
+            GuideMessage.objects.create(channel_id=proj.id, thread_id=proj.id, sender_id=0,
+                                        msg_type="request", body=f"q{i}", ts=1.0, payload={})
+        self.assertEqual(c.post(url, {"body": "여덟"}, format="json").status_code, 201)   # 7→8 OK
+        self.assertEqual(c.post(url, {"body": "아홉"}, format="json").status_code, 429)   # 8건+ → 차단
+        GuideMessage.objects.filter(channel_id=proj.id, sender_id=0, msg_type="request").update(
+            payload={"done_ts": 1.0})                   # 전부 완료 처리
+        self.assertEqual(c.post(url, {"body": "완료후"}, format="json").status_code, 201)  # 미처리 0 → 재개

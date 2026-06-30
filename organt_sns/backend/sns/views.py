@@ -509,6 +509,15 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
                 return Response({"detail": "담당 직원 지정이 올바르지 않습니다."}, status=400)
             if not Agent.objects.filter(bot_id=to_int).exists():
                 return Response({"detail": "대상 직원을 찾을 수 없습니다."}, status=400)
+        # [큐 깊이 제한 — 무제한 큐잉=토큰 폭주 차단, HANDOFF §10 A] 시간 기반 rate가 아니라 *처리 대기 깊이*를
+        # 제한한다(토큰 폭주의 본질은 미처리 요청 누적). 협업 엔진은 채널당 직렬 처리라 대기 8건이면 이미 꽤 밀린 것.
+        # 사용자 요청은 채널당 소수라 payload만 뽑아 Python 필터(JSONField __isnull은 백엔드별로 누락키 매칭 불안정).
+        _reqs = GuideMessage.objects.filter(channel_id=proj.id, sender_id=0,
+                                            msg_type="request").values_list("payload", flat=True)
+        pending_n = sum(1 for _p in _reqs if not (_p or {}).get("done_ts") and not (_p or {}).get("stopped"))
+        if pending_n >= 8:
+            return Response({"detail": "처리 대기 중인 요청이 많아요(8건+) — 진행되면 더 보내주세요. "
+                                       "협업 엔진이 채널당 차례로 처리합니다."}, status=429)
         m = GuideMessage.objects.create(
             channel_id=proj.id, thread_id=proj.id, sender_id=0, msg_type="request",
             to_id=to_int, kind=kind, body=body[:4000], ts=time.time(),
