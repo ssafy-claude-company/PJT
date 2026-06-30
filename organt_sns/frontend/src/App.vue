@@ -87,7 +87,7 @@ const meBg = computed(() => me.color || avatarColor(me.handle || 'guest'))
 const activeChan = (pid) => !!batonLive.value && batonLive.value.project === pid
 // 작업중(돌아가는 중) 판정 — 베턴 보유(확실) 또는 최근 3분 내 활동. 동시 다중 흐름도 다 잡힌다
 // (베턴은 1개뿐이라 그것만으론 한 채널만 표시됐음). 8초 폴마다 재평가돼 잠잠해지면 곧 꺼진다.
-const chanWorking = (c) => activeChan(c.pid) || (!!c.last_ts && (Date.now() / 1000 - c.last_ts) < 180)
+const chanWorking = (c) => activeChan(c.pid) || (!!c.last_ts && (Date.now() / 1000 - c.last_ts) < 300)
 async function doLogout() { await logout(); router.replace('/login') }
 </script>
 
