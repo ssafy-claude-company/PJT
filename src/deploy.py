@@ -23,6 +23,16 @@ _TERMINAL_FAIL = ("build_failed", "update_failed", "canceled", "deactivated", "p
 _PROTECT = {s.strip() for s in (os.environ.get("ORGANT_PROTECT_SERVICES") or "organt-sns").split(",") if s.strip()}
 
 
+def _mask_secret(text, *secrets):
+    """에러/로그 문자열에서 자격증명(PAT 등)을 마스킹한다 — 토큰 박힌 remote URL이 에러 메시지로 새는 것
+    방지(보안 핫픽스 2026-06)."""
+    s = str(text or "")
+    for sec in secrets:
+        if sec and isinstance(sec, str) and len(sec) >= 8:
+            s = s.replace(sec, "***")
+    return s
+
+
 def _http(method, url, token, data=None, retries=5):
     """응답을 못 받은 경우(네트워크/DNS 실패, 502/503/504 게이트웨이)에만 안전 재시도.
     egress 프록시의 api.render.com DNS 해석이 간헐 실패하므로(요청이 서버에 도달조차 못 함),
@@ -144,14 +154,19 @@ def _onrender_subs(text: str) -> set:
     return set(re.findall(r"https?://([a-z0-9][a-z0-9-]*)\.onrender\.com", text or ""))
 
 
-def _referenced_services(projects_path=None) -> set:
+def _referenced_services(projects_path=None):
     """등록 레지스트리(logs/projects.json)가 아직 참조하는 onrender 서비스명 집합(keep-set).
-    '남아있는 채널이 링크로 가리키는' 서비스 — 풀 정리 시 절대 삭제 금지 대상."""
+    '남아있는 채널이 링크로 가리키는' 서비스 — 풀 정리 시 절대 삭제 금지 대상.
+    [보수 폴백(보안·정확성 핫픽스 2026-06)] 파일이 *있는데 못 읽으면*(parse 실패) None을 돌려준다 —
+    빈 set으로 오인하면 *참조 중 서비스까지 고아로 보고 삭제할 위험*이 있어, 호출부가 '슬롯 정리 자체를
+    건너뛰게' 한다. 파일이 아예 없으면(프로젝트 0) set()(정당한 빈 keep)."""
     p = Path(projects_path) if projects_path else (Path(__file__).resolve().parent.parent / "logs" / "projects.json")
+    if not p.exists():
+        return set()                                  # 프로젝트 없음 = 정당한 빈 keep
     try:
         return _onrender_subs(p.read_text())
     except Exception:
-        return set()
+        return None                                   # 있는데 못 읽음 = '판단 불가' → 호출부가 정리 중단
 
 
 def _list_render_services(render_key) -> list:
@@ -281,7 +296,7 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
     rc, out = _git(["push", "-q", "-f", push_url, "main:main"], stage)
     shutil.rmtree(stage, ignore_errors=True)
     if rc != 0:
-        return f"배포 실패(git push): {out[-300:]}"
+        return f"배포 실패(git push): {_mask_secret(out, gh_pat)[-300:]}"
 
     # 5) 기존 서비스 찾기 → 있으면 재배포, 없으면 생성
     st, svcs = _http("GET", f"{RENDER_API}/services?name={name}&limit=10", render_key)
@@ -301,8 +316,14 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
         # 신규 서비스 생성 전에 풀이 한도에 임박했으면 '참조 없는 고아'를 정리해 슬롯을 확보한다
         # (참조 중 링크는 보존). 한도가 차서 작업이 멈추던 구멍(P-019)을 배포 경로가 스스로 막는다.
         keep = _referenced_services()
-        keep.add(name)
-        _free_slots(render_key, keep, want_free=2)
+        keep_unknown = keep is None     # projects.json 못 읽음 → keep-set 불명
+        if keep_unknown:
+            # [보수 폴백] 참조 목록을 못 읽으면 고아 수거를 *건너뛴다*(빈 keep으로 참조 서비스 오삭제 방지).
+            # 슬롯이 정말 부족하면 신규 생성이 cap에서 실패하고 그건 아래 비-일시 분기/보고로 잡힌다.
+            keep = {name}
+        else:
+            keep.add(name)
+            _free_slots(render_key, keep, want_free=2)
         payload = {"type": "web_service", "name": name, "ownerId": owner_id,
                    "repo": repo_url, "branch": "main", "autoDeploy": "yes",
                    "serviceDetails": {"runtime": "node", "plan": "free", "region": region,
@@ -312,7 +333,7 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
         if st != 201:
             blob = (json.dumps(resp) + " " + str(st)).lower()   # 한도/요금제로 보이면 고아 더 정리 후 1회 재시도
             if any(w in blob for w in ("limit", "maximum", "quota", "exceed", "free", "plan", "402", "429")):
-                if _free_slots(render_key, keep, want_free=3):
+                if not keep_unknown and _free_slots(render_key, keep, want_free=3):
                     st, resp = _http("POST", f"{RENDER_API}/services", render_key, payload)
             if st != 201:
                 # [비-일시 차단 식별 — 무한 재시도 차단] 계정의 무료 서비스가 'billing'으로 모두 정지된

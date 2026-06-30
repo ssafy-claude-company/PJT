@@ -49,3 +49,17 @@ def test_PostToolUse_훅이_행위자_기록():
         e = json.loads((Path(d) / "a.jsonl").read_text(encoding="utf-8").strip())
         assert e["actor"] == 12345 and e["role"] == "봇 AI 전문가(먹이탐색)"
         assert e["tool"] == "Edit"
+
+
+def test_redact_tool_input은_파일내용을_길이로_요약한다():
+    """보안 핫픽스: 감사에 Write/Edit의 파일 내용 전체를 남기지 않고 길이로 요약(경로·도구는 보존)."""
+    from src.audit import redact_tool_input
+    big = "x" * 500
+    out = redact_tool_input({"file_path": "/ws/a.js", "content": big})
+    assert out["file_path"] == "/ws/a.js"                      # 경로 보존
+    assert "500" in out["content"] and "chars" in out["content"]   # 내용 → 길이요약
+    assert "xxxx" not in str(out)                              # 원본 내용 없음
+    out2 = redact_tool_input({"old_string": "y" * 200, "new_string": "z" * 200})
+    assert "chars" in out2["old_string"] and "chars" in out2["new_string"]
+    assert redact_tool_input({"content": "short"})["content"] == "short"   # 짧은 값 보존
+    assert redact_tool_input("notdict") == "notdict"          # 비-dict 그대로

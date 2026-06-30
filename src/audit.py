@@ -7,6 +7,19 @@ import time
 from pathlib import Path
 
 
+def redact_tool_input(tool_input):
+    """감사에 파일 *내용 전체*를 남기지 않는다 — Write/Edit의 content/new_string/old_string을 길이 요약으로
+    대체(경로·도구명은 보존). 민감 내용 유출·audit 비대화 방지(보안 핫픽스 2026-06). 다른 필드는 그대로."""
+    if not isinstance(tool_input, dict):
+        return tool_input
+    out = dict(tool_input)
+    for k in ("content", "new_string", "old_string"):
+        v = out.get(k)
+        if isinstance(v, str) and len(v) > 80:
+            out[k] = f"<{len(v)} chars 생략>"
+    return out
+
+
 class AuditLog:
     """append-only JSONL 기록기."""
 
@@ -42,7 +55,7 @@ def make_post_tool_use_hook(audit: AuditLog, actor=None, role=None, flow=None):
             actor=actor,
             role=role,
             tool=data.get("tool_name"),
-            tool_input=data.get("tool_input"),
+            tool_input=redact_tool_input(data.get("tool_input")),
             tool_use_id=tool_use_id,
         )
         return {}
