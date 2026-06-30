@@ -779,3 +779,30 @@ class SecretVaultTest(TestCase):
         self.assertEqual(creds["GH_PAT"], "ghp_dep")
         only = deploy_creds_for(p, ["RENDER_KEY"])        # 어댑터가 필요한 키만
         self.assertEqual(only, {"RENDER_KEY": "rnd_dep"})
+
+
+class PickAtomicTest(TestCase):
+    """pick 원자성 — 이미 집힌 요청 재클레임은 claimed=False(이중 처리·과금 방지, HANDOFF §10 A)."""
+    def _c(self):
+        from rest_framework.test import APIClient
+        c = APIClient(); c.credentials(HTTP_AUTHORIZATION="Bearer test_pick_tok"); return c
+
+    def test_재클레임은_claimed_false_unpick후_재클레임_가능(self):
+        from django.test import override_settings
+        from sns.models import GuideMessage, Project
+        with override_settings(ORGANT_GUIDE_TOKEN="test_pick_tok"):
+            proj = Project.objects.create(pid="P-7777", name="픽", visibility="public")
+            m = GuideMessage.objects.create(channel_id=proj.id, thread_id=proj.id, sender_id=0,
+                                            msg_type="request", body="ㄱ", payload={}, ts=1.0)
+            c = self._c()
+            r1 = c.post("/api/guide/pick/", {"msg_id": m.msg_id}, format="json")
+            self.assertTrue(r1.data.get("claimed"))               # 첫 클레임 성공
+            r2 = c.post("/api/guide/pick/", {"msg_id": m.msg_id}, format="json")
+            self.assertFalse(r2.data.get("claimed"))              # 재클레임 패배(이미 집힘)
+            self.assertTrue(r2.data.get("already_picked"))
+            c.post("/api/guide/pick/", {"msg_id": m.msg_id, "unpick": True}, format="json")
+            r3 = c.post("/api/guide/pick/", {"msg_id": m.msg_id}, format="json")
+            self.assertTrue(r3.data.get("claimed"))               # unpick 후 재클레임 가능
+            # touch/done은 owner 갱신이라 claim 체크 없이 통과
+            self.assertEqual(c.post("/api/guide/pick/", {"msg_id": m.msg_id, "touch": True},
+                                    format="json").data.get("ok"), True)

@@ -100,24 +100,32 @@ def _local_pending(seen):
 
 
 def _local_pick(msg_id, done=False, touch=False, unpick=False, idle=None):
-    m = GuideMessage.objects.filter(msg_id=msg_id).first()
-    if not m:
-        return
-    p = dict(m.payload or {})
-    if unpick:                                   # 백스톱 컷 재개 — 픽 해제(다시 큐로, 같은 러너가 이어받게)
-        p.pop("picked", None); p.pop("done_ts", None); p.pop("picked_ts", None)
+    # [원자성 — pick 레이스 차단, guide_bridge.pick과 동형] select_for_update로 행 잠금.
+    # claim(집기)을 이미 집힌 행에 시도하면 False 반환 → 호출자가 이중 처리 방지.
+    from django.db import transaction
+    is_claim = not (unpick or done or touch)
+    with transaction.atomic():
+        m = GuideMessage.objects.select_for_update().filter(msg_id=msg_id).first()
+        if not m:
+            return False
+        p = dict(m.payload or {})
+        if is_claim and p.get("picked"):
+            return False                             # 레이스 패배 — 재처리 금지
+        if unpick:                                   # 백스톱 컷 재개 — 픽 해제(다시 큐로)
+            p.pop("picked", None); p.pop("done_ts", None); p.pop("picked_ts", None)
+            GuideMessage.objects.filter(msg_id=msg_id).update(payload=p)
+            return True
+        if idle is not None:
+            p["idle_s"] = int(idle)                  # 실제 무진행(초) — 정직한 '조용' 표시용
+        p["picked"] = True
+        if done:
+            p["done_ts"] = time.time()
+        elif touch:
+            p["picked_ts"] = time.time()             # 진행 갱신 — 긴 흐름이 '멎음'으로 오판되지 않게
+        else:
+            p.setdefault("picked_ts", time.time())   # 멎은 요청 판정용
         GuideMessage.objects.filter(msg_id=msg_id).update(payload=p)
-        return
-    if idle is not None:
-        p["idle_s"] = int(idle)                  # 실제 무진행(초) — 정직한 '조용' 표시용(메시지 간격이 아니라 도구활동 정지 기준)
-    p["picked"] = True
-    if done:
-        p["done_ts"] = time.time()
-    elif touch:
-        p["picked_ts"] = time.time()             # 진행 갱신 — 긴 흐름이 '멎음'으로 오판되지 않게
-    else:
-        p.setdefault("picked_ts", time.time())   # 멎은 요청 판정(픽 후 무응답 경과)용
-    GuideMessage.objects.filter(msg_id=msg_id).update(payload=p)
+    return True
 
 
 def _local_stop_pending(channel_id):
@@ -212,7 +220,8 @@ class Command(BaseCommand):
                 body = {"msg_id": mid, "done": done, "touch": touch, "unpick": unpick}
                 if idle is not None:
                     body["idle"] = int(idle)
-                await guide._post("/api/guide/pick/", body)
+                res = await guide._post("/api/guide/pick/", body)
+                return (res or {}).get("claimed", True)   # claim 패배만 False(구버전/비-claim 응답은 True)
 
             async def _beat():
                 await guide._post("/api/guide/heartbeat/", {"note": "remote"})
@@ -241,7 +250,7 @@ class Command(BaseCommand):
                 return await sync_to_async(_local_pending)(seen)
 
             async def mark_pick(mid, done=False, touch=False, unpick=False, idle=None):
-                await sync_to_async(_local_pick)(mid, done, touch, unpick, idle)
+                return await sync_to_async(_local_pick)(mid, done, touch, unpick, idle)
 
             async def _beat():
                 from sns.models import EngineHeartbeat
@@ -406,7 +415,9 @@ class Command(BaseCommand):
                         await _check_stop(ch)            # stale stop 소거(이전 흐름 잔여 신호)
                     except Exception:
                         pass
-                    await mark_pick(mid)
+                    if not await mark_pick(mid):
+                        seen.discard(mid)               # 클레임 패배(다른 폴/러너가 집음) — 큐에 남겨 이중 처리 방지
+                        continue
                     ORIGIN_CHANNEL.set(ch)               # task-로컬 라우팅(동시 안전 — create_task가 context 복사)
                     inflight[mid] = {"task": asyncio.create_task(sysm.route_channel_request(ch, req)), "ch": ch, "t0": _now}
                     busy_ch.add(ch); busy_lead.add(to_id)

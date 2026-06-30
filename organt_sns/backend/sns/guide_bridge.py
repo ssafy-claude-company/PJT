@@ -12,10 +12,12 @@
 
   인증: Authorization: Bearer <ORGANT_GUIDE_TOKEN>. 토큰 미설정이면 비활성(fail-closed) — 아무도 못 씀.
 """
+import hmac
 import json
 import time
 
 from django.conf import settings
+from django.db import transaction
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -29,11 +31,19 @@ def _authed(request):
     if not token:
         return False                                  # fail-closed: 토큰 미설정 = 비활성
     got = (request.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
-    return bool(got) and got == token
+    # 타이밍-안전 비교(HANDOFF §10 A — `==`는 길이/내용에 따라 조기 반환해 토큰 추측에 미세 단서).
+    return bool(got) and hmac.compare_digest(got, token)
 
 
 def _deny():
     return Response({"detail": "guide bridge 비활성 또는 인증 실패"}, status=status.HTTP_403_FORBIDDEN)
+
+
+def _cap_body(s, n=200000):
+    """무계 입력 방어(HANDOFF §10 MED). 한도는 매우 관대(정상 봇 보고는 수 KB) — 표기 없이 자르지 않는다
+    (NEW_SESSION_GUIDE '침묵 절단 금지': 내용이 곧 산출물이면 잘림을 그 자리에 남긴다)."""
+    s = str(s or "")
+    return s if len(s) <= n else s[:n] + "\n…[길이 한도 초과로 잘림]"
 
 
 @api_view(["POST"])
@@ -48,7 +58,7 @@ def ingest(request):
     try:
         if op == "edit_message":
             GuideMessage.objects.filter(msg_id=int(d["message_id"])).update(
-                body=str(d.get("body", "")), edited=True)
+                body=_cap_body(d.get("body", "")), edited=True)
             return Response({"ok": True})
         if op == "update_status":
             GuideMessage.objects.filter(msg_id=int(d["status_msg_id"])).update(
@@ -60,7 +70,7 @@ def ingest(request):
             sender_id=int(d.get("sender_id") or 0), msg_type=d.get("msg_type", "plain"),
             to_id=(int(d["to_id"]) if d.get("to_id") else None),
             kind=(d.get("kind") or ""), reply_to=(int(d["reply_to"]) if d.get("reply_to") else None),
-            body=str(d.get("body", "")), payload=d.get("payload") or {}, ts=now)
+            body=_cap_body(d.get("body", "")), payload=d.get("payload") or {}, ts=now)
     except (KeyError, TypeError, ValueError) as e:
         return Response({"detail": f"필드 오류: {e}"}, status=status.HTTP_400_BAD_REQUEST)
     return Response({"msg_id": m.msg_id}, status=status.HTTP_201_CREATED)
@@ -111,26 +121,34 @@ def pick(request):
         mid = int(request.data["msg_id"])
     except (KeyError, TypeError, ValueError):
         return Response({"detail": "msg_id가 올바르지 않습니다."}, status=status.HTTP_400_BAD_REQUEST)
-    m = GuideMessage.objects.filter(msg_id=mid).first()
-    if not m:
-        return Response({"detail": "없음"}, status=status.HTTP_404_NOT_FOUND)
-    p = dict(m.payload or {})
-    if request.data.get("unpick"):                    # 재처리용 — picked 해제(중단된 요청 다시 큐로)
-        p.pop("picked", None)
-        p.pop("done_ts", None)
-        p.pop("picked_ts", None)
-    else:
-        p["picked"] = True
-        if request.data.get("idle") is not None:
-            p["idle_s"] = int(request.data["idle"])   # 실제 무진행(초) — 정직한 '조용'용(메시지 간격 아닌 도구활동 정지)
-        if request.data.get("done"):
-            p["done_ts"] = time.time()
-        elif request.data.get("touch"):
-            p["picked_ts"] = time.time()              # 진행 갱신 — 긴 흐름이 '멎음'으로 오판되지 않게(러너 생존 중 갱신)
+    # [원자성 — pick 레이스(이중 과금) 차단, HANDOFF §10 A] 종전 read-modify-write는 동시 폴/러너가
+    # 같은 payload를 읽어 둘 다 '집음'으로 쓰면 한 요청을 두 번 처리(이중 토큰 과금)할 수 있었다.
+    # select_for_update로 행을 잠가 직렬화한다(Postgres 행 잠금 · SQLite no-op라 테스트 무해).
+    is_claim = not (request.data.get("unpick") or request.data.get("done") or request.data.get("touch"))
+    with transaction.atomic():
+        m = GuideMessage.objects.select_for_update().filter(msg_id=mid).first()
+        if not m:
+            return Response({"detail": "없음"}, status=status.HTTP_404_NOT_FOUND)
+        p = dict(m.payload or {})
+        if is_claim and p.get("picked"):
+            # 다른 러너/폴이 이미 집음 — 레이스 패배. 재처리 금지(claimed=False).
+            return Response({"ok": False, "claimed": False, "already_picked": True})
+        if request.data.get("unpick"):                # 재처리용 — picked 해제(중단된 요청 다시 큐로)
+            p.pop("picked", None)
+            p.pop("done_ts", None)
+            p.pop("picked_ts", None)
         else:
-            p.setdefault("picked_ts", time.time())    # 멎은 요청 판정(픽 후 무응답 경과)용
-    GuideMessage.objects.filter(msg_id=mid).update(payload=p)
-    return Response({"ok": True})
+            p["picked"] = True
+            if request.data.get("idle") is not None:
+                p["idle_s"] = int(request.data["idle"])   # 실제 무진행(초) — 정직한 '조용'용
+            if request.data.get("done"):
+                p["done_ts"] = time.time()
+            elif request.data.get("touch"):
+                p["picked_ts"] = time.time()          # 진행 갱신 — 긴 흐름이 '멎음'으로 오판되지 않게
+            else:
+                p.setdefault("picked_ts", time.time())    # 멎은 요청 판정용
+        GuideMessage.objects.filter(msg_id=mid).update(payload=p)
+    return Response({"ok": True, "claimed": True} if is_claim else {"ok": True})
 
 
 @api_view(["POST"])
@@ -165,10 +183,12 @@ def thread(request):
         return _deny()
     try:
         tid = int(request.query_params.get("thread_id"))
-        limit = int(request.query_params.get("limit", 50))
+        limit = max(1, min(500, int(request.query_params.get("limit", 50))))   # clamp(무한 limit 방지)
     except (TypeError, ValueError):
         return Response({"detail": "thread_id가 올바르지 않습니다."}, status=status.HTTP_400_BAD_REQUEST)
-    rows = list(GuideMessage.objects.filter(thread_id=tid).order_by("msg_id"))[-limit:]
+    # ORM 슬라이스(HANDOFF §10 A 무한쿼리) — 종전엔 스레드 *전량*을 파이썬으로 로드 후 [-limit:].
+    # 최신 limit개만 DB에서 가져와 시간순으로 되돌린다(긴 스레드 메모리·지연 방지).
+    rows = list(GuideMessage.objects.filter(thread_id=tid).order_by("-msg_id")[:limit])[::-1]
     return Response({"rows": [
         {"msg_id": m.msg_id, "msg_type": m.msg_type, "sender_id": m.sender_id, "to_id": m.to_id,
          "kind": m.kind, "reply_to": m.reply_to, "body": m.body} for m in rows]})
