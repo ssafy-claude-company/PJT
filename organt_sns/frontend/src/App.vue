@@ -85,6 +85,9 @@ const engineLive = computed(() => !!stats.value?.engine?.live)
 const pendingCount = computed(() => (stats.value?.pending?.friend_requests || 0) + (stats.value?.pending?.invites || 0))
 const meBg = computed(() => me.color || avatarColor(me.handle || 'guest'))
 const activeChan = (pid) => !!batonLive.value && batonLive.value.project === pid
+// 작업중(돌아가는 중) 판정 — 베턴 보유(확실) 또는 최근 3분 내 활동. 동시 다중 흐름도 다 잡힌다
+// (베턴은 1개뿐이라 그것만으론 한 채널만 표시됐음). 8초 폴마다 재평가돼 잠잠해지면 곧 꺼진다.
+const chanWorking = (c) => activeChan(c.pid) || (!!c.last_ts && (Date.now() / 1000 - c.last_ts) < 180)
 async function doLogout() { await logout(); router.replace('/login') }
 </script>
 
@@ -139,13 +142,13 @@ async function doLogout() { await logout(); router.replace('/login') }
           <button class="sb-add" title="새 채널" aria-label="새 채널" @click="newChannel"><Icon name="plus" :size="16" /></button>
         </div>
         <router-link v-for="c in myChannels" :key="c.pid" :to="`/channels/${c.pid}`"
-                     class="sb-item" :class="{ active: activePid === c.pid, archived: c.status === 'archived' }">
+                     class="sb-item" :class="{ active: activePid === c.pid, archived: c.status === 'archived', working: chanWorking(c) }">
           <Icon class="ic" name="hash" :size="15" />
           <span class="nm">{{ c.name || c.pid }}</span>
           <Icon :name="c.visibility === 'public' ? 'globe' : 'lock'" :size="12" class="vis-ic"
                 :title="c.visibility === 'public' ? '공개 채널' : '비공개 채널'" />
-          <span v-if="c.role === 'lead'" class="role-pill">리드</span>
-          <span v-else-if="activeChan(c.pid)" class="dot" title="지금 활동 중"></span>
+          <span v-if="chanWorking(c)" class="dot" title="작업 중"></span>
+          <span v-else-if="c.role === 'lead'" class="role-pill">리드</span>
         </router-link>
         <div v-if="!myChannels.length" class="sb-hint">
           <Icon name="plus" :size="13" /> 채널을 만들거나 친구에게 초대받으면 여기에 모여요.
@@ -157,12 +160,12 @@ async function doLogout() { await logout(); router.replace('/login') }
         </div>
         <input v-if="explore.length > 6" v-model="q" class="field sb-search" placeholder="채널 검색" />
         <router-link v-for="c in shownExplore" :key="c.pid" :to="`/channels/${c.pid}`"
-                     class="sb-item explore-item" :class="{ active: activePid === c.pid, archived: c.status === 'archived' }">
+                     class="sb-item explore-item" :class="{ active: activePid === c.pid, archived: c.status === 'archived', working: chanWorking(c) }">
           <Icon class="ic" name="hash" :size="15" />
           <span class="nm">{{ c.name || c.pid }}</span>
           <button class="sb-hide" title="내 목록에서 숨기기" @click.prevent.stop="hideChannel(c.pid)"><Icon name="x" :size="13" /></button>
           <Icon v-if="c.status === 'archived'" class="arch-tag" name="archive" :size="14" />
-          <span v-else-if="activeChan(c.pid)" class="dot" title="지금 활동 중"></span>
+          <span v-else-if="chanWorking(c)" class="dot" title="작업 중"></span>
         </router-link>
         <button v-if="hidden.size" class="sb-unhide" @click="unhideAll">숨긴 채널 {{ hidden.size }}개 다시 보기</button>
         <div v-if="!explore.length && !myChannels.length && !hidden.size" class="empty" style="padding:14px"><span class="spin"></span></div>

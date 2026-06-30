@@ -43,8 +43,10 @@ h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.02em}
 .sb-item.active{background:var(--accent-soft);color:#fff}
 .sb-item.active .ic{color:var(--accent2)}
 .sb-item .ic{color:var(--text3);font-size:16px}
-.sb-item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sb-item .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none;box-shadow:0 0 7px var(--ok)}
+.sb-item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)}
+/* 작업중(돌아가는 중) vs 잠잠 구분 — 작업중 채널은 이름 또렷+초록 펄스점, 나머진 차분하게. */
+.sb-item.working .nm{color:var(--text);font-weight:600}
+.sb-item .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none;box-shadow:0 0 7px var(--ok);animation:pulse 1.6s infinite}
 .sb-item.archived{opacity:.45}.sb-item .arch-tag{color:var(--text3);font-size:14px;flex:none}
 .sb-add{margin-left:auto;color:var(--text3);cursor:pointer;display:inline-flex;padding:2px;border-radius:5px;border:0;background:none;font:inherit}
 .sb-add:hover{color:var(--text);background:var(--surface)}

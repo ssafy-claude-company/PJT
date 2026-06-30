@@ -1,6 +1,6 @@
 """DRF 뷰 — RESTful(F1304). Organt 파생 데이터는 읽기전용(GET), 커뮤니티(쓰레드/댓글/좋아요)는
 사용자가 생성(POST) → 적합한 HTTP Method·status code로 응답."""
-from django.db.models import Count, OuterRef, Subquery, IntegerField
+from django.db.models import Count, OuterRef, Subquery, IntegerField, FloatField
 from django.db.models.functions import Coalesce
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -181,6 +181,9 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
     # GuideMessage는 Project FK가 아니라 channel_id(=proj.id)로 묶인다.
     _msg_sq = (GuideMessage.objects.filter(channel_id=OuterRef("id")).exclude(msg_type="status")
                .values("channel_id").annotate(c=Count("msg_id")).values("c"))
+    # 채널별 '마지막 활동 시각' — 사이드바에서 작업중(최근) vs 잠잠(오래됨)을 한눈에 구분하기 위함.
+    _last_sq = (GuideMessage.objects.filter(channel_id=OuterRef("id")).exclude(msg_type="status")
+                .order_by("-msg_id").values("ts")[:1])
     lookup_field = "pid"
     lookup_value_regex = "[A-Za-z]+-[0-9]+"   # P-(디스코드)·S-(SnsGuide)·U-(스튜디오) 모두
 
@@ -193,6 +196,7 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             event_count=Coalesce(Subquery(self._ev_sq, output_field=IntegerField()), 0),
             task_count=Coalesce(Subquery(self._task_sq, output_field=IntegerField()), 0),
             message_count=Coalesce(Subquery(self._msg_sq, output_field=IntegerField()), 0),
+            last_ts=Subquery(self._last_sq, output_field=FloatField()),
         ).order_by("-event_count", "-id")
         if cur:
             return qs.filter(Q(visibility="public") | Q(members__person=cur, members__status="active")).distinct()

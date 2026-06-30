@@ -67,12 +67,13 @@ class ProjectSerializer(serializers.ModelSerializer):
     event_count = serializers.IntegerField(read_only=True, required=False)
     task_count = serializers.IntegerField(read_only=True, required=False)
     message_count = serializers.IntegerField(read_only=True, required=False)
+    last_ts = serializers.FloatField(read_only=True, required=False)
     owner_handle = serializers.CharField(source="owner.handle", default=None, read_only=True)
 
     class Meta:
         model = Project
         fields = ["id", "pid", "name", "leader", "leader_role", "status",
-                  "event_count", "task_count", "message_count", "owner_handle", "visibility"]
+                  "event_count", "task_count", "message_count", "last_ts", "owner_handle", "visibility"]
 
 
 class ProjectDetailSerializer(ProjectSerializer):
