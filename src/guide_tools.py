@@ -2902,7 +2902,17 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
             gh, ghu = os.environ.get("GH_PAT"), os.environ.get("GH_USER")
             rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")
             if not (gh and ghu and rk and owner):
-                return _ok("배포 불가: 배포 자격증명(GH_PAT/GH_USER/RENDER_KEY/RENDER_OWNER)이 설정되지 않았습니다.")
+                # [하드블록 — 스핀 차단(2026-06, 사용자)] 자격증명 없음은 봇이 *코드로 못 푸는 인프라 벽*이다.
+                # 종전엔 봇이 재검증·재시도만 반복(act_count↑=가짜 진행)해 며칠씩 루프하다 무진행 컷났다
+                # (라이브 fps: 배포-자격증명 벽에서 121메시지·4.5일). 막힘을 카운트해 2회째엔 흐름을 '하드블록'
+                # 표시 → 이어가기 루프가 멈춰(사람에게 넘기고) 깔끔히 종결한다.
+                flow._deploy_block_n = getattr(flow, "_deploy_block_n", 0) + 1
+                if flow._deploy_block_n >= 2:
+                    flow._hard_blocked = "배포 자격증명 미설정"
+                return _ok("배포 불가: 배포 자격증명(GH_PAT/GH_USER/RENDER_KEY/RENDER_OWNER)이 없습니다. "
+                           "이건 **코드로 못 푸는 인프라 블록**이라 재시도·재검증해도 똑같이 막힙니다 — 프로젝트 "
+                           "소유자가 금고(설정→환경변수)에 그 키들을 넣어야 합니다. 그 사실을 **보고하고 이번 "
+                           "작업을 마무리**하세요(같은 배포를 다시 시도하지 마세요).")
             if not getattr(flow, "workspace", None):
                 return _ok("배포 불가: 작업공간이 없습니다.")
             # [배포 타겟 호환 사전검증 — 첫 배포 전에(2026-06-22 P-028)] Render Node 런타임엔 Python이 없다 —

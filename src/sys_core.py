@@ -2098,7 +2098,10 @@ class Sys:
             # 같은 세션으로 이어서 완료까지 재호출한다 — '턴 한도 = 무조건 中断' 결함 해소.
             cont = 0
             while ((flow.current is not None or "턴 한도 도달" in (result or ""))
-                   and cont < self.max_continue and not flow.cancelled):   # [사용자 중지] 이어가기 멈춤
+                   and cont < self.max_continue and not flow.cancelled
+                   # [하드블록 종결] 봇이 못 푸는 인프라 벽(배포 자격증명 등)에 막히면 재시도 루프를 멈춘다 —
+                   # 가짜 진행(재검증)으로 며칠씩 빙빙 돌다 무진행 컷나던 것 차단. 사람에게 넘기고 깔끔히 끝냄.
+                   and not getattr(flow, "_hard_blocked", None)):   # [사용자 중지] 이어가기 멈춤
                 # [단일활성 복원] 리더 턴이 끝났는데 위임이 아직 '완주 중'이면(CLI가 도구 호출을 포기해
                 # detach됐거나, 턴 한도로 끊겼지만 deliver 태스크는 살아 있음) — 그 위임을 죽이지 않고
                 # **끝까지 기다린다**. 일하는 owner를 드레인으로 자르던 것(작업 유실·재위임 churn·'오유진
