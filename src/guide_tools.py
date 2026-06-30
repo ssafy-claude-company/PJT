@@ -2899,8 +2899,22 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                 return _ok("배포 불가: 미등록 흐름은 배포 슬롯이 없습니다 — 배포는 프로젝트마다"
                            "(P-번호 슬롯, organt-p-00n) 설정됩니다. create_project로 등록한 뒤 "
                            "다시 배포하세요.")
+            # [BYO 자격증명 — 소유자 금고에서(2026-06, 구조 수정)] 배포 키를 전역 env가 아니라 *프로젝트
+            # 소유자의 금고*에서 가져온다(매체가 지원하면 — SNS는 owner PersonSecret, Discord는 메서드 없어 env 폴백).
+            # 각 사용자가 자기 키로 자기 프로젝트를 배포(env 땜빵 제거). 금고 키가 env를 우선(소유자 계정 배포).
             gh, ghu = os.environ.get("GH_PAT"), os.environ.get("GH_USER")
             rk, owner = os.environ.get("RENDER_KEY"), os.environ.get("RENDER_OWNER")
+            _vault = getattr(getattr(flow, "guide", None), "deploy_creds", None)
+            if _vault:
+                try:
+                    vc = await _vault(getattr(flow, "project_channel", None)) or {}
+                    gh = vc.get("GH_PAT") or gh
+                    ghu = vc.get("GH_USER") or ghu
+                    rk = vc.get("RENDER_KEY") or rk
+                    owner = vc.get("RENDER_OWNER") or owner
+                except Exception as _e:
+                    if flow.log:
+                        flow.log("deploy_creds_vault_err", err=str(_e)[:120])
             if not (gh and ghu and rk and owner):
                 # [하드블록 — 스핀 차단(2026-06, 사용자)] 자격증명 없음은 봇이 *코드로 못 푸는 인프라 벽*이다.
                 # 종전엔 봇이 재검증·재시도만 반복(act_count↑=가짜 진행)해 며칠씩 루프하다 무진행 컷났다

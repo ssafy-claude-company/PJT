@@ -181,6 +181,16 @@ class HttpSnsGuide:
     async def get_guild_bot_nicks(self, guild_id): return None
     async def not_in_guild(self, guild_id, user_ids): return []
 
+    async def deploy_creds(self, channel_id):
+        """배포 자격증명(BYO) — 채널 프로젝트 소유자 금고에서. 브리지가 서버 내부에서만 복호화해 내려준다."""
+        if not channel_id:
+            return {}
+        try:
+            res = await self._get("/api/guide/deploy_creds/", {"channel": int(channel_id)})
+        except Exception:
+            return {}
+        return (res or {}).get("creds", {}) or {}
+
     @staticmethod
     def invite_url(app_id, perms=None):
         return f"(SNS 봇 #{app_id} — 초대 불필요)"

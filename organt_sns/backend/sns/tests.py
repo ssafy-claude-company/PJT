@@ -720,6 +720,31 @@ class SecretVaultTest(TestCase):
         self.assertNotIn("supersecret", ps.value_enc)           # DB는 암호문
         self.assertEqual(decrypt(ps.value_enc), "rnd_supersecret123")   # 서버만 복호화
 
+    def test_BYO_브리지_채널소유자_금고에서_배포자격증명_복호화(self):
+        from django.test import override_settings
+        from sns.models import Project, PersonSecret
+        from sns.secrets_vault import encrypt
+        p = self._person("byo_owner")
+        for n, v in [("RENDER_KEY", "rnd_K9"), ("GH_PAT", "ghp_P1"),
+                     ("GH_USER", "byouser"), ("RENDER_OWNER", "tea-byo")]:
+            PersonSecret.objects.create(person=p, name=n, value_enc=encrypt(v), hint="x")
+        proj = Project.objects.create(pid="X-9999", name="byo 채널", owner=p, visibility="public")
+        with override_settings(ORGANT_GUIDE_TOKEN="test_byo_guide_tok"):
+            c = APIClient()
+            # 인증 없음(러너 토큰 아님) → 403, 자격증명 안 나감
+            self.assertEqual(c.get(f"/api/guide/deploy_creds/?channel={proj.id}").status_code, 403)
+            # 러너 토큰 → 그 채널 *소유자* 금고에서 복호화한 키
+            c.credentials(HTTP_AUTHORIZATION="Bearer test_byo_guide_tok")
+            r = c.get(f"/api/guide/deploy_creds/?channel={proj.id}")
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.data["creds"]["RENDER_KEY"], "rnd_K9")
+            self.assertEqual(r.data["creds"]["GH_PAT"], "ghp_P1")
+            self.assertEqual(r.data["creds"]["RENDER_OWNER"], "tea-byo")
+            # 없는 채널/소유자 → 빈 creds(안전 폴백, 500 아님)
+            r2 = c.get("/api/guide/deploy_creds/?channel=999999")
+            self.assertEqual(r2.status_code, 200)
+            self.assertEqual(r2.data["creds"], {})
+
     def test_임의_이름_범용저장_플랫폼_무관(self):
         # 금고는 Render 전용이 아니다 — 어떤 이름이든 저장(VERCEL_TOKEN·임의 키). 고정칸 없음.
         self._person()

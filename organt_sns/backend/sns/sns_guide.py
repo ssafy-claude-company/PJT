@@ -170,6 +170,18 @@ class SnsGuide:
     async def get_guild_bot_nicks(self, guild_id): return None
     async def not_in_guild(self, guild_id, user_ids): return []
 
+    async def deploy_creds(self, channel_id):
+        """배포 자격증명(BYO) — 채널의 프로젝트 *소유자 금고*에서 복호화한 키. 봇이 전역 env가 아니라
+        각 소유자 키로 배포한다. 서버 내부 전용(사람 API로는 안 나감)."""
+        if not channel_id:
+            return {}
+        def _get():
+            from .models import Project
+            from .social import deploy_creds_for
+            proj = Project.objects.filter(id=int(channel_id)).select_related("owner").first()
+            return deploy_creds_for(proj.owner) if (proj and proj.owner) else {}
+        return await sync_to_async(_get)()
+
     @staticmethod
     def invite_url(app_id, perms=None):
         return f"(SNS 봇 #{app_id} — 초대 불필요, DB 정체성)"

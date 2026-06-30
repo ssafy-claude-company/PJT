@@ -27,6 +27,7 @@ urlpatterns = [
     path("guide/stops/", guide_bridge.stops, name="guide-stops"),
     path("guide/stop_channel/", guide_bridge.stop_channel, name="guide-stop-channel"),
     path("guide/interjects/", guide_bridge.interjects, name="guide-interjects"),
+    path("guide/deploy_creds/", guide_bridge.deploy_creds, name="guide-deploy-creds"),
     # 인증(회원가입/로그인) — 핸들+비밀번호, 토큰 발급
     path("auth/register/", social.register, name="register"),
     path("auth/login/", social.login, name="login"),

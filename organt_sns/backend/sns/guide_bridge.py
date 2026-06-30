@@ -227,3 +227,25 @@ def interjects(request):
         InterjectSignal.objects.filter(id__in=[s.id for s in sigs]).delete()
     return Response({"infos": [{"channel_id": s.channel_id, "target_id": s.target_id, "text": s.text}
                                for s in sigs]})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def deploy_creds(request):
+    """배포 자격증명(BYO) — `?channel=`의 프로젝트 *소유자 금고*에서 복호화한 배포 키를 반환한다. 봇이 전역
+    env가 아니라 각 프로젝트 소유자의 키로 배포(자기 키·자기 책임). 복호화는 *서버 내부에서만* — 사람 API로는
+    절대 안 나가는 값이다(러너만 이 엔드포인트로 받음, 토큰 인증 필수)."""
+    if not _authed(request):
+        return _deny()
+    ch = request.query_params.get("channel")
+    if not ch:
+        return Response({"creds": {}})
+    try:
+        ch = int(ch)
+    except (TypeError, ValueError):
+        return Response({"detail": "channel이 올바르지 않습니다."}, status=status.HTTP_400_BAD_REQUEST)
+    proj = Project.objects.filter(id=ch).select_related("owner").first()
+    if not proj or not proj.owner:
+        return Response({"creds": {}})
+    from .social import deploy_creds_for
+    return Response({"creds": deploy_creds_for(proj.owner)})
