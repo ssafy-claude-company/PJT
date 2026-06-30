@@ -1,0 +1,47 @@
+%% [Request] 전체 생애주기 시퀀스 (03-control-flow.md §3.1)
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant D as Discord
+    participant M as main.on_message
+    participant S as Sys.handle_user_input
+    participant L as 리더(Organt)
+    participant W as 동료 owner(Organt)
+
+    U->>D: [Request] To: @담당 (body)
+    D->>M: on_message (main.py:459)
+    M->>M: parse() → Request (protocol.py:112)
+    M->>M: dedup(seen) · to_id 기본값 · 첨부 staging (main.py:494-510)
+    M->>S: route_channel_request → handle_user_input (sys_core.py:2328)
+
+    alt 스코프 점유중 / max_flows / 리더 타흐름 점유
+        S->>D: "⏸ 접수됨 — 대기열 N번째" (sys_core.py:1781)
+        Note over S: queue.append + 디스크 영속 (sys_core.py:1774)
+    else 시작 가능
+        S->>S: scope·세션 분리·origin 원문 박제 (sys_core.py:1799-1826)
+        S->>S: active_flows[scope]=flow · engage(lead) (sys_core.py:1837-1842)
+        S->>D: 상태 대시보드 1개 게시 (edit로만 갱신) (sys_core.py:2036)
+        S->>L: run_turn(leader, body) (sys_core.py:2082)
+        activate L
+        Note over L: 리더 프롬프트: 사용자 원문 + 직무기준 + 협업규약
+        L->>W: request(Work, body) — 베턴 위임 (guide_tools→comm.request)
+        Note over S: comm.alive = W (sender sleep / receiver wake)<br/>communication.py:191
+        L-->>S: "[위임됨]" 즉시 반환 (handoff, sys_core.py:1388)
+        deactivate L
+        activate W
+        S->>W: flow.wake = run_turn(member) (sys_core.py:2003)
+        W->>W: 구현·run 검증 (작업공간 cwd)
+        W-->>S: 최종 발화(보고)
+        deactivate W
+        S->>S: comm.respond(W) — LIFO close, alive=L (communication.py:202)
+        S->>L: 위임 결과를 이어 전달 (drain_inflight, sys_core.py:1393)
+        activate L
+        L->>L: 검증·통합·complete_task
+        L-->>S: 최종 반환값 = 보고
+        deactivate L
+        S->>S: _ensure_deploy (배포 가능시) (sys_core.py:2187)
+        S->>D: [Response] 게시 (sys_core.py:2192)
+        S->>S: _close_flow → origin 복귀 · 점유 해제 (sys_core.py:2196,2244)
+        D->>U: [Response] (보고)
+        S->>S: 큐 드레인 → 다음 대기 요청 (sys_core.py:2255)
+    end
