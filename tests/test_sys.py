@@ -973,10 +973,33 @@ def test_허위완료_차단_run검증_후에만_마감():
     assert f.current.verified is True and f.current.run_count == 1 and f.current.evidence
     # 마감 허용 — 결과엔 에이전트 '보고' 옆에 시스템 실행기록(실제 출력)이 떼어낼 수 없게 묶인다
     f.current.cross_checks = f.current.cross_check_offdomain = 1                    # 검증 분업 게이트(별도 테스트)와 무관한 의도 보존
-    r2 = asyncio.run(tools["complete_task"].handler({"result": "검증 후 완료"}))
+    # (/tmp에 stray .html이 있어 시각 게이트가 발동 — 백엔드 태스크라 정직히 '시각 아님' 선언으로 통과)
+    r2 = asyncio.run(tools["complete_task"].handler({"result": "검증 후 완료 [시각 미검증: 백엔드 API — 화면 UI 아님]"}))
     assert "완료" in r2["content"][0]["text"] and f.current is None
     res = f.tasks[-1].status.result
     assert "검증 후 완료" in res and "시스템 실행기록" in res and "exit=0" in res
+
+
+def test_시각게이트_웹UI는_시각검증_또는_미검증_명시해야_마감():
+    """시각 산출물(웹 UI=.html)은 presence·로직만으론 못 닫는다 — result에 '[시각 검증]'(실제 봤음) 또는
+    '[시각 미검증]'(정직한 사유)을 요구(percept의 시각 평행판; 라이브 P-003 검은 화면이 QA 통과·마감)."""
+    import tempfile, os
+    ws = tempfile.mkdtemp()
+    with open(os.path.join(ws, "index.html"), "w") as fp:
+        fp.write("<html><canvas></canvas></html>")          # 웹 UI = 시각 산출물
+    f = _flow(FakeGuide()); f.workspace = ws
+    tools = _tools(f, 11, "leader")
+    asyncio.run(tools["create_task"].handler({"purpose": "웹게임", "goal": "화면 렌더"}))
+    asyncio.run(tools["run"].handler({"command": "echo ok"}))     # verified
+    f.current.cross_checks = f.current.cross_check_offdomain = 1
+    # 시각 마커 없이 마감 → 보류(presence로 시각 못 닫음)
+    r1 = asyncio.run(tools["complete_task"].handler(
+        {"result": "요소 다 있고 무크래시 [지각차원 없음: 순수 코드]"}))
+    assert "시각 검증" in r1["content"][0]["text"] and f.current is not None
+    # 정직한 '[시각 미검증]' → 통과(사람 확인으로 넘김)
+    r2 = asyncio.run(tools["complete_task"].handler(
+        {"result": "완료 [지각차원 없음: 순수 코드] [시각 미검증: 헤드리스 WebGL 렌더 불가 — 사람 확인]"}))
+    assert "완료" in r2["content"][0]["text"] and f.current is None
 
 
 def test_close_flow_정상_clean_close():

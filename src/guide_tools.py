@@ -185,6 +185,23 @@ def _has_real_asset(workspace) -> bool:
     return False
 
 
+def _has_visual_runtime(workspace) -> bool:
+    """작업공간이 사용자가 *화면으로 보는* 웹 UI를 렌더하나 — .html 진입점이 있으면 True. 시각 산출물은
+    presence·로직 검증만으론 부족하다(실제 렌더가 헤드리스 WebGL/GPU에서 검게/빈 화면으로 나올 수 있음 —
+    라이브 P-003). 특정 장르·직군 하드코딩 아님(웹 UI = 사용자가 봄 = 시각 차원)."""
+    import os
+    if not workspace:
+        return False
+    try:
+        for root, dirs, files in os.walk(str(workspace)):
+            dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "__pycache__", ".cache", "dist", "build")]
+            if any(f.lower().endswith(".html") for f in files):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 # [지각-필수(오디오) 차원 탐지 — percept '탐지→강제' 강화(2026-06-19, 항목 75 후속)] percept 게이트는
 # 'LLM 검증자가 지각 못 하는 차원'(특히 *들어야* 아는 소리·음악 — 시각은 스크린샷으로 검증 가능)에 실제
 # 에셋을 요구한다. 그런데 탈출구 `[지각차원 없음]`이 *무조건* 통과라, 사운드 직군을 둔 게임조차 '없음'으로
@@ -2115,6 +2132,31 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                                "그런 차원인지는 작품을 아는 당신이 판단합니다(시스템은 특정 범주·직군을 지정하지 않음).")
                 flow._gate_pass.add(("percept", flow.current.task_id))   # 이 산출물(Task)의 지각검사 통과 — 다음 Task는 다시 검사(per-Task)
                 _ckpt(flow)              # [통과 영속] 보류 반환 전에도 누적 통과를 저장 → 복구가 재서술 안 시킴
+            # [시각 검증 — percept 게이트의 *시각 평행판*(2026-07, 사용자 "시각 결과는 왜 안 본거야")] 위 percept
+            # 게이트는 '오디오는 못 들으니 실제 에셋 요구'인데, *시각은 스크린샷으로 검증 가능*이라 **가정**했다(위
+            # 주석 2067). 그러나 LLM 검증 환경(헤드리스)은 WebGL/GPU 렌더가 실패해 스크린샷이 검게/빈 화면으로
+            # 나온다(라이브 P-003: 렌더 실패로 검은 맵이 presence·로직 QA를 통과·마감). 즉 시각도 '자동 검증 불가'일
+            # 수 있다. 웹 UI(사용자가 화면으로 보는 것)를 마감하려면 실제 렌더를 *눈으로 확인*했음을 명시하거나
+            # ('[시각 검증: 무엇이 보였나]'), 못 했으면 정직히 '[시각 미검증: 사유]'(사람 시각 확인으로 넘김)를
+            # 적어야 한다 — presence만으론 못 닫는다. 반사적 빈 태그 차단(사유 ≥2자, percept·acceptance 동 패턴).
+            # 도메인 중립(웹 UI=시각, 장르·직군 무관), 명시 탈출구 상시(판단은 리더). 흐름당 1회 보류.
+            if not getattr(flow, "visual_checked", False) and ("visual", flow.current.task_id) not in flow._gate_pass:
+                _vr = args.get("result") or ""
+                _v_ok = bool(re.search(r"\[\s*시각\s*검증\s*[:：]\s*\S.{1,}", _vr))
+                _v_none = bool(re.search(r"\[\s*시각\s*(?:미검증|불가|차원\s*없음)\s*[:：]\s*\S.{1,}", _vr))
+                if _has_visual_runtime(getattr(flow, "workspace", None)) and not (_v_ok or _v_none):
+                    if flow.log:
+                        flow.log("complete_visual_gate", task=flow.current.task_id)
+                    return _ok(
+                        "마감 보류(시각 검증 — 실제 렌더를 봤는가): 이 산출물은 사용자가 *화면으로 봅니다*. LLM QA는 "
+                        "presence·로직(요소 존재·무크래시)은 봐도 **실제 렌더 결과**는 놓칠 수 있습니다 — 특히 "
+                        "WebGL/GPU는 헤드리스에서 렌더가 실패해 스크린샷이 검게 나옵니다(라이브 P-003: 렌더 실패로 검은 "
+                        "화면이 QA를 통과·마감). 통과하려면 둘 중 하나: ① 실제 렌더를 **스크린샷→눈으로 확인**하고 "
+                        "result에 '[시각 검증: 맵·캐릭터·UI가 실제로 어떻게 보였나]'(빈 'ok' ✕ — 무엇이 보였는지), "
+                        "또는 ② 못 봤으면(헤드리스 렌더 불가 등) '[시각 미검증: <사유>]'로 정직히 명시하세요(사람 "
+                        "시각 확인으로 넘어감). presence·'요소 존재'만으로 시각을 닫지 마세요.")
+                flow._gate_pass.add(("visual", flow.current.task_id))
+                _ckpt(flow)
             # [수용 계약 마감 바인딩 — 회의 전문성이 '코드'에 도달했는가(2026-06-15 P-015 규명)] verified·percept·
             # contrib·cross-check는 각각 '실행됨/실재 에셋/잠수 직군 실작업/홀리스틱 좋음'을 보지만, **회의에서
             # 합의한 구체 약속**(히트스톱·콤보·레이어드BGM 등)이 실제 산출물에 들어갔는지는 어느 게이트도 안 본다 —
