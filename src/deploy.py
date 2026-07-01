@@ -289,10 +289,21 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
                       "description": f"{name} — deployed by Organt Core multi-agent system"})
     if st not in (201, 422):
         return f"배포 실패(GitHub repo): HTTP {st} {resp.get('message', '')}"
-    repo_url = f"https://github.com/{gh_user}/{name}"
+    # [ground-truth 계정 — GH_USER 설정 드리프트 자가교정(2026-06-30 라이브 P-003)] 리포는 POST /user/repos =
+    # *PAT 인증계정* 아래 생긴다. GH_USER 설정이 그 계정과 어긋나면(P-003: GH_USER=byundojin인데 토큰은
+    # thisiscount01 → 리포는 thisiscount01에 생기고 push는 byundojin/…로 가 404) push가 통째로 죽는다.
+    # 설정값이 아니라 *실제 owner*(201 응답 owner / 422 재사용 시 whoami)를 진실원으로 써 push한다.
+    real_user = gh_user
+    if st == 201 and isinstance(resp.get("owner"), dict) and resp["owner"].get("login"):
+        real_user = resp["owner"]["login"]
+    else:
+        _who_st, _who = _http("GET", f"{GITHUB_API}/user", gh_pat)
+        if _who_st == 200 and _who.get("login"):
+            real_user = _who["login"]
+    repo_url = f"https://github.com/{real_user}/{name}"
 
     # 4) push(force — 재배포 시 최신 상태로 덮어씀)
-    push_url = f"https://x-access-token:{gh_pat}@github.com/{gh_user}/{name}.git"
+    push_url = f"https://x-access-token:{gh_pat}@github.com/{real_user}/{name}.git"
     rc, out = _git(["push", "-q", "-f", push_url, "main:main"], stage)
     shutil.rmtree(stage, ignore_errors=True)
     if rc != 0:
