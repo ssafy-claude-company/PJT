@@ -2980,8 +2980,17 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
                     _hb_task.cancel()
                 flow.deploy_inflight = False
                 flow.deployed = r                  # 배포 호출됨 기록(SYS의 배포 강제가 중복 안 하게)
-                flow._deployed_once = True
-                flow._deploy_count = getattr(flow, "_deploy_count", 0) + 1   # 런어웨이 상한 카운트(실배포만 +1)
+                # [런어웨이 cap 정정(2026-07, 사용자: 'cap을 고쳐 배포 되게')] cap의 목적은 *깨진 앱을 계속
+                # 재배포*(P-028: push는 성공했으나 앱이 깨진 채 23회) 차단이다. push/설정 단계 실패(계정·리포·
+                # 인증·크기·비-일시)는 *앱까지 가보지도 못한 설정 문제*라 고치면 성공한다 — 이걸 앱-런어웨이 cap에
+                # 세면 설정을 고친 뒤에도 영구 차단된다(라이브 P-003: GH_USER·181MB로 push 5회 실패 → 둘 다
+                # 고쳤는데 cap이 막음). *실제 push까지 간* 배포만 cap·thrash에 센다.
+                _push_stage_fail = isinstance(r, str) and (
+                    r.startswith("배포 실패(git push)") or r.startswith("배포 실패(GitHub repo)")
+                    or r.startswith("배포 실패(비-일시") or r.startswith("배포 처리 오류"))
+                if not _push_stage_fail:
+                    flow._deployed_once = True
+                    flow._deploy_count = getattr(flow, "_deploy_count", 0) + 1   # 런어웨이 상한 — 실제 push된 것만
                 _ckpt(flow)   # [즉시 영속(2026-06-23 전수감사)] deploy_count는 Task 전이 사이에 증가하므로
                               # 전이 때만 찍던 스냅샷은 stale → 죽으면 cap이 0으로 리셋돼 무한 재배포. 배포 즉시 영속.
                 if _dep["on"]:
