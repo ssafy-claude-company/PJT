@@ -22,3 +22,21 @@ def test_referenced_services_보수폴백(tmp_path):
     good.write_text('{"projects": {"1": {"deployed": "라이브: https://organt-p-001.onrender.com"}}}')
     refs = _referenced_services(str(good))
     assert refs is not None and isinstance(refs, set)
+
+
+def test_oversized_files_100MB초과만_감지(tmp_path):
+    """>100MB 예방 게이트 — 스테이징된 파일 중 GitHub 100MB 한도 초과만 잡는다(sparse 파일로 가볍게)."""
+    import subprocess, os
+    from src.deploy import _oversized_files
+    d = tmp_path / "repo"; d.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=d, check=True)
+    with open(d / "big.bin", "wb") as f:
+        f.truncate(101 * 1024 * 1024)          # 101MB sparse(디스크 안 씀)
+    (d / "app.js").write_text("ok")
+    subprocess.run(["git", "add", "-A"], cwd=d, check=True)
+    names = [r for r, s in _oversized_files(str(d))]
+    assert "big.bin" in names                  # 초과 감지
+    assert "app.js" not in names               # 작은 건 아님
+    os.remove(d / "big.bin")
+    subprocess.run(["git", "add", "-A"], cwd=d, check=True)
+    assert _oversized_files(str(d)) == []      # 제거하면 통과

@@ -33,6 +33,29 @@ def _mask_secret(text, *secrets):
     return s
 
 
+_MAX_FILE = 100 * 1024 * 1024   # GitHub 파일당 하드 거부 임계(100MB)
+
+
+def _oversized_files(stage):
+    """스테이징된(git add=.gitignore 반영) 파일 중 GitHub 100MB 한도 초과 → [(rel, size)].
+    push 전에 검사해 크립틱한 거부 대신 명확히 안내하기 위함(deploy는 매번 fresh init이라 워킹트리 크기만 본다)."""
+    rc, out = _git(["ls-files", "-z"], str(stage))
+    if rc != 0:
+        return []
+    big = []
+    for rel in out.split("\0"):
+        rel = rel.strip("\0 \n\r\t")
+        if not rel:
+            continue
+        try:
+            sz = os.path.getsize(os.path.join(str(stage), rel))
+        except OSError:
+            continue
+        if sz > _MAX_FILE:
+            big.append((rel, sz))
+    return big
+
+
 def _http(method, url, token, data=None, retries=5):
     """응답을 못 받은 경우(네트워크/DNS 실패, 502/503/504 게이트웨이)에만 안전 재시도.
     egress 프록시의 api.render.com DNS 해석이 간헐 실패하므로(요청이 서버에 도달조차 못 함),
@@ -281,6 +304,17 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
     # 2) git init + commit (서명 끔)
     _git(["init", "-q", "-b", "main"], stage)
     _git(["add", "-A"], stage)
+    # [>100MB 예방 — GitHub 하드 거부 전에 명확히 안내(2026-07, '흐름 원활·안전')] GitHub는 100MB 초과 파일이
+    # 든 push를 거부한다(라이브 P-003: 181MB 파일로 push 5회 실패, 봇은 원인 규명에 오래 헤맴). git add(=.gitignore
+    # 반영) 뒤 *실제 스테이징된* 파일만 검사해, 초과분이 있으면 크립틱한 push 거부 대신 *뭘 할지*를 파일명과 함께
+    # 즉시 안내 → 봇이 그 파일을 빼고 재배포하면 통과(비-일시라 cap엔 안 쌓임).
+    big = _oversized_files(stage)
+    if big:
+        shutil.rmtree(stage, ignore_errors=True)
+        lst = ", ".join(f"{r}({s // (1024 * 1024)}MB)" for r, s in sorted(big, key=lambda x: -x[1])[:5])
+        return ("배포 실패(비-일시 — 파일 크기): GitHub는 **100MB 초과 파일**을 거부합니다. 재배포 전에 다음을 "
+                f"제거하거나 .gitignore에 넣으세요(대용량 에셋·바이너리·모델은 대개 배포에 불필요): {lst}. "
+                "조치 후 재배포하면 통과합니다(이 실패는 배포 cap에 세지 않습니다).")
     _git(["commit", "-q", "-m", f"deploy {name}"], stage)
 
     # 3) GitHub repo 보장(있으면 422 → 재사용)
