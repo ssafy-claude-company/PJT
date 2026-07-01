@@ -307,7 +307,18 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
     rc, out = _git(["push", "-q", "-f", push_url, "main:main"], stage)
     shutil.rmtree(stage, ignore_errors=True)
     if rc != 0:
-        return f"배포 실패(git push): {_mask_secret(out, gh_pat)[-300:]}"
+        _o = _mask_secret(out, gh_pat)
+        # [비-일시 분류 — 재시도로 안 풀리는 설정/인증 오류는 즉시 보고(2026-06-30, 사용자: '믿음만 믿고 5번
+        # 재시도가 이상'). Repository not found·인증 실패·권한 거부는 *결정적* 오류라 같은 자격증명으로 재시도하면
+        # 같은 실패 → cap 5회를 헛되이 태운다. _billing_suspended와 같은 비-일시 처리를 push 오류에도.]
+        _low = _o.lower()
+        if any(m in _low for m in ("repository not found", "authentication failed", "could not read username",
+                                   "invalid username or password", "permission denied", "denied to", "403 forbidden")):
+            return ("배포 실패(비-일시 — 재시도 무의미): git push 인증/접근 오류입니다. **재배포하지 마세요** "
+                    "— 같은 자격증명이면 결과도 같습니다(코드 문제 아님). 대개 GH_PAT 무효·권한 부족·리포 접근 "
+                    "문제이니, complete_task에 '배포 자격증명 점검 필요: <원인>'으로 사용자에게 정직히 보고하세요. "
+                    f"상세: {_o[-180:]}")
+        return f"배포 실패(git push): {_o[-300:]}"
 
     # 5) 기존 서비스 찾기 → 있으면 재배포, 없으면 생성
     st, svcs = _http("GET", f"{RENDER_API}/services?name={name}&limit=10", render_key)
