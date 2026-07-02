@@ -1,6 +1,6 @@
 """로스터 로딩: 같은 봇 토큰이 두 슬롯(예: ORGANT_BOT_3 ↔ TEST_OBT_2 폴백)에 들어와도 한 번만 —
 이중 연결(같은 봇 유령 세션)과 뒤 슬롯 라벨이 앞 슬롯을 덮어쓰는 문제 방지(첫 슬롯=우선)."""
-from src.main import load_roster
+from organt_discord.main import load_roster
 
 
 def test_같은토큰_두슬롯_dedupe_첫슬롯우선(monkeypatch):

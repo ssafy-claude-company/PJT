@@ -13,7 +13,7 @@ cd "$HERE" || exit 1
 exec 9>/tmp/organt_supervisor.lock
 flock -n 9 || { echo "이미 실행 중인 감독자가 있습니다 — 중복 무장 거부"; exit 1; }
 echo "[감독자] 무장 ($(date '+%m-%d %H:%M:%S')) pid=$$"
-# [생존 판정 = flock (2026-06-19 교정)] pgrep -f "python -m src.main"은 그 리터럴을 argv에 가진
+# [생존 판정 = flock (2026-06-19 교정)] pgrep -f "python -m organt_discord.main"은 그 리터럴을 argv에 가진
 # *다른 셸*(진단·대기 루프 등)을 리스너로 오인(self-match)해, 리스너가 죽었는데도 '살아있다'고 판정→
 # 재기동을 건너뛰는 버그가 있었다(라이브: 동면 해동 후 리스너 부재인데 감독자가 respawn 안 함 — 사용자
 # '리스너 깨워줘'에서 규명). 리스너만 잡는 유일·확실한 신호는 그가 쥔 flock이다 — lock이 *획득되면*

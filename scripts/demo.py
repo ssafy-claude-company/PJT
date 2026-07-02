@@ -2,7 +2,7 @@
 
 실제 운영에선 사람(User)이 채널에 [Request]를 올리지만, 이 데모는 재현을 위해
 System 봇으로 [Request]를 올린 뒤 SYS의 입구(route_channel_request)로 흘려보낸다.
-(엔트리 `python -m src.main` 은 사람이 올린 [Request]를 on_message로 받아 같은 입구로 보낸다.)
+(엔트리 `python -m organt_discord.main` 은 사람이 올린 [Request]를 on_message로 받아 같은 입구로 보낸다.)
 
 설정은 .env/환경변수로 받는다(하드코딩 없음):
   SYSTEM_BOT, CHANNEL_ID, ORGANT_ROSTER  (config/.env.example 참고)
@@ -22,9 +22,9 @@ from claude_agent_sdk import HookMatcher
 
 from src.audit import AuditLog, make_post_tool_use_hook
 from src.config import load_config
-from src.discord_guide import DiscordGuide
+from organt_discord.discord_guide import DiscordGuide
 from src.guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
-from src.main import load_roster
+from organt_discord.main import load_roster
 from src.organt import Organt, build_options
 from src.permissions import make_pre_tool_use_hook
 from src.protocol import Kind, format_request

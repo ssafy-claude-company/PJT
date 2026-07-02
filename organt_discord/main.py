@@ -21,15 +21,15 @@ from typing import Dict, List, Optional, Tuple
 import discord
 from claude_agent_sdk import HookMatcher
 
-from .audit import AuditLog, make_post_tool_use_hook
-from .builder import _make_builder
-from .config import Config, load_config
+from src.audit import AuditLog, make_post_tool_use_hook
+from src.builder import _make_builder
+from src.config import Config, load_config
 from .discord_guide import DiscordGuide
-from .guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
-from .organt import Organt, build_options, load_persona, pinned_cwd
-from .permissions import make_pre_tool_use_hook
-from .protocol import Kind, Request, Response, parse
-from .sys_core import Sys
+from src.guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
+from src.organt import Organt, build_options, load_persona, pinned_cwd
+from src.permissions import make_pre_tool_use_hook
+from src.protocol import Kind, Request, Response, parse
+from src.sys_core import Sys
 
 # 워커 공통 기본 도구: 파일(Read/Write/Edit)·탐색(Glob/Grep/ToolSearch)에 더해 WebSearch/WebFetch —
 # '같은 종류의 훌륭한 예'를 상상이 아니라 실제로 찾아 대조하는 현실 기준 도구(RFC-011 M1). LLM은 자기
@@ -307,7 +307,7 @@ async def run() -> None:
                              f"[원터치 초대 필요] 아래 봇이 서버에 없습니다. 각 링크 클릭 한 번으로 합류시키세요:\n{lines}")
     except Exception:
         pass
-    from .config import ROOT
+    from src.config import ROOT
     sysm = Sys(guide, channel.guild.id, _make_builder(cfg, audit, bot_info), bot_info=bot_info,
                workspace=cfg.workspace_dir,
                projects_path=str(cfg.audit_log_path.parent / "projects.json"),
@@ -587,7 +587,7 @@ async def run() -> None:
             from dotenv import load_dotenv
         except Exception:
             return
-        from .config import ROOT
+        from src.config import ROOT
         known = set()
         try:
             known = {tok for tok, _ in load_roster()}   # 시작 시 이미 연결된 토큰

@@ -1,7 +1,7 @@
 """재구현 ② 검증: DiscordGuide (상태블록=채널, 대화=스레드, 보낸봇=Organt)."""
 import asyncio
 
-from src.discord_guide import DiscordGuide, _split_for_discord
+from organt_discord.discord_guide import DiscordGuide, _split_for_discord
 from src.protocol import Kind, TaskStatus, format_request, format_task_status
 
 

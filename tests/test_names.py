@@ -1,6 +1,6 @@
 """이름(닉네임) 안정 배정: 서버에 이미 있는 닉네임은 유지, 없는 봇만 새 이름 — 재시작·리클레임·
 로스터 변동에도 같은 봇은 같은 이름(연결 순서 인덱스 배정의 '재시작마다 개명' 제거)."""
-from src.main import KOREAN_NAMES, assign_stable_names
+from organt_discord.main import KOREAN_NAMES, assign_stable_names
 
 
 def test_기존닉네임은_유지_새봇만_새이름():

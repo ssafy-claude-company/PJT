@@ -2295,7 +2295,7 @@ def test_read_thread_시간순과_평문개입_포함():
     판정의 전제). include_plain=True면 평문도 Request(to=None)로 감싼다 — 등록 프로젝트 채널의
     평문 개입을 부팅 복구가 잡을 수 있게(라이브에서 평문 '이어서 계속해'가 복구 누락되던 구멍)."""
     import types
-    from src.discord_guide import DiscordGuide
+    from organt_discord.discord_guide import DiscordGuide
 
     def _m(mid, author, content):
         return types.SimpleNamespace(id=mid, author=types.SimpleNamespace(id=author),
@@ -5254,7 +5254,7 @@ def test_per_agent_모델이_organt_옵션까지_도달():
     from pathlib import Path
     from src.config import Config
     from src.audit import AuditLog
-    from src.main import _make_builder
+    from organt_discord.main import _make_builder
     tmp = Path(tempfile.mkdtemp()); (tmp / "logs").mkdir(exist_ok=True)
     cfg = Config(system_bot_token="x", channel_id=1, model="sonnet",
                  workspace_dir=tmp, audit_log_path=tmp / "logs" / "audit.jsonl")
@@ -5291,7 +5291,7 @@ def test_per_agent_persona가_organt_시스템프롬프트까지_도달():
     from pathlib import Path
     from src.config import Config
     from src.audit import AuditLog
-    from src.main import _make_builder
+    from organt_discord.main import _make_builder
     tmp = Path(tempfile.mkdtemp()); (tmp / "logs").mkdir(exist_ok=True)
     cfg = Config(system_bot_token="x", channel_id=1, model="sonnet",
                  workspace_dir=tmp, audit_log_path=tmp / "logs" / "audit.jsonl")
