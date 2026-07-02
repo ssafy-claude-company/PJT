@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from organt_core.config import Config
-from organt_core.organt import Organt
+from organt_runtime.organt import Organt
 
 
 def _cfg(tmp) -> Config:
