@@ -16,7 +16,7 @@ import subprocess
 import time
 from typing import Dict, Optional
 
-from .communication import CommError, Engagement
+from .rule.communication import CommError, Engagement
 from .guide_tools import Flow, TaskRef, build_guide_server, make_guide_tools
 from .protocol import Kind, Request, TaskStatus, format_response
 

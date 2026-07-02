@@ -22,7 +22,7 @@ attach_engagement로 붙는다 — 모든 점유/해제는 request/respond/escal
 from dataclasses import dataclass
 from typing import List
 
-from .protocol import Kind
+from ..protocol import Kind
 
 
 class CommError(Exception):

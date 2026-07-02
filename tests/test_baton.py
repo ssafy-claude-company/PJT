@@ -1,7 +1,7 @@
 """기능12 검증: 베턴 + 요청 스택 상태기계 (A→B→C 역순 close → 시작점 복귀)."""
 import pytest
 
-from organt_core.communication import CommError, CommunicationManager
+from organt_core.rule.communication import CommError, CommunicationManager
 
 A, B, C = 1, 2, 3
 

@@ -2,7 +2,7 @@
 import asyncio
 import os
 
-from organt_core.communication import CommunicationManager
+from organt_core.rule.communication import CommunicationManager
 from organt_core.permissions import _within, make_pre_tool_use_hook, organt_allowed_tools
 from organt_core.protocol import Kind
 
