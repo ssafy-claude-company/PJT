@@ -287,3 +287,271 @@ async def create_task(flow, args):
                f"meet은 독립의견을 동시에 모으고(앵커링 방지) 토론·회의록(합의)까지 남깁니다(1:1 request(Info)를 "
                f"여러 번 도는 것보다 합의가 또렷하고 빠름 — 개별 후속 확인만 Info로). 전원 협의 전엔 set_goal "
                f"거부됨. 그 다음 일을 맡길 동료에게 Work로 위임.")
+
+
+async def set_goal(flow, me_id, role, args):
+    """[Rule 로직] set_goal — guide_tools에서 이관(평문 반환, @tool이 _ok 래핑)."""
+    from .._util import _ok, _speech_clip
+    from .communication import _capability_gaps, _fork_collect, _jobs_of, _needed_caps_coverage, _norm_job
+    import re
+    g = flow.guide
+    if flow.current is None:
+        return _ok("오류: 진행 중인 Task가 없습니다. create_task로 먼저 여세요.")
+    goal = (args.get("goal") or "").strip()
+    purpose = (args.get("purpose") or "").strip()
+    if not goal:
+        return _ok("오류: goal이 비었습니다.")
+    # Purpose·Goal은 '담당 팀이 함께' 정한다(docs: Task.Team이 Goal을 정한다). 이 Task 멤버 전원이
+    # '실질 협의(participated)'에 참여했는지 검사 — 리더가 물었든 peer끼리 물었든 인정(허브 완화),
+    # 단 빈 핑('응답 가능?')은 불인정(실질 강제). → 매 Task를 팀이 모여 정하는 분산 구조를 구조적으로 보장.
+    # [유화적 전원협의 — 무한 루프 차단] '전원'을 글자 그대로 강제하면, 한 멤버가 그 시간 내내 타 흐름에
+    # 점유(1봇=1흐름 배타 — 병렬 안전 기둥)되어 도달 불가할 때 set_goal이 영영 거부돼 교착한다(라이브
+    # P-002 114305-1: 프론트 4명 중 1명이 내내 P-013을 '리드'(set_goal까지) 중 → 협의 33회 거부 →
+    # 200분 미수렴·스킬 코드 0줄). 교정: '지금 가용(reachable)'한 미참여 멤버에게만 협의를 요구(최대한
+    # 다 받기 — 가용한 사람은 전원)하고, '타 흐름 점유로 도달 불가'한 멤버는 면제하고 진행한다 —
+    # _fork_collect의 '부분 조인'(일부 점유 멤버 때문에 수집 전체가 막히지 않음)과 같은 정신. 면제는
+    # '포기'가 아니라 '실제 부재 인정'이며, 면제 멤버의 도메인 공백은 리더에게 정보로 돌려준다(필요하면
+    # 같은 직군 recruit — 판단은 리더, 공급 원칙).
+    # [합의 = 직군 커버리지 (동질 모델 원리) + 유화적 면제 — 무한 루프 차단]
+    # 같은 Claude·같은 직군 봇 둘은 0 다양성(에코)이라 합의엔 *직군당 1명*이면 그 도메인 관점이 곧 전부다.
+    # 라이브: meet 57%가 같은 직군 중복(백엔드×3) → 에코·합의 편향(한 시각 N배 가중)·과대소집. 그래서
+    # '전원 참여'가 아니라 '도메인 커버리지'를 요구한다 — 같은 직군 잉여는 합의 면제(그들은 *병렬 실행*용).
+    # 타 흐름 점유로 도달 불가한 직군도 면제(교착 차단). 둘 다 글자 그대로의 '전원'이 만든 에코·교착을
+    # 푼다. 직군 못 읽는 라벨(예비 등)은 각자 고유 도메인으로 보아 보수적으로 참여를 요구(은근 면제 방지).
+    members = [x for x in flow.current.team if x != me_id]
+    excused_note = ""
+    if members:
+        eng, scope = flow.comm.engagement, flow.comm.scope
+        def _busy_now(m):
+            return bool(eng is not None and scope is not None and eng.busy_elsewhere(m, scope))
+        def _doms(m):
+            return ({_norm_job(j) for j in _jobs_of(flow._info(m) or "")} - {""}) or {f"·{m}"}
+        dom_members = {}                       # 직군 → 그 직군 팀 멤버들
+        for m in members:
+            for d in _doms(m):
+                dom_members.setdefault(d, []).append(m)
+        uncov_reach = {}                       # 미커버 직군 → 가용 멤버(합의 필요·가능)
+        uncov_busy = []                        # 미커버 직군 — 대표가 지금 타 흐름 점유(도달 불가)
+        redundant = []                         # 같은 직군 잉여(이미 커버) — 에코, 면제
+        for d, ms in dom_members.items():
+            if any(x in flow.current.participated for x in ms):
+                redundant += [x for x in ms if x not in flow.current.participated]
+                continue
+            reach = [x for x in ms if not _busy_now(x)]
+            if reach:
+                uncov_reach[d] = reach
+            else:
+                uncov_busy.append(d)   # 이 도메인 대표가 전부 타 흐름 점유 — 아래 '점유 도메인'에서 처리
+        if uncov_reach:
+            one_each = [r[0] for r in uncov_reach.values()]   # 직군당 1명 예시
+            tail = (f"\n(점유 도메인 {', '.join(sorted(uncov_busy))}은 아래 '점유 도메인' 안내를 따르세요)"
+                    if uncov_busy else "")
+            return _ok(f"확정 거부: 이 Task의 Purpose·Goal은 담당 팀이 함께 정합니다(리더 독단·선지정 금지). "
+                       f"아직 합의에 참여 안 한 **도메인**: {', '.join(sorted(uncov_reach))} — 각 도메인 "
+                       f"**1명만** meet(회의)로 '풀 문제·목표·성공기준'을 정하면 됩니다(같은 직군을 더 부르는 건 "
+                       f"*에코*라 불필요 — 잉여는 병렬 실행용). 예: {flow._names(one_each)}. 파일·엔드포인트 "
+                       f"같은 구현 스펙 말고 '측정가능한 결과'로.{tail}")
+        # [점유 도메인 — 대기 우선; 무시(묵살)·대체 증원 금지] 어떤 도메인의 대표가 타 흐름에서 일하는
+        # 중이면, *침묵 면제(의견 묵살)*도 *대체 인력 증원(기억 없는 복제)*도 답이 아니다 — 그 도메인의
+        # 기억을 가진 본인이 제일 낫다(1봇1직업1기억). 점유는 좀비 수정으로 *일시적·유한*이라 곧 풀린다.
+        # 1회 보류로 둘 중 하나를 의식적으로 택하게 한다: ①(권장) 그가 풀리면 합류시켜 마무리(대기),
+        # ② 결론이 그 도메인 없이도 *명확히* 닫혔으면 재호출해 확정하되 그는 실행에서 자기 도메인을
+        # 직접 만든다(타 직군 가짜 대체 금지). 모호하면 ①. 사용자 설계: '정확하면 반출, 모호하면 대기'.
+        if uncov_busy and not getattr(flow, "busy_consensus_held", False):
+            flow.busy_consensus_held = True
+            if flow.log:
+                flow.log("set_goal_busy_consensus_hold", task=flow.current.task_id,
+                         domains=sorted(uncov_busy))
+            return _ok(f"확정 보류(점유 도메인 — 1회): 도메인 **{', '.join(sorted(uncov_busy))}**의 대표가 "
+                       f"지금 타 흐름에서 일하는 중입니다. 임시로 바쁘다고 그 도메인을 *무시하거나*, "
+                       f"*대체 인력을 새로 만들지* 마세요 — 그 도메인의 기억을 가진 본인이 제일 낫습니다. "
+                       f"둘 중 하나를 의식적으로 택하세요: **①(권장) 그 전문가가 풀리면 회의에 합류시켜 "
+                       f"마무리** — 점유는 일시적이라 곧 풉니다(그때까지 가용 멤버와 회의를 이어가며 대기). "
+                       f"**② 회의 결론이 그 도메인 없이도 *명확히* 닫혔으면** 그 점이 goal에 드러나게 적고 "
+                       f"재호출해 확정 — 단 그 전문가는 *실행 단계에서 자기 도메인을 직접* 만듭니다(타 직군 "
+                       f"가짜 대체 금지). **결론이 모호하면 ①(대기)이 맞습니다.**")
+        if redundant or uncov_busy:
+            if flow.log:
+                flow.log("set_goal_consensus_coverage", task=flow.current.task_id,
+                         redundant=[int(x) for x in redundant], uncovered_busy=sorted(uncov_busy))
+            bits = []
+            if redundant:
+                bits.append(f"같은 직군 잉여 {flow._names(redundant)}는 합의 면제(에코 방지) — 이들은 "
+                            f"**병렬 실행(parallel_work)**에 쓰세요(같은 직군의 유일한 정당한 가치는 합의 "
+                            f"인원수가 아니라 병렬 처리량)")
+            if uncov_busy:
+                bits.append(f"점유 도메인 {', '.join(sorted(uncov_busy))}은 ②(의식적 진행) — 그 전문가가 "
+                            f"*실행에서 자기 도메인을 직접* 만들어야 합니다(가짜 대체 금지)")
+            excused_note = "\n[합의 커버리지] " + "; ".join(bits) + "."
+    # [P7 — 범주적 완성 점검: recognition→action 강제, RFC-010] 확정 전 1회, 장르 예시 대비 '통째로
+    # 없는 범주'를 goal에 '구축 대상'으로 반영(없으면 recruit)하거나 불필요 사유를 명시하게 강제한다 —
+    # 라이브: P6 넛지로 사운드를 grep '점검'만 하고 구현 0(인지≠행동). 점검을 '구축'으로 한 칸 올림.
+    # 1회 보류 후 재호출 통과(막지 않되 의식적 결정 — override 게이트와 같은 정신). 직군 키워드 하드코딩
+    # 없음 — 장르·범주 판단은 리더(비체험형이면 'N/A 불필요'로 재호출). set_goal_gap_check 로그로 가시화.
+    # [최대화 — 구조적 강제(2026-06-20 사용자 "프롬프트 의존 제거")] 종전엔 '흐름당 1회 보류→재호출
+    # 통과'라 standard 기록 없이도 통과 → '최소 구현 통과'의 출처(품질 바가 *안 박힘*). 이제 *standard
+    # (최대 표준)가 실제로 기록될 때까지* 보류한다 — flow.current.standard(per-Task 필드)+이번 인자로
+    # 키잉해 새 Task마다 다시 요구(per-flow 플래그 아님 → 다중-Task에서도 매번 발동). 의식적 면제는
+    # '[최대화 N/A: 사유]'(사유 필수). gap_checked는 *테스트 우회 플래그*로만 유지(프로덕션은 standard 유무로 판정).
+    _has_std = bool((flow.current.standard or "").strip() or (args.get("standard") or "").strip())
+    _max_na = bool(re.search(r"\[\s*최대화\s*(?:N\s*/?\s*A|면제|불필요)\s*[:：]\s*\S",
+                             goal + "\n" + (args.get("standard") or "")))
+    if not getattr(flow, "gap_checked", False) and not _has_std and not _max_na:
+        if flow.log:
+            flow.log("set_goal_gap_check", task=flow.current.task_id)
+        return _ok("확정 보류(최대화 기준 — 최대판 *구성요소 분해* 기록 강제, 재호출만으론 통과 안 됨): 이 "
+                   "시스템의 전제는 '요청을 문자 그대로 최소로'가 아니라 '가용 외부자원으로 만들 수 있는 "
+                   "**최대** 품질'입니다. **이 작품과 같은 종류의 *실제 훌륭한 예*를 WebSearch로 찾아**(상상 "
+                   "말 것 — LLM은 자기 산출을 기준 삼아 '평범=충분'으로 수렴하니 실제 레퍼런스가 외부 기준), "
+                   "그 **최대판이 당연히 갖춘 *구성요소를 분해***해 **`standard`에 *체크 가능한 항목 목록*으로 "
+                   "적으세요** — 모호한 한 문장이 아니라 *부품 목록*(예: 핵심기능 A·B·C, 상태·엣지 처리, "
+                   "손맛·완성도 요소 …). **그리고 *기능 나열*에 그치지 말고 '**주 사용 흐름(실사용성)**'도 "
+                   "분해에 넣으세요 — *진짜 사용자가 핵심 목표를 어떻게 달성하나*. 최고 앱은 위치·맥락 기반이면 "
+                   "**자동감지·기본값·원탭**으로 주 경로 마찰을 없앱니다(예: 열면 *내 위치 결과 즉시* — 지역을 "
+                   "수동으로 하나하나 고르는 다단계 폼이 아니라). **수동으로 일일이 설정하게 만들면 기능이 "
+                   "완비돼도 *실사용 실패*입니다**(라이브 관측: 위치기반인데 자동위치 0·수동 select 강제). "
+                   "접근성(라벨·키보드)도 실사용성의 일부. 마감은 '좋은가?'(홀리스틱이라 satisfice됨)가 아니라 "
+                   "**'최대판 부품이 다 있나·각 부품이 얼마나 깊나·*주 사용 경로가 마찰 없나*'를 *항목별로* "
+                   "대조**합니다(구성적 품질·사용흐름은 보지 않아도 "
+                   "구성요소로 분석 가능 — taste 아님). *리더 혼자 정하지 말고* 각 도메인이 자기 분야 실제 "
+                   "훌륭한 예를 대조해 *자기 도메인 최대 부품*을 meet로 기여(합집합 누적 — 1명 지능에 인질 "
+                   "금지). 정말 이 작품엔 최대화할 차원이 없으면 goal이나 standard에 **'[최대화 N/A: "
+                   "<사유>]'**를 적어 재호출하세요(빈 재호출은 통과 안 됨 — 사유 필수).")
+    # [스태핑 커버리지 강제 — 리더 흡수 차단(2026-06-19, 사용자: '전문가 분배 무조건, 리더는 자기 직군만')]
+    # consensus-coverage 게이트처럼 persistent-until-resolved: 목표가 명시적으로 부른 전문 능력을 팀(리더
+    # 포함)이 *아무도* 보유 못 했으면 확정 보류 → recruit로 그 전문가를 투입해야 통과(채우면 갭이 사라져
+    # 자동 통과). 그러면 그 도메인에 owner가 박혀 기존 #4 게이트가 리더를 자기 직군에 가둔다(언더스태핑
+    # 탈출구를 닫는다). 능력 식별은 기능 기반(직군 하드코딩 아님). 정말 리더 역량으로 커버한다고 판단하면
+    # goal/acceptance에 '[스태핑 면제: <이유>]'로 의식적 면제(무한 루프 차단 — 탈출구 상시).
+    _staff_exempt = (getattr(flow, "staffing_exempt", False)
+                     or "[스태핑 면제" in goal or "[스태핑 면제" in (args.get("acceptance") or ""))
+    if not _staff_exempt:
+        _labels = [flow._info(m) for m in flow.current.team] + [flow._info(flow.leader)]
+        _gaps = _capability_gaps(
+            " ".join([goal, purpose, str(getattr(flow, "origin_request", "") or "")]), _labels)
+        if _gaps:
+            if flow.log:
+                flow.log("set_goal_staffing_gap", task=flow.current.task_id, gaps=_gaps)
+            return _ok(
+                f"확정 보류(스태핑 커버리지 — 전문가 분배 강제): 이 목표는 **{', '.join(_gaps)}** 능력을 "
+                f"요구하는데 팀(당신 포함)에 그 전문가가 없습니다. **리더(당신)는 자기 직군 일만** 합니다 — "
+                f"그 도메인을 흡수해 직접 하지 마세요. **recruit(role='해당 전문 직군')으로 그 전문가를 "
+                f"투입**(예비 인력이 그 직군으로 채용됨)한 뒤 그에게 위임하세요. 투입하면 그 도메인에 owner가 "
+                f"생겨 분배가 강제되고, set_goal은 자동 통과합니다(갭 사라짐). 정말 *당신 직군 역량으로* 그 "
+                f"능력까지 커버한다고 판단하면 goal에 **'[스태핑 면제: <이유>]'**를 적어 재호출하세요(의식적 "
+                f"판단 — 그냥 재호출로는 통과 안 됨).")
+        # [협업 깊이 — 핵심 능력 복수 검토(2026-06-22 사용자: '중요한 직군은 2명, 상호 같은직군 토론')]
+        # staffing 통과(필요 능력 갭 0) 후: 필요 능력이 *전부 1명뿐*이면 그 도메인 품질이 한 사람 지능에
+        # 인질이다(P-018식 1인 의존). 가장 중요한 능력 1개는 2명으로 채워 상호 검토(peer review)·병렬·
+        # 동일직군 토론이 일어나게 강제. 어느 능력을 깊게 갈지는 리더 판단(시스템이 '핵심'을 지정 안 함) —
+        # *한 능력이라도 2명*이 되면 통과(과채용을 +1봇으로 한정, '백엔드 6명' 재발 차단). 의식적 면제는
+        # '[심도 단독: <능력> — <사유>]'. 능력표 밖 도메인(게임 등)엔 _cov가 비어 발동 안 함(과발동 차단).
+        _depth_na = bool(re.search(r"\[\s*심도\s*단독[^\]]*[:：]\s*\S{2,}",
+                                   goal + "\n" + (args.get("acceptance") or "")))
+        if not _depth_na:
+            _cov = _needed_caps_coverage(
+                " ".join([goal, purpose, str(getattr(flow, "origin_request", "") or "")]), _labels)
+            if _cov and all(n == 1 for n in _cov.values()):
+                if flow.log:
+                    flow.log("set_goal_depth_gap", task=flow.current.task_id, caps=list(_cov.keys()))
+                return _ok(
+                    f"확정 보류(협업 깊이 — 핵심 능력 복수 검토): 이 목표의 핵심 능력"
+                    f"(**{', '.join(_cov.keys())}**)이 *각 1명뿐*입니다 — 같은 한 사람의 지능에 그 도메인 "
+                    f"품질이 인질이 됩니다(상용 품질의 천장). **가장 중요한 능력 1개**는 recruit로 **2명**으로 "
+                    f"채워 *상호 검토(peer review)·병렬·동일직군 토론*이 일어나게 하세요(어느 걸 깊게 갈지는 "
+                    f"당신 판단 — 한 능력이라도 2명이 되면 통과). 정말 1명으로 충분하면 goal이나 acceptance에 "
+                    f"**'[심도 단독: <능력> — <사유>]'**를 적어 재호출하세요(의식적 — 빈 태그·그냥 재호출은 "
+                    f"통과 안 됨).")
+    # [병렬 강제 제거 — 단일흐름 안정성(2026-06-22 사용자 결정)] 병렬 fork 경로가 작업공간 cwd·게이트#9·
+    # 쓰기리스로 Write를 잃어 산출물 0 churn을 유발했다(P-029 규명). '흐름을 최대한 하나로 유지하며
+    # 안정성'이 전제이므로 병렬 강제 게이트를 걷어낸다 — 협업은 직렬(request)+meet로. parallel_work도 비활성화.
+    # [단일-Task 깊은 수렴 — 분해 강제 제거(2026-06-18)] 종전엔 다도메인 목표를 '도메인별 Task로
+    # 쪼개라'고 밀었으나(분해 점검 게이트), 라이브 규명: P-002 114305-1의 '한 owner가 5도메인'은
+    # *구조* 문제가 아니라 전문가 8명 idle(참여 문제)이었고, P-016(216 대화·단일 Task)이 보여주듯
+    # 단일 Task가 *이미 다중 검증*(자기검증·QA·교차검증)을 지원한다. 분해는 그 깊은 수렴을 조각냈다
+    # (P-019: AI가 백엔드 서브태스크로 떨어져 가짜로 격하). 그래서 분해 강제를 걷어낸다 — 다도메인은
+    # 한 Task에서 깊게 수렴하고, 검증 깊이는 acceptance·percept·교차검증(아래 마감 게이트)이 책임진다.
+    if purpose:
+        flow.current.status.purpose = purpose
+    flow.current.status.goal = goal
+    acceptance = (args.get("acceptance") or "").strip()
+    if acceptance:
+        # [수용 계약 포착] 회의 전문 제안을 '구속력 있는 구체 기준'으로 박제 — 마감 게이트가 항목별 충족을
+        # 요구한다. 누적(개입 때마다 덮어쓰지 않고 이어붙임)해 회차가 쌓일수록 기준이 두꺼워진다.
+        prev = (flow.current.acceptance or "").strip()
+        flow.current.acceptance = (prev + "\n" + acceptance).strip() if prev and acceptance not in prev else (acceptance or prev)
+    standard_in = (args.get("standard") or "").strip()
+    if standard_in:
+        # [최대화 + 분산 — 핵심] 실제 exemplar의 *최대* 표준을 박되, *리더 단독*이 아니라 각 도메인이 자기
+        # 분야 최대 기준을 기여한 *합집합*으로 누적한다(acceptance와 같은 누적 — 회차마다 이어붙임). 한
+        # 오케스트레이터의 지능이 전체 품질 바를 혼자 정하면 그게 곧 '품질이 1명에 인질'(사용자 명제).
+        prev = (flow.current.standard or "").strip()
+        flow.current.standard = (prev + "\n" + standard_in).strip() if prev and standard_in not in prev else (standard_in or prev)
+        if flow.log:
+            flow.log("set_goal_standard_set", task=flow.current.task_id, chars=len(flow.current.standard))
+    interfaces_in = (args.get("interfaces") or "").strip()
+    if interfaces_in:
+        # [협업 — PHASE 1.3] 도메인 간 인터페이스 계약 박기(사일로 방지). 마감 검증(L2)이 이 계약 준수를 본다.
+        flow.current.interfaces = interfaces_in
+    await flow.refresh(flow.current)
+    _ckpt(flow)                       # 크래시-세이프: 확정된 Purpose·Goal 영속
+    # [공급 원칙 — 정보는 구조가, 판단은 리더가. 매직넘버 제거(사용자 지적 2026-06-13)]
+    # 종전엔 'goal 4항목+'(항목 수)로 분해를 트리거했으나, 항목 '수'는 표면 프록시다 — RFC-008이
+    # 경고한 측정의 함정(Goodhart)의 재발이었다. 분해 필요성의 본질은 개수가 아니라 '독립적으로
+    # 구현·검증할 단위로 나뉘는가'(응집도/검증 단위). 숫자 게이트 없이 질적 기준만 공급하고 판단은
+    # 리더(LLM)에게 — 검증·마감 게이트가 부분마다 생겨 결함이 일괄 통과되지 않는다(P-009 교훈).
+    tip = ("\n[정보 — 판단은 당신 몫] 이 goal이 **서로 독립적으로 구현·검증할 수 있는 여러 부분**을 "
+           "담고 있으면(개수가 아니라 '독립성'이 기준), 부분마다 Task로 나눠(create_task→위임→검증→"
+           "complete_task 반복) 각각 마감하는 것을 고려하세요 — 한 Task로 가면 검증·마감이 1회뿐이라 "
+           "부분 결함이 묻힙니다(라이브 P-009). 깊게 얽혀 한 덩어리면 굳이 나누지 마세요.")
+    # [RFC-008 P0 — 품질/기능 분리] 측정 가능한 기능만 goal에 담으면 측정 어려운 품질이 빠진다
+    # (Holmström-Milgrom 다중작업: 측정가능한 것만 보상 → 품질 이탈이 최적). 기능 체크리스트와
+    # 별도로 '이 도메인의 훌륭함'(완성도·UX·재미)을 품질 차원으로 의식하게 — 정의 불가한 품질도
+    # 부분 operationalize는 가능(Graham). 강제 아닌 공급(암묵지라 다 못 적음 — Polanyi).
+    team_roles = [r for r in flow._names([m for m in flow.current.team if m != me_id]) if r]
+    qbar = ("\n[품질 차원 — '되는가'≠'배포할 만한가'] 측정가능한 기능만 goal에 담으면 측정 어려운 품질"
+            "(완성도·UX·재미·연출)이 빠집니다(라이브: 작동하나 폴리시 0인 게임). 지금 두 가지를 의식하세요: "
+            f"① **이 팀 구성에서 품질 축을 유도** — 팀의 각 직군({', '.join(team_roles) or '동료'})이 "
+            "*자기 도메인에서 '훌륭함'으로 치는 기준*이 곧 '완성'의 축입니다(무엇이 훌륭함인지는 그 직군이 "
+            "정의 — 시스템이 특정 항목을 박지 않음). 이 품질 기대치를 **acceptance(수용 계약)에 검증가능한 "
+            "항목으로** 담으세요(각 직군이 회의에서 제안한 구체 조건) — **마감이 각 항목의 실제 코드 도달을 "
+            "검증**하므로, 회의에서 한 약속이 회의록에서 증발하지 않습니다(라이브 P-015: 제안 6개 중 코드 반영 0). "
+            "② **폴리시(기능을 넘는 품질) 직군이 팀에 있는가** — 이 작품이 그런 사용 경험을 "
+            "요구하는 종류면(판단은 당신) 그 전문가가 팀에 있는지 보고 없으면 recruit하세요 — 안 부르면 그 "
+            "품질은 아무도 책임지지 않습니다(라이브: 폴리시 직군 미채용/잠수로 '최소 기능'만 배포됨).")
+    # [RFC-010 P3·P5 — 발산→수렴 + '완성' 재정의] LLM은 정렬(RLHF)으로 '전형적·자명한 1개 완성'으로
+    # 수렴한다(mode collapse) → "언급한 것만" 구현(라이브 사용자 지적). 창의/체험형은 ① 복수 접근안을
+    # 내고 골라야 뻔함을 깬다(발산→수렴, CreativeDC) ② '작동=완성'이 아니라 '경험돼서 좋음'이 완성이다
+    # (Pirsig·Craftsmanship). 강제 아닌 환기 — 취향의 천장은 LLM이라 최종 판단은 리더/사용자(RFC-010 §3).
+    creative = ("\n[창의·완성 기준 — 자명한 1개로 수렴 금지] 이 작품이 경험·재미·디자인이 중요한 "
+                "종류라면: ① **'언급된 것'만 하지 말고** 더 좋게 만들 접근을 2~3개 떠올려 비교한 뒤 "
+                "고르세요(LLM은 시키면 가장 뻔한 1개로 수렴 — 의식적 발산→수렴). ② '완성'의 기준은 "
+                "'작동한다'가 아니라 **'사용자로서 써보니 좋다'**입니다 — 마감 전 누군가 실제로 써보고"
+                "(플레이) '재밌나·뭐가 아쉽나'를 비평하고 최소 1회 개선하세요(작동≠좋음).")
+    # [RFC-010 P6 — 장르 예시 대비 '범주적 부재' 점검(라이브: 게임에 사운드 0인데 아무도 인지·채용
+    # 안 함). LLM은 '있는 것 개선'엔 강하나 '통째로 없는 범주'를 못 본다(mode collapse는 확장만 한다).
+    # 처방: 같은 '종류의 훌륭한 예'와 비교해 그쪽엔 있는데 우리엔 없는 범주를 찾고, 그건 '개선'이
+    # 아니라 '신규 구축'이며 필요 직군이 없으면 recruit한다(Graham '최고를 알아야 목표가 보인다' +
+    # exemplar anchoring). 직군 키워드 하드코딩 없음 — 장르 판단·예시는 LLM 지식, 채용은 리더.
+    gapcheck = ("\n[범주적 부재 점검 — '있는 것 개선'에만 머물지 말 것] 이 작품과 **같은 종류의 훌륭한 "
+                "예**를 하나 **WebSearch로 실제로 찾아보고**(상상 말 것 — 자기 산출 기준으론 '평범=충분'으로 "
+                "수렴), 그것이 *당연히 갖춘* 요소 중 우리에겐 **통째로 없는 범주**가 있는지 "
+                "보세요. 무엇이 그런 범주인지는 **작품 종류를 아는 당신이 판단**합니다(시스템이 특정 범주를 "
+                "지정하지 않음 — 직군·키워드 하드코딩 안 함). 있으면 그건 '개선'이 아니라 **신규 구축**이고, "
+                "담당 직군이 팀에 없으면 **recruit**하세요. 라이브 교훈: 기존 것만 깊게 파고 *통째로 빠진 "
+                "범주*는 아무도 본 적이 없었음 — 훌륭한 예라면 당연히 있을 범주를 먼저 점검(다듬기 전에).")
+    # [RFC-011 M3 — 누적 사용자 취향을 '진짜 품질 기준'으로] 상용 품질의 천장은 LLM 취향이라
+    # (인간 상관 ~0.5) 유일한 신뢰 앵커는 사용자다. 이 프로젝트에서 사용자가 반복해 지적·요구한
+    # 말을 그대로 되돌린다 — '언급된 것'만 고치지 말고 *되풀이되는 불만의 범주*를 goal의 품질 축으로
+    # (직군·키워드 하드코딩 0 — 사용자 자신의 말). 배포→플레이→비평이 돌수록 기준이 스스로 올라간다.
+    fb_texts = [f.get("text", "") for f in (getattr(flow, "user_feedback", None) or []) if f.get("text")]
+    taste = ""
+    if fb_texts:
+        bullets = "\n".join(f"  · “{_speech_clip(t, 160)}”" for t in fb_texts[:10])
+        taste = ("\n[누적 사용자 취향 — 이 사용자의 진짜 품질 기준(크로스-프로젝트)] 사용자가 *이 작품 + "
+                 "과거 작업들*에서 해 온 말들입니다. **되풀이되는 불만·요구가 곧 '상용 수준'의 기준**입니다"
+                 "(LLM 취향엔 천장이 있어 사용자가 유일한 앵커 — 한 작품서 고친 걸 다음서 또 틀리지 말 것). "
+                 "이번에 '언급된 것'만 처리하지 말고, 아래에서 **반복되는 "
+                 "범주**(어떤 측면이 계속 '부족·구리다'고 지적되는지)를 찾아 goal의 품질 축으로 박으세요 "
+                 "— 그 범주가 통째로 부실하면 신규 구축·recruit로 끌어올리세요:\n" + bullets)
+    return _ok(f"task={flow.current.task_id} 정의 확정 — Purpose: {purpose[:50] or '(유지)'} / Goal: {goal[:80]}{tip}{qbar}{creative}{gapcheck}{taste}{excused_note}")
