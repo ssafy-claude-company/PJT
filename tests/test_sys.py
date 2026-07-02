@@ -65,7 +65,7 @@ def _tools(f, me, role):
 def test_서브프로세스_사망_143은_일시오류로_재시도대상():
     """SDK 서브프로세스가 SIGTERM(143)/파이프끊김으로 죽으면 일시오류로 보고 resume 재시도해야 한다
     — 작업이 끝났는데 마무리 메시지만 깨져 에러가 최종 응답으로 올라오는 일 방지."""
-    from organt_runtime.organt import _is_transient_api_error
+    from organt.organt import _is_transient_api_error
     assert _is_transient_api_error("API Error: Command failed with exit code 143 (exit code: 143)")
     assert _is_transient_api_error("API Error: Fatal error in message reader")
     assert _is_transient_api_error("API Error: 529 overloaded")
@@ -3026,7 +3026,7 @@ def test_흡수차단_도달불가_멤버는_기여불필요로_통과_교착방
 def test_워커도구에_WebSearch_포함_RFC011():
     """[RFC-011 M1] 워커 기본 도구에 WebSearch/WebFetch가 있어야 '훌륭한 예'를 상상이 아니라
     실제로 검색해 대조한다(취향 천장 ~0.5 → 외부 레퍼런스가 '상용 수준'의 기준)."""
-    from organt_runtime.builder import WORKER_BASE_TOOLS   # [계층 분리] Core 빌더로 이동(종전 src.main)
+    from organt.builder import WORKER_BASE_TOOLS   # [계층 분리] Core 빌더로 이동(종전 src.main)
     assert "WebSearch" in WORKER_BASE_TOOLS and "WebFetch" in WORKER_BASE_TOOLS
 
 
