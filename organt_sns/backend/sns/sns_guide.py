@@ -46,6 +46,10 @@ class SnsGuide:
     def _new_id(self):
         return next(self._ids)
 
+    def set_origin(self, channel_id):
+        """[배달 계약] origin 채널 저장(로컬 ORM판은 thread_channel로 라우팅 — 계약 호환용)."""
+        self._origin_channel = int(channel_id)
+
     # ── 기록 헬퍼(sync) ────────────────────────────────────────────
     def _write(self, **kw):
         kw.setdefault("ts", _now())

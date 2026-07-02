@@ -55,6 +55,10 @@ class DiscordGuide:
         self.system = system_client
         self.organts: Dict[int, object] = dict(organt_clients or {})  # user_id -> client
 
+    def set_origin(self, channel_id):
+        """[배달 계약] 디스코드는 채널 객체로 직접 라우팅 — no-op."""
+        return None
+
     def register_organt(self, user_id: int, client) -> None:
         self.organts[user_id] = client
 

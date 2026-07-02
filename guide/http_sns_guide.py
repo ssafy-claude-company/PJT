@@ -48,6 +48,11 @@ class HttpSnsGuide:
     def _new_id(self):
         return next(self._ids)
 
+    def set_origin(self, channel_id):
+        """[배달 계약] 이 요청의 origin 채널을 task-로컬로 — 뒤이어 create_task되는 흐름이 이 채널로 라우팅(동시 안전)."""
+        ORIGIN_CHANNEL.set(int(channel_id))
+        self._origin_channel = int(channel_id)
+
     # ── HTTP 헬퍼(동기, 재시도) ────────────────────────────────────
     def _post_sync(self, path, payload):
         last = None

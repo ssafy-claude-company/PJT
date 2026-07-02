@@ -2365,6 +2365,15 @@ class Sys:
         reqs = [m for m in msgs if isinstance(m, Request)]
         return reqs[-1] if reqs else None
 
+    def _flow_idle(self, channel_id):
+        """이 채널 활성 흐름의 '무진행 시간'(초) — 봇 활동(last_activity)이 멈춘 지. 흐름 없으면 None.
+        SYS.run이 정체 기준 슬롯 회수(컷·재개)를 판단하는 신호."""
+        for f in list(self.active_flows.values()):
+            if getattr(f, "user_channel", None) == int(channel_id) and not getattr(f, "done", False):
+                la = getattr(f, "last_activity", None)
+                return None if la is None else max(0.0, time.monotonic() - la)
+        return None
+
     async def route_channel_request(self, channel_id, request: Request, root_id=None) -> dict:
         if request.to_id is None:
             self._log("ignored", reason="To 없음")
