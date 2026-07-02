@@ -413,7 +413,7 @@ class FlowIdleReaperTest(TestCase):
 
     def test_flow_idle_무진행시간으로_먹통만_가린다(self):
         import time as _t
-        from sns.management.commands.run_organt_sns import _flow_idle
+        from organt_core.sys_core import Sys
 
         class _Flow:
             def __init__(self, ch, la, done=False):
@@ -424,10 +424,10 @@ class FlowIdleReaperTest(TestCase):
 
         now = _t.monotonic()
         sysm = _Sys([_Flow(500, now - 1200), _Flow(600, now - 5)])
-        self.assertGreater(_flow_idle(sysm, 500), 1000)   # 20분 전 활동 → 멈춤(큰 값 → 회수 대상)
-        self.assertLess(_flow_idle(sysm, 600), 60)        # 방금 활동 → 진행 중(작은 값 → 안 끊음)
-        self.assertIsNone(_flow_idle(sysm, 999))          # 그 채널 활성 흐름 없음
-        self.assertIsNone(_flow_idle(_Sys([_Flow(700, now - 1200, done=True)]), 700))  # 완료는 제외
+        self.assertGreater(Sys._flow_idle(sysm, 500), 1000)   # 20분 전 활동 → 멈춤(큰 값 → 회수 대상)
+        self.assertLess(Sys._flow_idle(sysm, 600), 60)        # 방금 활동 → 진행 중(작은 값 → 안 끊음)
+        self.assertIsNone(Sys._flow_idle(sysm, 999))          # 그 채널 활성 흐름 없음
+        self.assertIsNone(Sys._flow_idle(_Sys([_Flow(700, now - 1200, done=True)]), 700))  # 완료는 제외
 
 
 class StopChannelTest(TestCase):

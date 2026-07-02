@@ -168,14 +168,6 @@ def _local_interject_pending(channel_id):
     return [{"target_id": s.target_id, "text": s.text} for s in sigs]
 
 
-def _flow_idle(sysm, ch):
-    """이 채널 활성 흐름의 '무진행 시간'(초) — 봇 활동(last_activity)이 멈춘 지 얼마나 됐나. 흐름 없으면 None.
-    채널→흐름 매칭은 request_cancel과 동일(user_channel). 정체 기준 슬롯 회수의 신호."""
-    for f in list(getattr(sysm, "active_flows", {}).values()):
-        if getattr(f, "user_channel", None) == int(ch) and not getattr(f, "done", False):
-            la = getattr(f, "last_activity", None)
-            return None if la is None else max(0.0, time.monotonic() - la)
-    return None
 
 
 class Command(BaseCommand):
@@ -212,54 +204,12 @@ class Command(BaseCommand):
             guide = HttpSnsGuide(remote, token)
             bot_info, leader, model_map, persona_map = await self._remote_roster(guide)
 
-            # [배달=Guide 구현체] 수신·pick·heartbeat 등은 HttpSnsGuide가 구현 — 여기선 그 계약을 호출만(모드분기 제거 진행)
-            async def fetch_pending(seen):
-                return [p for p in await guide.get_pending() if p["msg_id"] not in seen]
-
-            async def mark_pick(mid, done=False, touch=False, unpick=False, idle=None):
-                return await guide.pick(mid, done=done, touch=touch, unpick=unpick, idle=idle)
-
-            async def _beat():
-                await guide.heartbeat("remote")
-
-            async def _check_stop(ch):
-                return await guide.check_stop(ch)
-
-            async def fetch_all_stops():
-                return await guide.all_stops()
-
-            async def mark_channel_stopped(ch):
-                await guide.mark_stopped(ch)
-
-            async def _check_interject(ch):
-                return await guide.check_interject(ch)
             where = f"원격 {remote}"
         else:
             guide = SnsGuide()
             bot_info, leader, persona_map = await sync_to_async(_local_roster)()
             model_map = await sync_to_async(_local_models)()
 
-            # [배달=Guide 구현체] 로컬도 SnsGuide가 같은 계약을 ORM으로 구현 — 여기선 호출만(모드분기 제거)
-            async def fetch_pending(seen):
-                return [p for p in await guide.get_pending() if p["msg_id"] not in seen]
-
-            async def mark_pick(mid, done=False, touch=False, unpick=False, idle=None):
-                return await guide.pick(mid, done=done, touch=touch, unpick=unpick, idle=idle)
-
-            async def _beat():
-                await guide.heartbeat("local")
-
-            async def _check_stop(ch):
-                return await guide.check_stop(ch)
-
-            async def fetch_all_stops():
-                return await guide.all_stops()
-
-            async def mark_channel_stopped(ch):
-                await guide.mark_stopped(ch)
-
-            async def _check_interject(ch):
-                return await guide.check_interject(ch)
             where = "로컬 ORM"
 
         if not bot_info:
@@ -279,17 +229,13 @@ class Command(BaseCommand):
                               ", ".join(f"{bot_info.get(b, b)}={m}" for b, m in list(model_map.items())[:8]))
 
         if opts["bootstrap_check"]:
-            pend = await fetch_pending(set())
+            pend = await guide.get_pending()
             self.stdout.write(f"  대기 요청: {len(pend)}건")
             for m in pend[:10]:
                 self.stdout.write(f"    · ch={m['channel_id']} kind={m['kind']} to={m['to_id']} body={m['body'][:46]!r}")
             self.stdout.write("[bootstrap-check] 구성 정상 — Sys/Guide/builder 연결 OK. (에이전트 미실행)")
             return
 
-        seen = set()
-        cut_resumes = {}                                 # msg_id → 백스톱 컷 후 재개 횟수(무한 루프 방지 상한)
-        last_beat = 0.0
-        inflight = {}                                    # msg_id → {"task":Task, "ch":int} — 동시 진행 흐름
         try:
             cap = max(1, int(os.environ.get("ORGANT_MAX_FLOWS", "4")))
         except ValueError:
