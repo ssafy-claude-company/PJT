@@ -12,12 +12,34 @@ import glob
 import json
 import os
 import re
+import subprocess
 import time
 from typing import Dict, Optional
 
 from .communication import CommError, Engagement
 from .guide_tools import Flow, TaskRef, build_guide_server, make_guide_tools
 from .protocol import Kind, Request, TaskStatus, format_response
+
+
+def _init_artifact_repo(workspace):
+    """[산출물 레포화] 프로젝트 작업공간을 *지속* git 레포로 만든다 — Organt이 그 안에서 작업하며
+    커밋하고, deploy가 매번 fresh-init이 아니라 '그 레포'를 push한다(산출물=독립 레포 관리, 사용자 설계).
+    이미 레포면 무해(멱등). git 없거나 실패해도 프로젝트 등록은 계속(best-effort)."""
+    try:
+        ws = str(workspace or "")
+        if not ws or not os.path.isdir(ws) or os.path.isdir(os.path.join(ws, ".git")):
+            return
+        gi = os.path.join(ws, ".gitignore")
+        if not os.path.exists(gi):
+            with open(gi, "w", encoding="utf-8") as f:
+                f.write("node_modules/\n*.log\n.env\n__pycache__/\n.DS_Store\n")
+        env = {**os.environ,
+               "GIT_AUTHOR_NAME": "Organt", "GIT_AUTHOR_EMAIL": "organt@local",
+               "GIT_COMMITTER_NAME": "Organt", "GIT_COMMITTER_EMAIL": "organt@local"}
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=ws, env=env,
+                       timeout=15, capture_output=True)
+    except Exception:
+        pass
 
 # 턴 한도로 작업이 끊겼을 때 같은 세션으로 이어가게 하는 지시(구조적 연속 실행).
 _CONTINUE_BODY = (
@@ -261,6 +283,7 @@ class Sys:
         self._proj_n += 1
         pid = f"P-{self._proj_n:03d}"
         workspace = self._idify_workspace(workspace, pid, name)   # 신원=번호: p-00n-슬러그 개명
+        _init_artifact_repo(workspace)                            # [산출물 레포화] 지속 git 레포로 — Organt이 그 안에서 작업·커밋
         self.projects[ch] = {"id": pid, "name": name, "channel": ch,
                              "workspace": workspace, "leader": leader, "summary": "",
                              "purpose": purpose[:700], "origin_msg": str(origin_msg or "")}

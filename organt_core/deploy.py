@@ -294,15 +294,17 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
         scripts = {}
     start_cmd = "npm start" if scripts.get("start") else "node server.js"
 
-    # 1) node_modules·.git 제외한 깨끗한 스테이징 사본
-    stage = Path("/tmp") / f"deploy_{name}_{int(time.time())}"
-    if stage.exists():
-        shutil.rmtree(stage)
-    shutil.copytree(ws, stage, ignore=shutil.ignore_patterns("node_modules", ".git", "*.log", ".env"))
-    (stage / ".gitignore").write_text("node_modules/\n*.log\n.env\n")
+    # 1) [산출물 레포화(2026-07, 사용자 설계)] 작업공간의 *지속* git 레포에서 직접 배포한다 — 매번
+    #    fresh init한 /tmp 사본이 아니라, Organt이 그 폴더 안에서 작업하며 쌓은 커밋 히스토리를 그대로
+    #    push한다(산출물 = 독립 레포 관리). 프로젝트 등록 시 _init_artifact_repo가 이미 init하지만,
+    #    구 흐름(레포 없는 작업공간)은 여기서 폴백 init. .git은 원격이 받는 트리에 안 실려도 무해.
+    stage = ws
+    if not (ws / ".git").exists():
+        _git(["init", "-q", "-b", "main"], stage)
+    if not (ws / ".gitignore").exists():
+        (ws / ".gitignore").write_text("node_modules/\n*.log\n.env\n__pycache__/\n")
 
-    # 2) git init + commit (서명 끔)
-    _git(["init", "-q", "-b", "main"], stage)
+    # 2) 변경 스테이징 + 크기 검사 + 커밋(.gitignore가 node_modules·.env 제외)
     _git(["add", "-A"], stage)
     # [>100MB 예방 — GitHub 하드 거부 전에 명확히 안내(2026-07, '흐름 원활·안전')] GitHub는 100MB 초과 파일이
     # 든 push를 거부한다(라이브 P-003: 181MB 파일로 push 5회 실패, 봇은 원인 규명에 오래 헤맴). git add(=.gitignore
@@ -310,12 +312,11 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
     # 즉시 안내 → 봇이 그 파일을 빼고 재배포하면 통과(비-일시라 cap엔 안 쌓임).
     big = _oversized_files(stage)
     if big:
-        shutil.rmtree(stage, ignore_errors=True)
         lst = ", ".join(f"{r}({s // (1024 * 1024)}MB)" for r, s in sorted(big, key=lambda x: -x[1])[:5])
         return ("배포 실패(비-일시 — 파일 크기): GitHub는 **100MB 초과 파일**을 거부합니다. 재배포 전에 다음을 "
                 f"제거하거나 .gitignore에 넣으세요(대용량 에셋·바이너리·모델은 대개 배포에 불필요): {lst}. "
                 "조치 후 재배포하면 통과합니다(이 실패는 배포 cap에 세지 않습니다).")
-    _git(["commit", "-q", "-m", f"deploy {name}"], stage)
+    _git(["commit", "-q", "-m", f"deploy {name}"], stage)   # 변경 없으면 non-zero지만 무해(기존 HEAD를 push)
 
     # 3) GitHub repo 보장(있으면 422 → 재사용)
     st, resp = _http("POST", f"{GITHUB_API}/user/repos", gh_pat,
@@ -339,7 +340,7 @@ def deploy_sync(workspace, name, gh_pat, gh_user, render_key, owner_id, region="
     # 4) push(force — 재배포 시 최신 상태로 덮어씀)
     push_url = f"https://x-access-token:{gh_pat}@github.com/{real_user}/{name}.git"
     rc, out = _git(["push", "-q", "-f", push_url, "main:main"], stage)
-    shutil.rmtree(stage, ignore_errors=True)
+    # [산출물 레포화] stage=작업공간(지속 레포)이므로 삭제하지 않는다 — 다음 배포가 히스토리를 이어감
     if rc != 0:
         _o = _mask_secret(out, gh_pat)
         # [비-일시 분류 — 재시도로 안 풀리는 설정/인증 오류는 즉시 보고(2026-06-30, 사용자: '믿음만 믿고 5번
