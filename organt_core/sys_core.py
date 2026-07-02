@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import time
+import logging
 from typing import Dict, Optional
 
 from .rule.communication import CommError, Engagement
@@ -55,6 +56,9 @@ _CONTINUE_BODY = (
 )
 
 
+
+
+log = logging.getLogger("organt.sys")
 
 class Sys:
     def __init__(self, guide, guild_id, organt_builder, bot_info: Optional[Dict[int, str]] = None,
@@ -2373,6 +2377,113 @@ class Sys:
                 la = getattr(f, "last_activity", None)
                 return None if la is None else max(0.0, time.monotonic() - la)
         return None
+
+    async def run(self, guide, leader, cap=4, poll=3.0, stall_timeout=900, max_age=7200, once=False):
+        """[매체 무관 실행 루프] Guide 배달계약(get_pending·pick·heartbeat·all_stops·check_interject·
+        check_stop·set_origin)으로 요청을 받아 동시 흐름으로 처리한다. 하트비트·정체컷·재개는 SYS가
+        *결정*하고, 매체 실행은 guide가 *구현*한다(추상↔구현). 러너/리스너는 Sys(guide,builder) 만들고
+        이 run()만 부르면 됨 — 진입이 얇아진다(폴링·pick 로직은 여기·Guide로 이관)."""
+        import traceback
+        inflight, seen, cut_resumes, last_beat = {}, set(), {}, 0.0
+        log.info("요청 폴링 시작(동시 처리 — 상한 %d)", cap)
+        while True:
+            try:
+                _now = asyncio.get_event_loop().time()
+                # ── 하트비트 + 진행(picked_ts) 갱신(8초 throttle) ──
+                if _now - last_beat > 8:
+                    try:
+                        await guide.heartbeat()
+                        for _mid in list(inflight):
+                            _idle = self._flow_idle(inflight[_mid]["ch"])
+                            await guide.pick(_mid, touch=True, idle=int(_idle) if _idle is not None else 0)
+                    except Exception:
+                        pass
+                    last_beat = _now
+                # ── 완료 reap + 정체컷·재개(무진행 기준 슬롯 회수) ──
+                for _mid, _info in list(inflight.items()):
+                    if _info["task"].done():
+                        del inflight[_mid]
+                        try:
+                            _info["task"].result()
+                            await guide.pick(_mid, done=True)
+                            log.info("✓ 처리 완료: msg_id=%s", _mid)
+                        except asyncio.CancelledError:
+                            log.info("■ 중지됨: msg_id=%s", _mid)
+                        except Exception as _e:
+                            log.error("✗ 처리 실패 msg_id=%s: %s\n%s", _mid, _e, traceback.format_exc())
+                    else:
+                        idle = self._flow_idle(_info["ch"])
+                        stalled = idle is not None and idle > stall_timeout
+                        too_old = _now - _info.get("t0", _now) > max_age
+                        if (stalled or too_old) and not _info.get("cut"):
+                            try:
+                                _info["cut"] = True
+                                _info["task"].cancel()
+                                _why = f"무진행 {int(idle)}s" if stalled else f"최대수명 {max_age}s"
+                                _n = cut_resumes.get(_mid, 0) + 1
+                                cut_resumes[_mid] = _n
+                                if _n <= 5:
+                                    seen.discard(_mid)
+                                    await guide.pick(_mid, unpick=True)
+                                    log.info("⏱ %s — 체크포인트 후 재개 예약(%d/5): msg=%s ch=%s", _why, _n, _mid, _info["ch"])
+                                else:
+                                    log.info("⏱ %s — 재개 상한 도달(%d회), 중단: msg=%s ch=%s", _why, _n - 1, _mid, _info["ch"])
+                            except Exception:
+                                pass
+                # ── 작업 중지(전역 스캔 — 도는 흐름 취소 + 픽 요청 종결) ──
+                try:
+                    for _sch in await guide.all_stops():
+                        cancelled = self.request_cancel(_sch)
+                        await guide.mark_stopped(_sch)
+                        log.info("■ 작업 중지 — ch=%s(흐름취소=%s)", _sch, cancelled)
+                except Exception:
+                    pass
+                # ── 진행 중 흐름 개입 폴 ──
+                for _mid, _info in list(inflight.items()):
+                    _ch = _info["ch"]
+                    try:
+                        for _x in await guide.check_interject(_ch):
+                            ok = self.deliver_human_info(_ch, _x.get("target_id"), _x.get("text"))
+                            log.info("✎ 사람 개입 %s — ch=%s", "주입" if ok else "미주입(흐름없음)", _ch)
+                    except Exception:
+                        pass
+                # ── 빈 봇 요청 픽 → 동시 흐름(상한까지) ──
+                pend = [p for p in await guide.get_pending() if p["msg_id"] not in seen]
+                busy_ch = {_i["ch"] for _i in inflight.values()}
+                busy_lead = set()
+                for m in pend:
+                    if len(inflight) >= cap:
+                        break
+                    mid = m["msg_id"]
+                    to_id = int(m["to_id"]) if m["to_id"] else (int(m["route_to"]) if m.get("route_to") else leader)
+                    ch = int(m["channel_id"])
+                    if ch in busy_ch or to_id in busy_lead or self.engaged.holder(to_id) is not None:
+                        continue
+                    seen.add(mid)
+                    kind = Kind.WORK if (m["kind"] or "W") == "W" else Kind.INFO
+                    req = Request(to_id=to_id, kind=kind, body=m["body"], from_id=0, message_id=str(mid))
+                    try:
+                        await guide.check_stop(ch)
+                    except Exception:
+                        pass
+                    if not await guide.pick(mid):
+                        seen.discard(mid)
+                        continue
+                    guide.set_origin(ch)
+                    inflight[mid] = {"task": asyncio.create_task(self.route_channel_request(ch, req)), "ch": ch, "t0": _now}
+                    busy_ch.add(ch)
+                    busy_lead.add(to_id)
+                    log.info("▶ 요청 처리(동시 %d/%d): ch=%s to=%s kind=%s body=%r", len(inflight), cap, ch, to_id, m["kind"], m["body"][:42])
+                if once and not inflight and not pend:
+                    log.info("[--once] 대기·진행 요청 없음 — 종료.")
+                    return
+                await asyncio.sleep(2)
+            except KeyboardInterrupt:
+                log.info("종료 신호 — 폴링 중단.")
+                return
+            except Exception as e:
+                log.error("폴링 루프 오류: %s\n%s", e, traceback.format_exc())
+            await asyncio.sleep(poll)
 
     async def route_channel_request(self, channel_id, request: Request, root_id=None) -> dict:
         if request.to_id is None:

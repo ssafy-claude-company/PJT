@@ -309,123 +309,16 @@ class Command(BaseCommand):
         # 하나씩 await해 직렬화했다 — 무관한 다른 채널·다른 봇 요청까지 큐에 막혔다(라이브 관측).
         # 이제 빈 봇의 요청은 동시 task로 띄우고(점유 충돌은 engaged.holder로 사전 차단), 같은 봇/채널만
         # 자연 직렬화한다. 출력 라우팅은 contextvar(ORIGIN_CHANNEL)로 흐름별 격리(공유속성 레이스 제거).
-        self.stdout.write(f"요청 폴링 시작(동시 처리 — 상한 {cap}) — 빈 봇이면 여러 흐름이 함께 돕니다. (Ctrl+C 종료)")
-        while True:
-            try:
-                _now = asyncio.get_event_loop().time()
-                # ── 엔진 생존(heartbeat) + 진행(picked_ts) 갱신 — 모든 진행 중 요청(8초 throttle) ──
-                if _now - last_beat > 8:
-                    try:
-                        await _beat()
-                        for _mid in list(inflight):
-                            # picked_ts touch(작업중 유지) + 실제 무진행(_flow_idle)도 함께 보고 → 화면 '조용'을
-                            # 메시지 간격이 아니라 진짜 도구활동 정지 기준으로(잘 도는 빌드는 '조용' 안 뜸).
-                            _idle = _flow_idle(sysm, inflight[_mid]["ch"])
-                            await mark_pick(_mid, touch=True, idle=int(_idle) if _idle is not None else 0)
-                    except Exception:
-                        pass
-                    last_beat = _now
-                # ── 완료된 흐름 reap + 먹통(최대수명 초과) 흐름 취소로 슬롯·봇 점유 회수(다수 접속 데모 잠금 방지) ──
-                for _mid, _info in list(inflight.items()):
-                    if _info["task"].done():
-                        del inflight[_mid]
-                        try:
-                            _info["task"].result()       # 예외 표출
-                            await mark_pick(_mid, done=True)
-                            self.stdout.write(f"✓ 처리 완료: msg_id={_mid}")
-                        except asyncio.CancelledError:
-                            self.stdout.write(f"■ 중지됨: msg_id={_mid}")   # 취소된 요청은 picked-미완→멎음으로 떠 재큐 가능
-                        except Exception as _e:
-                            import traceback
-                            self.stderr.write(f"✗ 처리 실패 msg_id={_mid}: {_e}\n{traceback.format_exc()}")
-                    else:
-                        # [정체 기준 회수] '나이'가 아니라 '실제 무진행'으로 자른다 — 잘 도는 긴 빌드(계획→구현
-                        # →검증→배포는 10분+ 정상)는 절대 안 끊고, 봇 활동(last_activity)이 멈춘 먹통만 회수한다.
-                        # last_activity는 도구활동·턴시작마다 갱신되므로, 멈춰 있으면 = 진짜 정체(리더 워치독이
-                        # 못 잡는 리더-턴 이후 정체 포함). 채널→흐름 조회는 request_cancel과 같은 user_channel 매칭.
-                        idle = _flow_idle(sysm, _info["ch"])
-                        stalled = idle is not None and idle > stall_timeout
-                        too_old = _now - _info.get("t0", _now) > max_age      # 절대 백스톱(병적 케이스)
-                        if (stalled or too_old) and not _info.get("cut"):
-                            try:
-                                _info["cut"] = True               # 같은 흐름 중복 컷/카운트 방지(취소 완료까지 폴 여러 번)
-                                # [백스톱 컷 ≠ 사용자 중지] request_cancel은 flow.cancelled를 세워 두뇌가 '사용자가
-                                # 작업을 중지했습니다'로 *오표기*한다(사용자는 안 눌렀는데). 백스톱은 흐름 task만 취소해
-                                # 두뇌가 '흐름 자동 중단'으로 정확히 보고하게 한다(_await_with_idle_watchdog가 내부 task 정리).
-                                _info["task"].cancel()
-                                _why = f"무진행 {int(idle)}s" if stalled else f"최대수명 {max_age}s"
-                                # [재개] 컷된 요청을 seen에서 빼고 픽 해제 → 다음 폴에 같은 러너가 다시 집어 '이어서'
-                                # 계속(워크스페이스·스레드 보존). seen에 남으면 영영 재픽 안 됨(=재시작 안되던 근본). 상한으로 무한루프 차단.
-                                _n = cut_resumes.get(_mid, 0) + 1; cut_resumes[_mid] = _n
-                                if _n <= 5:
-                                    seen.discard(_mid)
-                                    await mark_pick(_mid, unpick=True)
-                                    self.stdout.write(f"⏱ {_why} — 체크포인트 후 재개 예약({_n}/5): msg={_mid} ch={_info['ch']}")
-                                else:
-                                    self.stdout.write(f"⏱ {_why} — 재개 상한 도달({_n-1}회), 중단: msg={_mid} ch={_info['ch']}")
-                            except Exception:
-                                pass
-                # ── 작업 중지: 매 폴 '모든' 미처리 중지신호를 확인(inflight 아닌 채널 포함) ──
-                # [신뢰성] 종전엔 *도는 채널만* 중지를 봤다 → 흐름이 잠깐 안 도는 사이 누른 중지가 유실됐다
-                # (라이브: 사용자 중지가 cancel 0건으로 통째 무시됨). 이제 전역 스캔으로 ① 도는 흐름은 즉시 취소,
-                # ② 안 도는 채널은 픽 요청을 '중지됨'으로 종결(작업중 해제·재픽/재개 차단) — 중지가 항상 먹는다.
-                try:
-                    for _sch in await fetch_all_stops():
-                        cancelled = sysm.request_cancel(_sch)        # 도는 중이면 흐름 취소(아니면 False)
-                        await mark_channel_stopped(_sch)             # 픽 요청 '중지됨' 종결(화면·재픽 정정)
-                        self.stdout.write(f"■ 작업 중지 — ch={_sch}(흐름취소={cancelled})")
-                except Exception:
-                    pass
-                # ── 진행 중 흐름들의 개입 폴(채널별) ──
-                for _mid, _info in list(inflight.items()):
-                    _ch = _info["ch"]
-                    try:
-                        for _x in await _check_interject(_ch):
-                            ok = sysm.deliver_human_info(_ch, _x.get("target_id"), _x.get("text"))
-                            self.stdout.write(f"✎ 사람 개입 {'주입' if ok else '미주입(흐름없음)'} — ch={_ch}")
-                    except Exception:
-                        pass
-                # ── 빈 봇 요청 픽 → 동시 흐름 띄우기(상한까지) ──
-                pend = await fetch_pending(seen)
-                busy_ch = {_i["ch"] for _i in inflight.values()}
-                busy_lead = set()                        # 이번 폴에 막 띄운 리더(아직 engage 전 보호)
-                for m in pend:
-                    if len(inflight) >= cap:
-                        break
-                    mid = m["msg_id"]
-                    # [A] 봇 미지정이면: 그 채널의 담당(route_to=지정 리더/최근 활동 봇) → 없을 때만 전역 리더.
-                    # 종전엔 무조건 전역 리더(고은호)로 가 음식 추천이 '게임 기획자'에게 가던 문제.
-                    to_id = int(m["to_id"]) if m["to_id"] else (int(m["route_to"]) if m.get("route_to") else leader)
-                    ch = int(m["channel_id"])
-                    # 같은 채널이 진행 중이거나 대상 봇이 타 흐름 점유 중이면 큐에 남김(두뇌가 직렬화) — seen 미추가로 다음 폴 재검토.
-                    # ('진행 중 흐름에 개입으로 즉시 전달'은 단일턴 흐름에선 다음 턴이 없어 유실되므로 안 함 — 큐가 안전하게 각각 응답.)
-                    if ch in busy_ch or to_id in busy_lead or sysm.engaged.holder(to_id) is not None:
-                        continue
-                    seen.add(mid)
-                    kind = Kind.WORK if (m["kind"] or "W") == "W" else Kind.INFO
-                    req = Request(to_id=to_id, kind=kind, body=m["body"], from_id=0, message_id=str(mid))
-                    try:
-                        await _check_stop(ch)            # stale stop 소거(이전 흐름 잔여 신호)
-                    except Exception:
-                        pass
-                    if not await mark_pick(mid):
-                        seen.discard(mid)               # 클레임 패배(다른 폴/러너가 집음) — 큐에 남겨 이중 처리 방지
-                        continue
-                    ORIGIN_CHANNEL.set(ch)               # task-로컬 라우팅(동시 안전 — create_task가 context 복사)
-                    inflight[mid] = {"task": asyncio.create_task(sysm.route_channel_request(ch, req)), "ch": ch, "t0": _now}
-                    busy_ch.add(ch); busy_lead.add(to_id)
-                    self.stdout.write(f"▶ 요청 처리(동시 {len(inflight)}/{cap}): ch={ch} to={to_id} kind={m['kind']} body={m['body'][:42]!r}")
-                if opts["once"] and not inflight and not pend:
-                    self.stdout.write("[--once] 대기·진행 요청 없음 — 종료.")
-                    return
-                await asyncio.sleep(2)
-            except KeyboardInterrupt:
-                self.stdout.write("종료 신호 — 폴링 중단.")
-                return
-            except Exception as e:
-                import traceback
-                self.stderr.write(f"폴링 루프 오류: {e}\n{traceback.format_exc()}")
-            await asyncio.sleep(opts["poll"])
+        # [로그 가시성] SYS.run이 진행상황을 log.info로 남긴다(구 self.stdout 대체) — 진입(러너)이 그걸
+        # journal(stdout)로 흘리도록 핸들러를 붙인다. 진입=앱이 로깅을 설정한다(SYS는 계약만).
+        import logging as _lg
+        _sl = _lg.getLogger("organt.sys"); _sl.setLevel(_lg.INFO)
+        if not _sl.handlers:
+            _h = _lg.StreamHandler(); _h.setFormatter(_lg.Formatter("%(asctime)s %(message)s"))
+            _sl.addHandler(_h); _sl.propagate = False
+        # [매체 무관 실행] 루프는 이제 SYS.run이 소유 — 러너는 guide·builder 조립 후 이것만 호출(진입 얇아짐)
+        await sysm.run(guide, leader, cap=cap, poll=opts["poll"],
+                       stall_timeout=stall_timeout, max_age=max_age, once=opts["once"])
 
     async def _remote_roster(self, guide):
         """원격 /api/agents/ → bot_info({bot_id: role}), 리더, model_map, persona_map({bot_id: persona})."""
