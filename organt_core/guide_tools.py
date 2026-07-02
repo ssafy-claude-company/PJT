@@ -29,13 +29,9 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 from .rule.communication import BusyInOtherFlow, CommError, CommunicationManager, RedoLimitExceeded
 from .protocol import Kind, TaskStatus
 
-_DEBUG = bool(os.environ.get("ORGANT_DEBUG"))
+from ._util import _DEBUG, _dbg, _ok, _react, _speech_clip  # noqa: F401  [공유 util 중립화]
 
 
-def _dbg(msg):
-    """진단 로그(기본 off). ORGANT_DEBUG 설정 시에만 stdout으로."""
-    if _DEBUG:
-        print(msg, flush=True)
 
 
 ORIGIN = 0
@@ -148,6 +144,7 @@ from .rule.task import (_has_real_asset, _has_visual_runtime, _perceptual_essent
 # #4가 자동으로 리더를 자기 직군에 가둠). 기능 식별(능력 needs↔팀 라벨)이라 직군 타이틀 하드코딩이 아니다.
 # 고신호 능력만(오발 최소). 새 능력은 (이름, needs(text)→bool, providers(label keywords)) 한 줄로 확장.
 # [팀·역량 라우팅 Rule → rule/communication] guide_tools 병합 해체(re-export로 도구·tests 호환)
+from .rule.communication import _say as _rule_say, vote as _rule_vote  # noqa: F401  [발언·표결 → rule/communication]
 from .rule.communication import (_kw, _CAPS, _capability_gaps, _needed_caps_coverage, _offdomain_capability_hit, _is_spare, _norm_job, _jobs_of, _job_tokens, _free_alternatives, _SPARE_LABEL, _JOB_SEP)  # noqa: F401
 
 
@@ -303,29 +300,14 @@ class Flow:
 from .rule.project import deploy_service_name, _deploy_infeasibility, create_project as _rule_create_project  # noqa: F401
 
 
-def _ok(text):
-    return {"content": [{"type": "text", "text": text}]}
 
 
 
 
-async def _react(g, channel_id, message_id, emoji):
-    """이모지 반응(상태 표시). Guide에 react가 없으면(테스트 등) 조용히 건너뜀."""
-    fn = getattr(g, "react", None)
-    if fn:
-        await fn(channel_id, message_id, emoji)
 
 
 
 
-def _speech_clip(s, n=1500) -> str:
-    """발언 안전망: 폭주만 막고 **침묵 절단하지 않는다** — 잘리면 잘렸다고 표기한다.
-    종전의 하드컷([:300]/[:400])은 '3~5줄' 지시를 지킨 발언(한국어 200~400자+)까지 단어
-    중간에서 잘랐다(라이브: 회의 발언 전원이 307~308자로 박제, "…프론트엔"에서 끊김 — 사용자
-    관측). 더 나쁜 건 회의록도 잘려 **다음 발언자들이 서로의 잘린 주장을 보고 토론**한 것 —
-    분량 통제는 지시(프롬프트)와 모델 판단의 몫이고, 시스템은 안전망만 친다."""
-    s = (s or "").strip()
-    return s if len(s) <= n else s[:n] + f" …(발언 {len(s)}자 — {n}자 안전망에서 잘림)"
 
 
 def make_guide_tools(flow: Flow, me_id: int, role: str):
@@ -333,14 +315,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
     tools = []
 
     async def _say(who, text):
-        """회의·표결 발언을 '그 봇 본인 명의'로 스레드에 남긴다 — 4명의 독립 의견이 리더 명의
-        [안내] 묶음으로 게시돼 '중앙 공지'처럼 보이던 착시(사용자 관측) 제거. 협업의 실체와
-        가시성을 일치시킨다. 실패는 조용히(가시화는 best-effort, 흐름은 안 멈춤)."""
-        try:
-            if flow.current:
-                await g.post(int(flow.current.thread_id), who, text)
-        except Exception:
-            pass
+        return await _rule_say(flow, who, text)   # [→ rule/communication._say] 발언을 봇 본인 명의로(가시성=실체)
 
     @tool("request", "현재 Task 팀의 동료 한 명에게 요청(kind: Info=질문 / Work=작업, to_id 문자열)",
           {"to_id": str, "kind": str, "body": str})
@@ -1997,90 +1972,7 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               "Task 팀 전원). 1:1 Info를 여러 번 도는 대신 합의를 구조화 — 결과(집계+근거)를 보고 리더가 확정한다.",
               {"question": str, "options": str, "members": str})
         async def vote(args):
-            if flow.current is None:
-                return _ok("오류: 진행 중인 Task가 없습니다. create_task 먼저 여세요.")
-            opts = [o.strip() for o in str(args.get("options", "")).split(";") if o.strip()]
-            if len(opts) < 2:
-                return _ok("오류: options에 선택지 2개 이상을 ';'로 구분해 주세요.")
-            voters = _resolve_members(args.get("members", ""), flow, flow.current.team) or \
-                     [m for m in flow.current.team if m != me_id]
-            voters = [v for v in voters if v != me_id and not _is_spare(flow, v)]
-            if not voters:
-                return _ok("오류: 표결할 멤버가 없습니다.")
-            if (any(not x.done() for x in getattr(flow, "inflight_tasks", ()))
-                    and flow.comm.alive != me_id and not flow.comm.done):
-                return _ok("[대기] 직전 위임이 아직 진행 중입니다 — 표결은 그 결과를 받은 뒤 여세요.")
-            if getattr(flow, "fork_active", 0) > 0:
-                return _ok("[대기] 다른 의견 수집이 진행 중입니다 — 그 결과를 받은 뒤 여세요(중첩 수집 금지).")
-            if flow.comm.done or flow.comm.alive != me_id:
-                return _ok(f"지금은 표결을 열 수 없습니다(활성={flow.comm.alive}) — 진행 중인 요청의 "
-                           f"응답을 받은 뒤 다시 시도하세요.")
-            question = str(args.get("question", "")).strip()
-
-            detached = {"on": False}
-
-            async def _run_vote():
-                # [병렬 fork-join] 표는 서로 '독립'(앵커링 방지)이라 동시 수집이 의미를 바꾸지 않고
-                # 시간만 줄인다 — 수집이 싸지면 표결을 아껴 쓰지 않게 된다(협동 빈도↑ = 품질).
-                def body_of(v):
-                    return (f"[표결 — 독립 의견] 안건: {question}\n선택지: {' / '.join(opts)}\n"
-                            f"동료들의 표는 보이지 않습니다(앵커링 방지). 당신의 전문가 관점에서 "
-                            f"하나를 고르고 근거를 2줄 이내로. 반드시 형식: [표] 선택지명\n근거")
-                tally, reasons = {o: 0 for o in opts}, []
-                dom_picks = {o: set() for o in opts}   # 옵션 → 그 옵션을 고른 '도메인'들(같은 직군 중복 제거)
-                for v, res, note in await _fork_collect(flow, me_id, voters, body_of):
-                    if res is None:
-                        reasons.append(f"{flow._info(v) or v}: {note}")
-                        continue
-                    m = re.search(r"\[표\]\s*([^\n]+)", res or "")
-                    pick = (m.group(1).strip() if m else "")
-                    chosen = next((o for o in opts if o in pick or pick in o), None)
-                    if chosen:
-                        # [동질 모델 — 표는 도메인(관점) 단위 집계] 같은 Claude·같은 직군 표는 같은 관점이라
-                        # N표가 아니라 1관점이다. 봇 수가 아니라 '다른 관점 수'로 세야 표결이 다양성을 반영
-                        # (같은 직군 3명이 같은 선택 = 3표가 아니라 그 직군 1표) — 봇 수 편향 제거. 도메인이
-                        # 갈리면(동질 모델이라 드묾) 각 옵션에 그 도메인을 1회씩 센다.
-                        _vd = {_norm_job(j) for j in _jobs_of(flow._info(v) or "")} - {""}
-                        _vdk = sorted(_vd)[0] if _vd else f"·{v}"
-                        if _vdk not in dom_picks[chosen]:
-                            dom_picks[chosen].add(_vdk)
-                            tally[chosen] += 1
-                    # [판정자 사본도 침묵 절단 금지] 리더는 이 근거로 표결을 '판정'한다 — 채널
-                    # 발언(400 안전망+잘림 표기)과 같은 내용이어야 한다. 종전 [:150] 하드컷은
-                    # 판정자가 동강난 근거로 결정하게 만들던 같은 부류의 결함(잘림 사건의 잔재).
-                    reasons.append(f"{flow._info(v) or v}: {(pick or '무효')} — {_speech_clip(res, 400)}")
-                    await _say(v, f"[표] {(pick or '무효')} — {_speech_clip(res, 400)}")  # 본인 명의 발언
-                    if v in flow.current.team and v != flow.leader:
-                        flow.current.participated.add(v)        # 표결 참여 = 실질 협의 인정
-                board = " / ".join(f"{o}: {n}관점" for o, n in tally.items())
-                if flow.current is not None:
-                    record = f"[표결] {question}\n{board}\n" + "\n".join(reasons)
-                    flow.current.collab_notes = _speech_clip(
-                        (getattr(flow.current, 'collab_notes', '') + '\n\n' + record).strip(), 6000)
-                    _ckpt(flow)
-                return _ok(f"[표결 집계 — 도메인(관점) 단위] {question}\n{board}\n\n[각자의 선택·근거]\n"
-                           + "\n".join(reasons)
-                           + "\n\n(집계는 **도메인 단위** — 같은 직군 N명의 같은 선택은 동질 모델이라 1관점으로 "
-                           + "합산(봇 수가 아니라 다른 관점 수). 참고일 뿐, 최종 판정은 당신(리더).)")
-
-            inner = asyncio.ensure_future(_run_vote())
-            flow.inflight_tasks.add(inner)
-            inner.add_done_callback(flow.inflight_tasks.discard)
-            try:
-                return await asyncio.shield(inner)
-            except asyncio.CancelledError:
-                if not inner.done():
-                    detached["on"] = True
-                    if flow.log:
-                        flow.log("delegation_detached", to="vote", seg=flow.leader_segment)
-
-                    def _hand(t):
-                        try:
-                            flow.detached_results.append(f"표결 완료 → {_speech_clip(t.result()['content'][0]['text'], 4000)}")
-                        except Exception:
-                            pass
-                    inner.add_done_callback(_hand)
-                raise
+            return _ok(await _rule_vote(flow, me_id, args))
         tools.append(vote)
 
         @tool("meet",

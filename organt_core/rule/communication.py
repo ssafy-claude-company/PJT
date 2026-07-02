@@ -21,6 +21,7 @@ attach_engagement로 붙는다 — 모든 점유/해제는 request/respond/escal
 """
 import asyncio
 import os
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -596,3 +597,106 @@ async def _add_members(g, thread_id, member_ids):
     fn = getattr(g, "add_thread_members", None)
     if fn:
         await fn(thread_id, member_ids)
+
+
+async def _say(flow, who, text):
+    """[Communication] 회의·표결 발언을 '그 봇 본인 명의'로 스레드에 남긴다 — 독립 의견이 리더 명의
+    묶음으로 게시돼 '중앙 공지'처럼 보이던 착시 제거(협업 가시성=실체). 실패는 조용히(best-effort).
+    flow는 duck-typed(current·guide)."""
+    g = flow.guide
+    try:
+        if flow.current:
+            await g.post(int(flow.current.thread_id), who, text)
+    except Exception:
+        pass
+
+
+async def vote(flow, me_id, args):
+    """[Communication Rule 로직] vote — 팀 표결(독립 수집→집계). @tool 래퍼가 _ok로 감쌈(평문 반환)."""
+    from .._util import _speech_clip, _react
+    from .task import _ckpt
+    g = flow.guide
+    if flow.current is None:
+        return ("오류: 진행 중인 Task가 없습니다. create_task 먼저 여세요.")
+    opts = [o.strip() for o in str(args.get("options", "")).split(";") if o.strip()]
+    if len(opts) < 2:
+        return ("오류: options에 선택지 2개 이상을 ';'로 구분해 주세요.")
+    voters = _resolve_members(args.get("members", ""), flow, flow.current.team) or \
+             [m for m in flow.current.team if m != me_id]
+    voters = [v for v in voters if v != me_id and not _is_spare(flow, v)]
+    if not voters:
+        return ("오류: 표결할 멤버가 없습니다.")
+    if (any(not x.done() for x in getattr(flow, "inflight_tasks", ()))
+            and flow.comm.alive != me_id and not flow.comm.done):
+        return ("[대기] 직전 위임이 아직 진행 중입니다 — 표결은 그 결과를 받은 뒤 여세요.")
+    if getattr(flow, "fork_active", 0) > 0:
+        return ("[대기] 다른 의견 수집이 진행 중입니다 — 그 결과를 받은 뒤 여세요(중첩 수집 금지).")
+    if flow.comm.done or flow.comm.alive != me_id:
+        return (f"지금은 표결을 열 수 없습니다(활성={flow.comm.alive}) — 진행 중인 요청의 "
+                   f"응답을 받은 뒤 다시 시도하세요.")
+    question = str(args.get("question", "")).strip()
+
+    detached = {"on": False}
+
+    async def _run_vote():
+        # [병렬 fork-join] 표는 서로 '독립'(앵커링 방지)이라 동시 수집이 의미를 바꾸지 않고
+        # 시간만 줄인다 — 수집이 싸지면 표결을 아껴 쓰지 않게 된다(협동 빈도↑ = 품질).
+        def body_of(v):
+            return (f"[표결 — 독립 의견] 안건: {question}\n선택지: {' / '.join(opts)}\n"
+                    f"동료들의 표는 보이지 않습니다(앵커링 방지). 당신의 전문가 관점에서 "
+                    f"하나를 고르고 근거를 2줄 이내로. 반드시 형식: [표] 선택지명\n근거")
+        tally, reasons = {o: 0 for o in opts}, []
+        dom_picks = {o: set() for o in opts}   # 옵션 → 그 옵션을 고른 '도메인'들(같은 직군 중복 제거)
+        for v, res, note in await _fork_collect(flow, me_id, voters, body_of):
+            if res is None:
+                reasons.append(f"{flow._info(v) or v}: {note}")
+                continue
+            m = re.search(r"\[표\]\s*([^\n]+)", res or "")
+            pick = (m.group(1).strip() if m else "")
+            chosen = next((o for o in opts if o in pick or pick in o), None)
+            if chosen:
+                # [동질 모델 — 표는 도메인(관점) 단위 집계] 같은 Claude·같은 직군 표는 같은 관점이라
+                # N표가 아니라 1관점이다. 봇 수가 아니라 '다른 관점 수'로 세야 표결이 다양성을 반영
+                # (같은 직군 3명이 같은 선택 = 3표가 아니라 그 직군 1표) — 봇 수 편향 제거. 도메인이
+                # 갈리면(동질 모델이라 드묾) 각 옵션에 그 도메인을 1회씩 센다.
+                _vd = {_norm_job(j) for j in _jobs_of(flow._info(v) or "")} - {""}
+                _vdk = sorted(_vd)[0] if _vd else f"·{v}"
+                if _vdk not in dom_picks[chosen]:
+                    dom_picks[chosen].add(_vdk)
+                    tally[chosen] += 1
+            # [판정자 사본도 침묵 절단 금지] 리더는 이 근거로 표결을 '판정'한다 — 채널
+            # 발언(400 안전망+잘림 표기)과 같은 내용이어야 한다. 종전 [:150] 하드컷은
+            # 판정자가 동강난 근거로 결정하게 만들던 같은 부류의 결함(잘림 사건의 잔재).
+            reasons.append(f"{flow._info(v) or v}: {(pick or '무효')} — {_speech_clip(res, 400)}")
+            await _say(flow, v, f"[표] {(pick or '무효')} — {_speech_clip(res, 400)}")  # 본인 명의 발언
+            if v in flow.current.team and v != flow.leader:
+                flow.current.participated.add(v)        # 표결 참여 = 실질 협의 인정
+        board = " / ".join(f"{o}: {n}관점" for o, n in tally.items())
+        if flow.current is not None:
+            record = f"[표결] {question}\n{board}\n" + "\n".join(reasons)
+            flow.current.collab_notes = _speech_clip(
+                (getattr(flow.current, 'collab_notes', '') + '\n\n' + record).strip(), 6000)
+            _ckpt(flow)
+        return (f"[표결 집계 — 도메인(관점) 단위] {question}\n{board}\n\n[각자의 선택·근거]\n"
+                   + "\n".join(reasons)
+                   + "\n\n(집계는 **도메인 단위** — 같은 직군 N명의 같은 선택은 동질 모델이라 1관점으로 "
+                   + "합산(봇 수가 아니라 다른 관점 수). 참고일 뿐, 최종 판정은 당신(리더).)")
+
+    inner = asyncio.ensure_future(_run_vote())
+    flow.inflight_tasks.add(inner)
+    inner.add_done_callback(flow.inflight_tasks.discard)
+    try:
+        return await asyncio.shield(inner)
+    except asyncio.CancelledError:
+        if not inner.done():
+            detached["on"] = True
+            if flow.log:
+                flow.log("delegation_detached", to="vote", seg=flow.leader_segment)
+
+            def _hand(t):
+                try:
+                    flow.detached_results.append(f"표결 완료 → {_speech_clip(t.result()['content'][0]['text'], 4000)}")
+                except Exception:
+                    pass
+            inner.add_done_callback(_hand)
+        raise
