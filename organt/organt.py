@@ -22,7 +22,7 @@ from claude_agent_sdk import (
     TextBlock,
 )
 
-from organt_core.config import ROOT, Config
+from system.config import ROOT, Config
 
 # Organt 기본 인격(폴백). CLAUDE.md가 없거나 비면 이걸 system_prompt로 쓴다.
 ORGANT_PERSONA = (

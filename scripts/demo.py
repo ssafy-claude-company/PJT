@@ -20,15 +20,15 @@ import sys
 import discord
 from claude_agent_sdk import HookMatcher
 
-from organt_core.audit import AuditLog, make_post_tool_use_hook
-from organt_core.config import load_config
+from system.audit import AuditLog, make_post_tool_use_hook
+from system.config import load_config
 from organt_discord.discord_guide import DiscordGuide
-from organt_core.guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
+from system.guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
 from organt_discord.main import load_roster
-from organt_core.organt import Organt, build_options
-from organt_core.permissions import make_pre_tool_use_hook
-from organt_core.protocol import Kind, format_request
-from organt_core.sys_core import Sys
+from system.organt import Organt, build_options
+from system.permissions import make_pre_tool_use_hook
+from system.protocol import Kind, format_request
+from system.sys_core import Sys
 
 DEFAULT_TASK = (
     # 결과(outcome)만 말한다 — 누가 무엇을 맡을지·인터페이스는 팀이 협의로 정한다(미리 분배 금지).

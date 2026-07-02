@@ -5,7 +5,7 @@
 모든 채널이 같은 판정을 쓰도록 분리했다.
 """
 from organt_discord.main import find_pending_request, graduated_project
-from organt_core.protocol import Kind, Request, Response
+from system.protocol import Kind, Request, Response
 
 
 def _req(mid, frm=999, to=11):

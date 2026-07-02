@@ -5,7 +5,7 @@
 
 ## 4계층 — 의존은 전부 SYS(코어)를 향함 (역의존 0)
 ```
-                         organt_core/  =  SYS + Rule (추상)     ← 아무것도 의존 안 함
+                         system/  =  SYS + Rule (추상)     ← 아무것도 의존 안 함
                          ▲            ▲            ▲
           ┌──────────────┘            │            └──────────────┐
     organt/ = Organt(봇)        guide/ = Guide(구현체)       organt_sns/ = murmur(SNS 플랫폼)
@@ -18,9 +18,9 @@
 - **Guide·Organt는 형제** — 둘 다 SYS에만 의존. Guide는 봇을 모르고, Organt는 전송기를 모름.
 - **murmur = 독립 플랫폼** — Guide(HttpSnsGuide)가 그 API(guide_bridge)로 대화. 아무도 murmur를 의존 안 함.
 
-## organt_core 내부 — Rule을 §7 설계대로 (guide_tools 3096→417 해체)
+## system 내부 — Rule을 §7 설계대로 (guide_tools 3096→417 해체)
 ```
-organt_core/
+system/
 ├─ sys_core.py     ★SYS★ 오케스트레이션 + SYS.run(매체 무관 실행 루프)
 ├─ rule/           Rule 로직(추상)
 │  ├─ communication.py  베턴 소통 + 팀·역량 라우팅 + request·vote·meet·parallel_work·recruit

@@ -1,7 +1,7 @@
 """기능13 검증: busy 가드(증명②) + 상신(증명③) + Accept/Redo."""
 import pytest
 
-from organt_core.rule.communication import CommError, CommunicationManager, RedoLimitExceeded
+from system.rule.communication import CommError, CommunicationManager, RedoLimitExceeded
 
 A, B, C, D = 1, 2, 3, 4
 

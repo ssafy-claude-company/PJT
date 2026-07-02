@@ -413,7 +413,7 @@ class FlowIdleReaperTest(TestCase):
 
     def test_flow_idle_무진행시간으로_먹통만_가린다(self):
         import time as _t
-        from organt_core.sys_core import Sys
+        from system.sys_core import Sys
 
         class _Flow:
             def __init__(self, ch, la, done=False):

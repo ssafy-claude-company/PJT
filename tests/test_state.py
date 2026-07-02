@@ -1,7 +1,7 @@
 """기능9 검증: State(세션 resume) 보존."""
 from pathlib import Path
 
-from organt_core.config import Config
+from system.config import Config
 from organt.organt import Organt
 
 

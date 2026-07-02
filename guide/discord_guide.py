@@ -10,7 +10,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Union
 
-from organt_core.protocol import (
+from system.protocol import (
     Kind,
     Request,
     Response,

@@ -3,8 +3,8 @@ import asyncio
 import json
 from pathlib import Path
 
-from organt_core.audit import AuditLog, make_post_tool_use_hook
-from organt_core.config import Config
+from system.audit import AuditLog, make_post_tool_use_hook
+from system.config import Config
 
 
 def test_record가_JSONL로_누적():
@@ -53,7 +53,7 @@ def test_PostToolUse_훅이_행위자_기록():
 
 def test_redact_tool_input은_파일내용을_길이로_요약한다():
     """보안 핫픽스: 감사에 Write/Edit의 파일 내용 전체를 남기지 않고 길이로 요약(경로·도구는 보존)."""
-    from organt_core.audit import redact_tool_input
+    from system.audit import redact_tool_input
     big = "x" * 500
     out = redact_tool_input({"file_path": "/ws/a.js", "content": big})
     assert out["file_path"] == "/ws/a.js"                      # 경로 보존

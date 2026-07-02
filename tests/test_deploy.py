@@ -1,5 +1,5 @@
 """deploy 헬퍼 검증 — PAT 마스킹·orphan keep-set 보수 폴백 (오프라인, 네트워크 없음). 보안·정확성 핫픽스."""
-from organt_core.deploy import _mask_secret, _referenced_services
+from system.deploy import _mask_secret, _referenced_services
 
 
 def test_mask_secret은_PAT를_에러문자열에서_가린다():
@@ -27,7 +27,7 @@ def test_referenced_services_보수폴백(tmp_path):
 def test_oversized_files_100MB초과만_감지(tmp_path):
     """>100MB 예방 게이트 — 스테이징된 파일 중 GitHub 100MB 한도 초과만 잡는다(sparse 파일로 가볍게)."""
     import subprocess, os
-    from organt_core.deploy import _oversized_files
+    from system.deploy import _oversized_files
     d = tmp_path / "repo"; d.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=d, check=True)
     with open(d / "big.bin", "wb") as f:

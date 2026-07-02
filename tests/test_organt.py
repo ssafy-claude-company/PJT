@@ -4,7 +4,7 @@
 """
 from pathlib import Path
 
-from organt_core.config import Config
+from system.config import Config
 from organt.organt import Organt, _is_transient_api_error, _strip_decoration, build_options
 
 

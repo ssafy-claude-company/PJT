@@ -10,11 +10,11 @@ import time
 
 from claude_agent_sdk import HookMatcher
 
-from organt_core.audit import AuditLog, make_post_tool_use_hook
-from organt_core.config import Config
-from organt_core.tool_names import FLOW_TOOLS, LEADER_TOOLS
+from system.audit import AuditLog, make_post_tool_use_hook
+from system.config import Config
+from system.tool_names import FLOW_TOOLS, LEADER_TOOLS
 from .organt import Organt, build_options, load_persona, pinned_cwd
-from organt_core.permissions import make_pre_tool_use_hook
+from system.permissions import make_pre_tool_use_hook
 
 # 워커 기본 도구(WebSearch 포함 — RFC-011 M1 자원동원). 매체-중립 Rule 자산.
 WORKER_BASE_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "ToolSearch", "WebSearch", "WebFetch"]

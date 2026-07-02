@@ -24,7 +24,7 @@ _PJT = os.environ.get("ORGANT_PJT", "/home/user/PJT")
 if _PJT not in sys.path:
     sys.path.insert(0, _PJT)
 try:
-    from organt_core.protocol import Request, Response, Kind  # noqa
+    from system.protocol import Request, Response, Kind  # noqa
 except Exception:  # 러너 밖(마이그레이션 등)에서 import만 될 때 안전
     Request = Response = Kind = None
 
