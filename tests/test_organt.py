@@ -4,8 +4,8 @@
 """
 from pathlib import Path
 
-from src.config import Config
-from src.organt import Organt, _is_transient_api_error, _strip_decoration, build_options
+from organt_core.config import Config
+from organt_core.organt import Organt, _is_transient_api_error, _strip_decoration, build_options
 
 
 def _cfg(model=None) -> Config:
@@ -70,7 +70,7 @@ def test_빈응답_무응답은_재시도(monkeypatch):
         return None
 
     monkeypatch.setattr(o, "_run_once", fake_run_once)
-    monkeypatch.setattr("src.organt.asyncio.sleep", _no_sleep)   # 백오프 대기 제거(빠른 테스트)
+    monkeypatch.setattr("organt_core.organt.asyncio.sleep", _no_sleep)   # 백오프 대기 제거(빠른 테스트)
     out = asyncio.run(o.handle("서버 만들어줘"))
     assert out == "서버 구현 완료" and calls["n"] == 2           # 빈 응답 후 재시도해 성공
 
@@ -107,7 +107,7 @@ def test_메시지수신마다_하트비트_on_activity(monkeypatch):
             for _ in range(3):
                 yield object()   # 메시지 3건 — 타입 무관, 수신 자체가 활동 신호
 
-    monkeypatch.setattr("src.organt.ClaudeSDKClient", _FakeClient)
+    monkeypatch.setattr("organt_core.organt.ClaudeSDKClient", _FakeClient)
     asyncio.run(o._run_once("p"))
     assert beats["n"] == 3
 
@@ -117,7 +117,7 @@ def test_세션_cwd고정_pinned_cwd(tmp_path):
     다음 빌드는 그 cwd로 resume한다(흐름 도중 작업공간 카빙에도 세션 불멸). 디렉터리가 사라졌으면
     None(새 출발)."""
     import json as _json
-    from src.organt import pinned_cwd
+    from organt_core.organt import pinned_cwd
     st = tmp_path / "organt_state_x.json"
     st.write_text(_json.dumps({"session_id": "s1", "cwd": str(tmp_path)}), encoding="utf-8")
     assert pinned_cwd(st) == str(tmp_path)                      # 살아있는 cwd → 고정
@@ -187,7 +187,7 @@ def test_마커_안전망_저장소판정을_비껴간_스테일도_새세션(mo
         return None
 
     monkeypatch.setattr(o, "_run_once", fake_run_once)
-    monkeypatch.setattr("src.organt.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("organt_core.organt.asyncio.sleep", _no_sleep)
     out = asyncio.run(o.handle("이어서 진행"))
     assert out == "기획 이어서 완료" and calls["n"] == 2          # 1회 마커 → 즉시 새 세션 성공
     assert o.session_id == "sid-new"                              # 죽은 세션 폐기·새 세션 영속

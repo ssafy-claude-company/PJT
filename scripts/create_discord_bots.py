@@ -48,7 +48,7 @@ import sys
 from pathlib import Path
 
 PORTAL = "https://discord.com/developers/applications"
-# 워커 봇 초대 권한(메시지·스레드·반응·기록) — src/discord_guide.py INVITE_PERMS와 동일.
+# 워커 봇 초대 권한(메시지·스레드·반응·기록) — organt_discord/discord_guide.py INVITE_PERMS와 동일.
 INVITE_PERMS = 1024 + 2048 + 16384 + 65536 + 64 + 274877906944
 
 

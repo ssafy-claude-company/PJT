@@ -14,7 +14,7 @@ def _load(monkeypatch, **env):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    import src.config as config
+    import organt_core.config as config
     importlib.reload(config)
     monkeypatch.setattr(config, "ROOT", Path(tempfile.mkdtemp(prefix="organt-config-test-")))
     return config

@@ -2,9 +2,9 @@
 import asyncio
 import os
 
-from src.communication import CommunicationManager
-from src.permissions import _within, make_pre_tool_use_hook, organt_allowed_tools
-from src.protocol import Kind
+from organt_core.communication import CommunicationManager
+from organt_core.permissions import _within, make_pre_tool_use_hook, organt_allowed_tools
+from organt_core.protocol import Kind
 
 ALLOWED = organt_allowed_tools(["mcp__discord__send_message", "mcp__discord__reply_message"])
 

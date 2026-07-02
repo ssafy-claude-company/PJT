@@ -40,7 +40,7 @@ _WORKSPACE = Path(_PJT) / "organt_sns_workspace"
 
 def _build_config():
     """load_config 우회 — 디스코드 토큰 없이 Config 직접 생성(러너는 디스코드 미연결)."""
-    from src.config import Config
+    from organt_core.config import Config
     _STATE.mkdir(parents=True, exist_ok=True)
     _WORKSPACE.mkdir(parents=True, exist_ok=True)
     return Config(
@@ -194,10 +194,10 @@ class Command(BaseCommand):
         asyncio.run(self._main(opts))
 
     async def _main(self, opts):
-        from src.sys_core import Sys
-        from src.builder import _make_builder   # [계층 분리] Core 빌더 — 종전 src.main(Discord 진입)에서 가져와 discord를 transitively 끌어오던 누수 해소
-        from src.audit import AuditLog
-        from src.protocol import Request, Kind
+        from organt_core.sys_core import Sys
+        from organt_core.builder import _make_builder   # [계층 분리] Core 빌더 — 종전 src.main(Discord 진입)에서 가져와 discord를 transitively 끌어오던 누수 해소
+        from organt_core.audit import AuditLog
+        from organt_core.protocol import Request, Kind
 
         remote = opts["remote"].strip()
         token = opts["token"].strip() or os.environ.get("ORGANT_GUIDE_TOKEN", "").strip()

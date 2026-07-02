@@ -1,5 +1,5 @@
 """재구현 ① 검증: 구조화 메시지 프로토콜 (docs Discord.md 포맷)."""
-from src.protocol import (
+from organt_core.protocol import (
     Kind,
     Request,
     Response,

@@ -12,15 +12,15 @@ import sys
 import discord
 from claude_agent_sdk import HookMatcher
 
-from src.audit import AuditLog, make_post_tool_use_hook
-from src.config import load_config
+from organt_core.audit import AuditLog, make_post_tool_use_hook
+from organt_core.config import load_config
 from organt_discord.discord_guide import DiscordGuide
-from src.guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
+from organt_core.guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
 from organt_discord.main import load_roster
-from src.organt import Organt, build_options
-from src.permissions import make_pre_tool_use_hook
-from src.protocol import Kind, format_request
-from src.sys_core import Sys
+from organt_core.organt import Organt, build_options
+from organt_core.permissions import make_pre_tool_use_hook
+from organt_core.protocol import Kind, format_request
+from organt_core.sys_core import Sys
 
 CMD = sys.argv[1] if len(sys.argv) > 1 else (
     "이 스네이크 게임은 접속하면 뱀이 시작하자마자(1초 안에) 바로 죽어버리는 치명적 버그가 있어. "

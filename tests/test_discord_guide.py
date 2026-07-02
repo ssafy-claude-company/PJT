@@ -2,7 +2,7 @@
 import asyncio
 
 from organt_discord.discord_guide import DiscordGuide, _split_for_discord
-from src.protocol import Kind, TaskStatus, format_request, format_task_status
+from organt_core.protocol import Kind, TaskStatus, format_request, format_task_status
 
 
 def test_긴메시지_2000자_분할():

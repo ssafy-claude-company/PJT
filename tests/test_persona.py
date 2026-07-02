@@ -1,5 +1,5 @@
 """기능7 검증: 인격(CLAUDE.md) 로딩."""
-from src.organt import ORGANT_PERSONA, PERSONA_PATH, load_persona
+from organt_core.organt import ORGANT_PERSONA, PERSONA_PATH, load_persona
 
 
 def test_load_persona_파일읽기(tmp_path):
