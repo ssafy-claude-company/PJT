@@ -395,7 +395,7 @@ class Flow:
 # 하드코딩, package.json 필수). 흔한 사고: Node 서버가 *런타임*에 Python을 spawn/exec → Render Node 환경엔
 # Python이 없어 백엔드가 안 떠 502(P-028: ECONNREFUSED:8001, 28모델 고아). 런어웨이 5회 상한은 *사후* 차단
 # [Project Rule → rule/project.py] 배포 신원·적합성은 원래 §7 설계대로 분리(guide_tools 병합 해체). re-export로 호환.
-from .rule.project import deploy_service_name, _deploy_infeasibility  # noqa: F401
+from .rule.project import deploy_service_name, _deploy_infeasibility, create_project as _rule_create_project  # noqa: F401
 
 
 def _ok(text):
@@ -1302,28 +1302,8 @@ def make_guide_tools(flow: Flow, me_id: int, role: str):
               "(team=쉼표구분 동료 id/역할명, 리더 제외분). 비우면 풀 전체.",
               {"name": str, "team": str})
         async def create_project(args):
-            if flow.project_channel is not None:
-                return _ok(f"이미 project_channel={flow.project_channel} (project_id={flow.project_id}) — "
-                           f"개입 중이면 create_project 말고 바로 작업하세요.")
-            # [방어] 봇이 이름 앞에 'P-번호'를 끼워넣으면 떼어낸다 — 식별번호는 시스템(register_project)이
-            # 자동 부여하는데, 포트폴리오 목록의 'P-NNN' 표기를 흉내 내 이름에 번호를 박으면 채널 이름이
-            # 'P-021 …'이 되고 작업공간 폴더가 'p-021-p-021-…'로 번호가 중복된다. 번호는 시스템 몫이다.
-            _raw = str(args.get("name") or "").strip()
-            _clean = re.sub(r"^\s*[Pp]-\d+[\s:·\-–—.]*", "", _raw).strip()
-            args["name"] = _clean or _raw
-            flow.project_channel = await g.create_project_channel(flow.guild_id, args["name"])
-            # [작업공간 격리·신원] 폴더는 여기서 깎지 않는다 — 흐름은 시작부터 고유 임시 폴더(new-…)에서
-            # 일했고, 아래 register_project가 그 폴더를 **식별번호 이름(p-00n-슬러그)으로 개명**해
-            # 신원을 번호로 확정한다(리더 작명 충돌이 폴더·배포 수준에서 무해 — 사용자 제안).
-            assigned = _resolve_members(args.get("team", ""), flow, flow.pool)
-            if assigned:
-                flow.project_team = _uniq([flow.leader] + assigned)
-            # 프로젝트는 내부 레지스트리에만 등록(채널 자체가 프로젝트 식별자 — 채널에 앵커 안 박음).
-            flow.project_name = args["name"]   # 배포 슬롯 유도용(프로젝트별 결정적 서비스명)
-            if flow.register_project:
-                flow.project_id = flow.register_project(flow.project_channel, args["name"])
-            return _ok(f"project_channel={flow.project_channel} project_id={flow.project_id} "
-                       f"프로젝트팀={flow._names(flow.project_team)}")
+            # [도구=얇은 래퍼] 로직은 rule/project.py(Project Rule)에 — @tool은 계약·표현만, 규칙은 rule/가 소유(§7 복원)
+            return _ok(await _rule_create_project(flow, args))
         tools.append(create_project)
 
         @tool("create_task",
