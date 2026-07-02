@@ -12,7 +12,7 @@ from claude_agent_sdk import HookMatcher
 
 from organt_core.audit import AuditLog, make_post_tool_use_hook
 from organt_core.config import Config
-from organt_core.guide_tools import FLOW_TOOLS, LEADER_TOOLS
+from organt_core.tool_names import FLOW_TOOLS, LEADER_TOOLS
 from .organt import Organt, build_options, load_persona, pinned_cwd
 from organt_core.permissions import make_pre_tool_use_hook
 
