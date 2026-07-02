@@ -193,6 +193,41 @@ class HttpSnsGuide:
             return {}
         return (res or {}).get("creds", {}) or {}
 
+    # ── [배달 계약 구현 — SYS.run이 쓰는 추상 Guide 계약의 HTTP 구현체] ─────────────
+    # 수신·claim·진행표시·완료·재개·살아있음. SYS(추상)는 이 메서드들만 알고, murmur API로의
+    # 실제 전송은 여기(구현체)가 담당(guide_bridge). ORM판(SnsGuide)은 같은 계약을 DB로 구현.
+    async def get_pending(self):
+        """미처리 요청 목록(claim 대기). 매체 수신의 HTTP 구현."""
+        data = await self._get("/api/guide/pending/")
+        return data.get("pending", [])
+
+    async def pick(self, msg_id, done=False, touch=False, unpick=False, idle=None):
+        """요청 claim/진행표시(touch)/완료(done)/재개(unpick). claim 패배 시 False."""
+        body = {"msg_id": msg_id, "done": done, "touch": touch, "unpick": unpick}
+        if idle is not None:
+            body["idle"] = int(idle)
+        res = await self._post("/api/guide/pick/", body)
+        return (res or {}).get("claimed", True)
+
+    async def heartbeat(self, note="remote"):
+        """엔진 살아있음 신호 — 매체(murmur)에 전송."""
+        await self._post("/api/guide/heartbeat/", {"note": note})
+
+    async def check_stop(self, channel_id):
+        d = await self._get(f"/api/guide/stops/?channel={channel_id}")
+        return bool(d.get("stopped"))
+
+    async def all_stops(self):
+        d = await self._get("/api/guide/stops/")
+        return [int(c) for c in d.get("channels", [])]
+
+    async def mark_stopped(self, channel_id):
+        await self._post("/api/guide/stop_channel/", {"channel": int(channel_id)})
+
+    async def check_interject(self, channel_id):
+        d = await self._get(f"/api/guide/interjects/?channel={channel_id}")
+        return d.get("infos", [])
+
     @staticmethod
     def invite_url(app_id, perms=None):
         return f"(SNS 봇 #{app_id} — 초대 불필요)"

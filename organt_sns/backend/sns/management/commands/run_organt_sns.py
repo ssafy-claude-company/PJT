@@ -212,34 +212,27 @@ class Command(BaseCommand):
             guide = HttpSnsGuide(remote, token)
             bot_info, leader, model_map, persona_map = await self._remote_roster(guide)
 
+            # [배달=Guide 구현체] 수신·pick·heartbeat 등은 HttpSnsGuide가 구현 — 여기선 그 계약을 호출만(모드분기 제거 진행)
             async def fetch_pending(seen):
-                data = await guide._get("/api/guide/pending/")
-                return [p for p in data.get("pending", []) if p["msg_id"] not in seen]
+                return [p for p in await guide.get_pending() if p["msg_id"] not in seen]
 
             async def mark_pick(mid, done=False, touch=False, unpick=False, idle=None):
-                body = {"msg_id": mid, "done": done, "touch": touch, "unpick": unpick}
-                if idle is not None:
-                    body["idle"] = int(idle)
-                res = await guide._post("/api/guide/pick/", body)
-                return (res or {}).get("claimed", True)   # claim 패배만 False(구버전/비-claim 응답은 True)
+                return await guide.pick(mid, done=done, touch=touch, unpick=unpick, idle=idle)
 
             async def _beat():
-                await guide._post("/api/guide/heartbeat/", {"note": "remote"})
+                await guide.heartbeat("remote")
 
             async def _check_stop(ch):
-                d = await guide._get(f"/api/guide/stops/?channel={ch}")
-                return bool(d.get("stopped"))
+                return await guide.check_stop(ch)
 
             async def fetch_all_stops():
-                d = await guide._get("/api/guide/stops/")          # 전체 중지신호 반환+소거(전역 스캔)
-                return [int(c) for c in d.get("channels", [])]
+                return await guide.all_stops()
 
             async def mark_channel_stopped(ch):
-                await guide._post("/api/guide/stop_channel/", {"channel": int(ch)})
+                await guide.mark_stopped(ch)
 
             async def _check_interject(ch):
-                d = await guide._get(f"/api/guide/interjects/?channel={ch}")
-                return d.get("infos", [])
+                return await guide.check_interject(ch)
             where = f"원격 {remote}"
         else:
             guide = SnsGuide()
