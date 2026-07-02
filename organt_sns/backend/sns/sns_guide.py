@@ -184,6 +184,105 @@ class SnsGuide:
             return deploy_creds_for(proj.owner) if (proj and proj.owner) else {}
         return await sync_to_async(_get)()
 
+    # ── [배달 계약 구현 — HttpSnsGuide와 같은 계약의 ORM 구현체(단일컨테이너/로컬)] ──────
+    # SYS(추상)가 쓰는 수신·claim·진행·완료·재개·살아있음·중지·interject를 같은 Django DB로 구현.
+    # 원격판(HttpSnsGuide)은 guide_bridge API로, 이건 ORM 직접으로 — 같은 계약, 다른 구현체.
+    def _route_to(self, channel_id):
+        p = Project.objects.filter(id=channel_id).first()
+        if p and p.leader_id:
+            return int(p.leader.bot_id)
+        last = (GuideMessage.objects.filter(channel_id=channel_id).exclude(sender_id=0)
+                .order_by("-msg_id").first())
+        return int(last.sender_id) if last else None
+
+    async def get_pending(self):
+        def _q():
+            _RESUME_AFTER = 180   # picked_ts가 이만큼 멈췄으면 러너 사망 → 다시 큐로(guide_bridge.pending과 동형)
+            now = _now()
+            responded = set(GuideMessage.objects.filter(msg_type="response").exclude(reply_to=None)
+                            .values_list("reply_to", flat=True))
+            out = []
+            for m in GuideMessage.objects.filter(msg_type="request", sender_id=0).order_by("msg_id"):
+                p = m.payload or {}
+                if p.get("done_ts") or p.get("stopped"):
+                    continue
+                if p.get("picked") and (m.msg_id in responded or (now - (p.get("picked_ts") or now)) < _RESUME_AFTER):
+                    continue
+                out.append({"msg_id": m.msg_id, "channel_id": m.channel_id, "to_id": m.to_id,
+                            "kind": m.kind, "body": m.body, "route_to": self._route_to(m.channel_id)})
+            return out
+        return await sync_to_async(_q)()
+
+    async def pick(self, msg_id, done=False, touch=False, unpick=False, idle=None):
+        def _p():
+            from django.db import transaction
+            is_claim = not (unpick or done or touch)
+            with transaction.atomic():
+                m = GuideMessage.objects.select_for_update().filter(msg_id=msg_id).first()
+                if not m:
+                    return False
+                p = dict(m.payload or {})
+                if is_claim and p.get("picked"):
+                    return False                 # 레이스 패배 — 재처리 금지
+                if unpick:                        # 백스톱 컷 재개 — 픽 해제(다시 큐로)
+                    p.pop("picked", None); p.pop("done_ts", None); p.pop("picked_ts", None)
+                    GuideMessage.objects.filter(msg_id=msg_id).update(payload=p)
+                    return True
+                if idle is not None:
+                    p["idle_s"] = int(idle)
+                p["picked"] = True
+                if done:
+                    p["done_ts"] = _now()
+                elif touch:
+                    p["picked_ts"] = _now()
+                else:
+                    p.setdefault("picked_ts", _now())
+                GuideMessage.objects.filter(msg_id=msg_id).update(payload=p)
+            return True
+        return await sync_to_async(_p)()
+
+    async def heartbeat(self, note="local"):
+        from .models import EngineHeartbeat
+        await sync_to_async(EngineHeartbeat.beat)(note)
+
+    async def check_stop(self, channel_id):
+        def _s():
+            from .models import StopSignal
+            return StopSignal.objects.filter(channel_id=channel_id).delete()[0] > 0
+        return await sync_to_async(_s)()
+
+    async def all_stops(self):
+        def _a():
+            from .models import StopSignal
+            chans = list(StopSignal.objects.values_list("channel_id", flat=True))
+            if chans:
+                StopSignal.objects.filter(channel_id__in=chans).delete()
+            return [int(c) for c in chans]
+        return await sync_to_async(_a)()
+
+    async def mark_stopped(self, channel_id):
+        def _m():
+            responded = set(GuideMessage.objects.filter(channel_id=channel_id, msg_type="response")
+                            .exclude(reply_to=None).values_list("reply_to", flat=True))
+            n = 0
+            for m in GuideMessage.objects.filter(channel_id=channel_id, sender_id=0, msg_type="request").order_by("-msg_id"):
+                p = m.payload or {}
+                if p.get("picked") and not p.get("done_ts") and m.msg_id not in responded:
+                    p = dict(p); p["stopped"] = True; p["done_ts"] = _now()
+                    GuideMessage.objects.filter(msg_id=m.msg_id).update(payload=p)
+                    n += 1
+            return n
+        return await sync_to_async(_m)()
+
+    async def check_interject(self, channel_id):
+        def _i():
+            from .models import InterjectSignal
+            sigs = list(InterjectSignal.objects.filter(channel_id=channel_id).order_by("id"))
+            if sigs:
+                InterjectSignal.objects.filter(id__in=[s.id for s in sigs]).delete()
+            return [{"target_id": s.target_id, "text": s.text} for s in sigs]
+        return await sync_to_async(_i)()
+
     @staticmethod
     def invite_url(app_id, perms=None):
         return f"(SNS 봇 #{app_id} — 초대 불필요, DB 정체성)"

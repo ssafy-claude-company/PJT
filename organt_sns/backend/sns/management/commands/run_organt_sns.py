@@ -239,27 +239,27 @@ class Command(BaseCommand):
             bot_info, leader, persona_map = await sync_to_async(_local_roster)()
             model_map = await sync_to_async(_local_models)()
 
+            # [배달=Guide 구현체] 로컬도 SnsGuide가 같은 계약을 ORM으로 구현 — 여기선 호출만(모드분기 제거)
             async def fetch_pending(seen):
-                return await sync_to_async(_local_pending)(seen)
+                return [p for p in await guide.get_pending() if p["msg_id"] not in seen]
 
             async def mark_pick(mid, done=False, touch=False, unpick=False, idle=None):
-                return await sync_to_async(_local_pick)(mid, done, touch, unpick, idle)
+                return await guide.pick(mid, done=done, touch=touch, unpick=unpick, idle=idle)
 
             async def _beat():
-                from sns.models import EngineHeartbeat
-                await sync_to_async(EngineHeartbeat.beat)("local")
+                await guide.heartbeat("local")
 
             async def _check_stop(ch):
-                return await sync_to_async(_local_stop_pending)(ch)
+                return await guide.check_stop(ch)
 
             async def fetch_all_stops():
-                return await sync_to_async(_local_all_stops)()
+                return await guide.all_stops()
 
             async def mark_channel_stopped(ch):
-                await sync_to_async(_local_stop_channel)(ch)
+                await guide.mark_stopped(ch)
 
             async def _check_interject(ch):
-                return await sync_to_async(_local_interject_pending)(ch)
+                return await guide.check_interject(ch)
             where = "로컬 ORM"
 
         if not bot_info:
