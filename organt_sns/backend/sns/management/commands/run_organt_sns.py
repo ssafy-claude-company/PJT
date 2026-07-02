@@ -195,7 +195,7 @@ class Command(BaseCommand):
 
     async def _main(self, opts):
         from src.sys_core import Sys
-        from src.main import _make_builder
+        from src.builder import _make_builder   # [계층 분리] Core 빌더 — 종전 src.main(Discord 진입)에서 가져와 discord를 transitively 끌어오던 누수 해소
         from src.audit import AuditLog
         from src.protocol import Request, Kind
 

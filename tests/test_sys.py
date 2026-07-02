@@ -3026,7 +3026,7 @@ def test_흡수차단_도달불가_멤버는_기여불필요로_통과_교착방
 def test_워커도구에_WebSearch_포함_RFC011():
     """[RFC-011 M1] 워커 기본 도구에 WebSearch/WebFetch가 있어야 '훌륭한 예'를 상상이 아니라
     실제로 검색해 대조한다(취향 천장 ~0.5 → 외부 레퍼런스가 '상용 수준'의 기준)."""
-    from src.main import WORKER_BASE_TOOLS
+    from src.builder import WORKER_BASE_TOOLS   # [계층 분리] Core 빌더로 이동(종전 src.main)
     assert "WebSearch" in WORKER_BASE_TOOLS and "WebFetch" in WORKER_BASE_TOOLS
 
 
