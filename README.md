@@ -66,14 +66,14 @@ ORGANT_BOT_2=...     # 각 토큰
 
 ```bash
 python -m src.config     # 설정 헬스체크(토큰 값은 출력 안 함)
-python -m src.main       # SYS 가동 → #채널에서 User [Request] 대기
+python -m organt_discord.main       # SYS 가동 → #채널에서 User [Request] 대기
 pytest -q                # 단위 테스트
 ```
 
 죽어도 자동 재시작하려면 while-true 래퍼로 감쌉니다(`scripts/run_listener.sh` — 원격 세션에선
 `.claude/hooks/session-start.sh`가 세션 시작마다 자동 기동):
 ```bash
-while true; do python -m src.main; echo "재시작…"; sleep 3; done
+while true; do python -m organt_discord.main; echo "재시작…"; sleep 3; done
 ```
 
 > **리클레임 내구성**: 컨테이너가 회수되면 gitignore된 `logs/`·`.env`가 사라진다. 직군은 Discord

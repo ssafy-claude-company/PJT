@@ -182,7 +182,7 @@ archive/subagents/organt_policy`는 제거했다.
    `[Response]`가 #채널까지 unwind되어 보고됨. **`comm_done=True`**(흐름 정상 종료). 산출물
    `server.js`+`public/index.html`+`public/style.css`를 **실제 구동**해 정적 서빙 + CRUD
    (추가/조회/완료토글/삭제) 전수 통과.
-2. **엔트리(`python -m src.main`)의 입구 검증.** 로스터 밖 봇을 User로 써서 #채널에 `[Request]`를
+2. **엔트리(`python -m organt_discord.main`)의 입구 검증.** 로스터 밖 봇을 User로 써서 #채널에 `[Request]`를
    올리면 `on_message`가 파싱→라우팅, 리더가 `profile.html`을 직접 만들고 `style.css`를 프론트에
    위임, **원 Request에 reply된 `[Response]`** 가 게시됨. HTML의 BEM 클래스 17개 전부가 CSS에서
    스타일링됨(연동 100%).

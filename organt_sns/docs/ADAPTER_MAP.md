@@ -1,5 +1,11 @@
 # Organt Brain ↔ Medium Adapter Map
 
+> **⚠️ 구조 갱신(2026-07 계층 분리)**: Discord 매체(Guide 구현)가 `src/`에서 **`organt_discord/`** 로 분리됐다 —
+> `organt_discord/discord_guide.py`(DiscordGuide) · `organt_discord/main.py`(리스너/진입) · `organt_discord/channels.py`.
+> `src/`는 이제 **순수 Core**(SYS+Rule+도구계약+권한+organt런타임+builder). 3계층 대칭: **`src/`(Core) ·
+> `organt_discord/`(Discord 매체) · `organt_sns/`(SNS 매체)** — 두 매체가 Core를 단방향 의존(역오염 0). 진입: `python -m organt_discord.main`.
+
+
 > **Purpose.** Map the exact boundary between the **Organt "brain"** (the Python multi-agent
 > collaboration engine in `src/`) and its current communication medium (**Discord**). This is the
 > contract a custom social platform (`organt_sns`) must satisfy to be a **drop-in replacement** for
@@ -16,12 +22,12 @@
 > - `src/audit.py` — `AuditLog` + PostToolUse `tool_use` hook.
 >
 > **Medium side (the swappable seam):**
-> - `src/discord_guide.py` — `DiscordGuide` ("Guide"): the transport. **This is the object the
+> - `organt_discord/discord_guide.py` — `DiscordGuide` ("Guide"): the transport. **This is the object the
 >   custom SNS replaces.** The brain holds it as `flow.guide` / `self.guide` and never imports
->   `discord` outside this file + `src/channels.py` + `src/main.py` (the Discord event loop).
-> - `src/main.py` — the Discord client wiring + `on_message` ingestion + boot recovery (the INPUT
+>   `discord` outside this file + `organt_discord/channels.py` + `organt_discord/main.py` (the Discord event loop).
+> - `organt_discord/main.py` — the Discord client wiring + `on_message` ingestion + boot recovery (the INPUT
 >   side of the seam; the custom SNS replaces this listener).
-> - `src/channels.py` — channel-id resolution helper (Discord-specific).
+> - `organt_discord/channels.py` — channel-id resolution helper (Discord-specific).
 >
 > **One-line model:** the brain speaks to the medium through **one object (`guide`)** for OUTPUT
 > and is fed by **one handler (`on_message` → `route_channel_request`)** for INPUT. Everything else
@@ -62,7 +68,7 @@ state Discord never had.
 
 ## (a) INPUT interface — how user requests ENTER the brain
 
-### A.1 Transport-level wiring (`src/main.py`, the listener the SNS replaces)
+### A.1 Transport-level wiring (`organt_discord/main.py`, the listener the SNS replaces)
 
 - **System bot only** registers the handler: `@system_client.event async def on_message(message)`
   (`main.py:441`). Worker/Organt bots never receive messages; they only post/type.
@@ -197,7 +203,7 @@ On startup the listener replays **unanswered** user requests so a restart doesn'
 
 ## (b) OUTPUT / visibility interface — how actions become VISIBLE
 
-### B.1 The Guide object (`DiscordGuide`, `src/discord_guide.py`)
+### B.1 The Guide object (`DiscordGuide`, `organt_discord/discord_guide.py`)
 
 The brain holds it as `flow.guide` (set in `Flow.__init__`, `guide_tools.py:531`) and `Sys.guide`.
 Inside tools it is aliased `g = flow.guide` (`guide_tools.py:724`). **This is the complete set of
