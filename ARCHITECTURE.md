@@ -30,6 +30,25 @@
    LLM(외부) ↕            Discord ↕                SNS 웹 ↕
 ```
 
+## organt_core 내부 — 원래 §7 설계로 해체 (Rule 로직 분리)
+
+잘못된 구현이 `guide_tools`(3096줄) 한 파일에 병합했던 Communication/Task/Project **Rule 로직**을
+원래 REWORK_DESIGN §7 설계인 `rule/` 패키지로 되돌렸다. 이제 **도구=얇은 인터페이스, rule=규칙**:
+
+```
+organt_core/
+├─ rule/                     ← Rule 로직(광역 규칙)
+│  ├─ communication.py (1716)  베턴 소통 + 팀·역량 라우팅 + request·vote·meet·parallel_work·recruit 로직
+│  ├─ task.py          (1053)  완료·인수 게이트 + TaskRef + create_task·set_goal·complete_task 로직
+│  └─ project.py       (297)   배포 신원·적합성 + create_project·deploy·send_file 로직
+├─ guide_tools.py      (523)   *얇은* @tool 래퍼 12개(로직은 rule/) + Flow 상태 + build_guide_server + run
+├─ _util.py            (39)    공유 표현·디버그 util(_ok·_dbg·_speech_clip·_react·_looks_transient)
+├─ tool_names.py       (15)    도구명 상수(organt_runtime 결합 차단)
+├─ sys_core.py(SYS) · permissions.py · protocol.py · audit · config · deploy
+```
+- **12개 도구 전부 `return await _rule_X(flow, …)` 얇은 래퍼** — 규칙은 rule/가 소유.
+- 남은 정련(선택): `run`을 organt_runtime으로(등록구조 재설계 필요 — 지금 옮기면 organt_core→organt_runtime 역의존), `Flow`를 상태 모듈로.
+
 ## 캐논 매핑 — SYS · Organt · 매체가 각각 어디
 | 캐논 개념 | 코드 위치 |
 |---|---|
