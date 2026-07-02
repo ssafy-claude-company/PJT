@@ -20,7 +20,7 @@ attach_engagement로 붙는다 — 모든 점유/해제는 request/respond/escal
 메시지 인코딩/파싱(`[Request]`/`[Response]` 포맷)은 protocol.py가 담당한다.
 """
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 from ..protocol import Kind
 
@@ -480,3 +480,62 @@ def _free_alternatives(flow, me_id, to) -> str:
     return ("; ".join(parts) if parts else
             "지금은 같은 직군의 가용 동료가 없습니다 — 다른 직군 동료로 진행 가능한 부분을 먼저 하거나, "
             "불가하면 그 사정을 보고에 남기세요")
+
+
+# ── [협업 라우팅 헬퍼 — guide_tools에서 이관] 멤버 해석·중복제거·변형직군 매칭·응답 실질성 ──
+def _resolve_members(spec, flow, allowed) -> List[int]:
+    """'12, 백엔드A' 처럼 id 또는 역할명으로 동료를 지정 → allowed 안의 id 리스트(중복 제거)."""
+    out: List[int] = []
+    for tok in str(spec or "").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok.lstrip("-").isdigit():
+            v = int(tok)
+            if v in allowed and v not in out:
+                out.append(v)
+        else:  # 역할명(부분일치)로도 지정 가능
+            for i in allowed:
+                if i not in out and tok.lower() in (flow._info(i) or "").lower():
+                    out.append(i)
+                    break
+    return out
+
+
+def _uniq(xs) -> List[int]:
+    seen: List[int] = []
+    for x in xs:
+        if x not in seen:
+            seen.append(x)
+    return seen
+
+
+def _find_variant_job(name: str, existing) -> Optional[str]:
+    """기존 직군과 '이름은 다른데 토큰을 공유'하면 변형(중복 생성) 의심으로 그 기존 직군을 돌려준다.
+    recruit가 자유 텍스트 직군명을 받다 보니 흐름마다 'VFX 전문가'/'VFX 아티스트' 같은 변형이 새 역할로
+    계속 불어났다(중복 생성 오류의 뿌리). 무엇이 '정답 이름'인지는 시스템이 정하지 않는다(하드코딩 금지)
+    — 같은 이름(공백·대소문자 무시)은 기존 역할 재사용이라 통과시키고, 변형만 멈춰 세워 에이전트가
+    '재사용'인지 '진짜 새 직군'인지 명시하게 한다."""
+    mine_n, mine_t = _norm_job(name), _job_tokens(name)
+    if not mine_t:
+        return None
+    if any(_norm_job(ex) == mine_n for ex in existing):
+        return None                        # 같은 이름이 이미 있음 → 그대로 재사용(변형 아님), 즉시 통과
+    for ex in sorted(existing):            # 정렬: 같은 입력엔 같은 안내(메시지 결정성)
+        if mine_t & _job_tokens(ex):
+            return ex
+    return None
+
+
+# 협의로 '인정되는' Info인지 — 순수 응답확인 핑('응답 가능하신가요?')은 합의로 치지 않는다(빈 핑 차단).
+# 짧은데 핑 문구가 거의 전부일 때만 비실질(긴 메시지는 핑 문구가 섞여도 실질로 본다).
+_HOLLOW_PING = ("응답 가능", "응답가능", "응답 되시", "응답되시", "계신가요", "준비되셨", "들리시",
+                "확인 가능하신", "ready?", "available?", "are you there", "are you available")
+
+
+def _is_substantive(body: str) -> bool:
+    b = (body or "").strip()
+    if not b:
+        return False
+    low = b.lower()
+    return not (len(b) <= 30 and any(h in low for h in _HOLLOW_PING))
