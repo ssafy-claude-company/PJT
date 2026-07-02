@@ -31,3 +31,9 @@ def _speech_clip(s, n=1500) -> str:
     분량 통제는 지시(프롬프트)와 모델 판단의 몫이고, 시스템은 안전망만 친다."""
     s = (s or "").strip()
     return s if len(s) <= n else s[:n] + f" …(발언 {len(s)}자 — {n}자 안전망에서 잘림)"
+
+
+def _looks_transient(text: str) -> bool:
+    """동료 응답이 일시적 API 오류로 보이는지 — 그렇다면 답으로 취급하지 말고 재시도."""
+    t = (text or "").strip().lower()
+    return t.startswith("api error") or t.startswith("(동료 처리 중 오류")

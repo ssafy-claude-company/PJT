@@ -1114,3 +1114,603 @@ async def recruit(flow, me_id, role, args):
     return (f"{flow._info(mid) or mid} 합류{hired}(사유: {args.get('reason', '')}). "
                f"현재 팀: {flow._names(flow.current.team)}")
 
+
+
+async def request(flow, me_id, role, args):
+    """[Rule 로직] request — guide_tools에서 이관(평문 반환, @tool이 _ok 래핑)."""
+    from .._util import _looks_transient
+    from .._util import _dbg, _ok, _react, _speech_clip
+    from ..protocol import Kind
+    from .task import _LOOP_ESCALATE_CROSS, _ckpt, _is_verifier
+    import anyio
+    import asyncio
+    import re
+    import time
+    g = flow.guide
+    to = int(args["to_id"])
+    kind = Kind.WORK if str(args["kind"]).strip().lower().startswith("w") else Kind.INFO
+    body = args["body"]
+    tag = f"[REQ] {me_id}({flow._info(me_id)})→{to}({flow._info(to)}) {getattr(kind, 'value', kind)}"
+    if flow.current is None:
+        _dbg(f"{tag} ✗거부:Task없음")
+        return _ok("오류: 진행 중인 Task가 없습니다. (리더가 create_task 먼저 여세요.)")
+    # 직군 미배정(예비) 봇에게는 위임/질의 불가 — 말로 '너는 X야' 하고 일을 시키는 걸 구조적으로 막는다.
+    # 먼저 recruit(role='직군')로 실제 직군을 부여해야 그 봇이 일할 수 있다(말로만 배정 차단).
+    if _is_spare(flow, to):
+        _dbg(f"{tag} ✗거부:직군 미배정(예비)")
+        return _ok(f"요청 거부: {flow._info(to) or to}는 아직 직군 미배정('예비')입니다 — 말로 직군을 정하지 말고 "
+                   f"recruit(member='{to}', role='직군명')으로 직군을 실제로 부여한 뒤 요청하세요(직군이 부여돼야 일을 맡길 수 있음).")
+    # 위임자에게 되묻기(확인요청 반환): 직속 위임자에게 Info로 물으면 '재진입 불가' 에러 대신
+    # 베턴을 위임자에게 질문과 함께 돌려준다 — 위임자가 답하고 그 일을 다시 맡긴다(협업 가능).
+    if kind == Kind.INFO and to == flow.comm.direct_delegator(me_id) and to != me_id:
+        flow.pending_clarify = {"from": me_id, "to": to, "q": body}
+        flow.comm.history.append(("clarify", me_id, to, "pending", Kind.INFO))
+        _dbg(f"{tag} ↩확인요청→위임자")
+        return _ok(f"확인요청을 직속 위임자({flow._info(to)})에게 전달했습니다. 지금 이 턴을 즉시 "
+                   f"마치고(추가 도구 호출·추측 진행 금지) 짧게 반환하세요 — 위임자가 답한 뒤 이 작업을 "
+                   f"당신에게 다시 맡깁니다.")
+    if to not in flow.current.team:
+        if to in flow.project_team:
+            # 프로젝트 팀원이면 이 Task에 자동 합류 — Task 내 관련 인원을 최소화할 이유는 없다.
+            flow.current.team.append(to)
+            flow.current.status.group = _group_of(flow, flow.current.team)
+            await flow.refresh()
+            _dbg(f"{tag} +Task자동합류(프로젝트팀원)")
+        elif to in flow.pool:
+            # [원인 교정 — 정보가 있는 거부] 리더가 회사 풀(전체 로스터)과 프로젝트 팀을 혼동해
+            # 팀 밖 동료를 반복 호출하던 라이브 관측(7회 우회, SIGTERM 기억구멍이 증폭)의 뿌리:
+            # 거부가 '안 된다'만 말하고 '그 직군이 팀에 누구인지'를 안 알려줘 같은 실수가 반복됐다.
+            # 올바른 대안(팀 내 같은 직군)과 현재 팀 명단을 동봉해 첫 거부에서 바로 교정되게 한다.
+            same = [m for m in flow.project_team
+                    if m != me_id and not _is_spare(flow, m)
+                    and ({_norm_job(j) for j in _jobs_of(flow._info(to) or "")}
+                         & {_norm_job(j) for j in _jobs_of(flow._info(m) or "")})]
+            alt = (" 같은 직군의 **팀 내 동료**: "
+                   + ", ".join(f"{flow._info(m)}(id {m})" for m in same)
+                   + " — 이들에게 요청하세요(재시도 금지)." if same else
+                   " 팀에 그 직군이 없습니다 — 정말 필요하면 recruit(member=…, role=…)로 합류시킨 뒤 요청하세요.")
+            _dbg(f"{tag} ✗거부:프로젝트밖")
+            return _ok(f"요청 거부: {to}({flow._info(to)})는 이 프로젝트 팀이 아닙니다 — 회사 풀에는 "
+                       f"있지만 이 프로젝트 구성원이 아닙니다(팀은 create_project 때 당신이 구성했습니다)."
+                       f"{alt} 현재 프로젝트 팀: {flow._names(flow.project_team)}")
+        else:
+            return _ok(f"요청 거부: {to}는 채용 풀에 없습니다. 풀: {flow._names(flow.pool)}")
+    if flow.wake is None:
+        return _ok("오류: 시스템 준비 안 됨")
+    # 직렬화: 베턴이 내 차례가 될 때까지 대기(거부 아님). 서로 다른 동료로의 병렬 요청은 순차 처리되며,
+    # 첫 요청이 길게(중첩 협의·긴 구현) 걸려도 베턴은 결국 돌아오므로 위임이 끊기지 않는다. 데드라인은
+    # 교착 안전장치 — 게임처럼 한 동료가 10분+ 작업하는 경우까지 넉넉히(1시간) 둬 '활성=동료' 반려가
+    # 안 뜨게 한다(이전 600초는 긴 작업 중 병렬요청이 타임아웃돼 무서운 '거부' 노이즈를 냈다).
+    # 직전 위임이 detach 상태로 완주 중이면(도구 호출은 포기됐지만 위임은 계속) 새 요청을 길게
+    # 재우지 않고 즉시 안내한다 — 리더가 '보류' 헛돌이 대신 턴을 마치게(시스템이 완주 후 다시 깨움).
+    if (any(not t.done() for t in getattr(flow, "inflight_tasks", ()))
+            and flow.comm.alive != me_id and not flow.comm.done):
+        return _ok("[대기] 직전 위임이 아직 진행 중입니다 — 추가 요청을 보내지 말고 이 턴을 간결히 "
+                   "마치세요. 위임이 완료되면 시스템이 그 결과와 함께 당신을 다시 깨웁니다.")
+    # [fork 동시성 가드] 의견 수집(표결·회의 1R)이 도는 동안엔 새 요청을 보내지 않는다 — fork 중엔
+    # 베턴(alive)이 리더에 머물러, CLI가 같은 턴에 병렬 도구 호출(vote+request)을 내면 수집 가지와
+    # 같은 동료를 이중으로 깨워 '같은 봇 두 턴'(세션 충돌)이 될 수 있다(직렬 vote 시절엔 alive 이동이
+    # 자연 차단). 수집은 조인이 보장돼 짧으므로 대기 안내가 정답.
+    if getattr(flow, "fork_active", 0) > 0:
+        return _ok("[대기] 의견 수집(표결/회의)이 진행 중입니다 — 수집 결과를 받은 뒤 요청하세요.")
+    deadline = time.monotonic() + 3600
+    while flow.comm.alive != me_id and not flow.comm.done and time.monotonic() < deadline:
+        await anyio.sleep(0.05)
+    # 같은 턴에 '같은 동료에게 같은 요청'을 다발로 보낸 병렬 중복은 합친다(idempotent): 동료를 다시
+    # 깨우지 않고 직전 응답을 그대로 재사용한다 → 반사적 중복 wake 차단(직렬화는 유지, 중복만 제거).
+    dupkey = (flow.leader_segment, me_id, to, str(getattr(kind, "value", kind)), body)
+    if dupkey in flow.req_results:
+        if flow.log:
+            flow.log("dup_parallel_merged", frm=me_id, to=to,
+                     kind=str(getattr(kind, "value", kind)), seg=flow.leader_segment)
+        _dbg(f"{tag} ⇉병렬중복 합침(동료 재호출 없이 같은 응답 재사용)")
+        return _ok(f"[{to} 응답] {_speech_clip(flow.req_results[dupkey], 4000)}\n"
+                   f"(같은 턴에 이미 보낸 동일 요청 — 동료를 다시 호출하지 않고 같은 응답을 재사용)")
+    # 대기 한도까지 베턴이 안 돌아옴(동료가 비정상적으로 오래 작업) — 규약위반이 아니므로 무서운 '거부'
+    # 안내를 사용자에게 띄우지 않고 조용히 '보류'로 소프트 반환(리더는 응답 받은 뒤 다시 시도).
+    if flow.comm.alive != me_id and not flow.comm.done:
+        _dbg(f"{tag} ⏸보류:대기 한도 초과(활성={flow.comm.alive})")
+        return _ok(f"[보류] {flow._info(to) or to}가 아직 작업 중이라 지금은 보내지 않았습니다 — 그 동료의 "
+                   f"응답을 받은 뒤 다시 요청하세요(오류 아님).")
+    # 검증→점유는 await 없이 인접 실행 → 형제 요청과 경합하지 않음(원자적).
+    try:
+        flow.comm.check_request(me_id, to, kind)
+    except BusyInOtherFlow as e:
+        # [전역 점유] 규약 위반이 아니라 '그 동료가 지금 다른 흐름에서 일하는 중' — 무서운 '거부'
+        # 대신 가용 대안(같은 직군 동료·채용)을 안내한다. 같은 동료 재시도(폴링)는 금지 문구로 차단.
+        if flow.log:
+            flow.log("req_busy_elsewhere", frm=me_id, to=to, holder=str(e.holder_scope or ""),
+                     kind=str(getattr(kind, "value", kind)), seg=flow.leader_segment)
+        _dbg(f"{tag} ⏸점유:타 흐름({e.holder_scope})")
+        return _ok(f"[동료 점유] {flow._info(to) or to}는 지금 다른 흐름({e.holder_scope})에서 일하는 "
+                   f"중입니다 — 같은 동료에게 재시도하며 기다리지 마세요(폴링 금지). "
+                   f"{_free_alternatives(flow, me_id, to)}.")
+    except CommError as e:
+        if flow.log:   # 관측: 거부 시점의 베턴 상태(alive)·요청자를 영속 기록 → 원인 규명
+            flow.log("req_rejected", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),
+                     alive=flow.comm.alive, seg=flow.leader_segment, reason=str(e)[:70])
+        _dbg(f"{tag} ✗거부:규약 ({e})")
+        return _ok(f"요청 거부(규약): {e}")
+    # Work 위임은 Goal 확정 뒤에만 — '목표 합의(set_goal) → 분배' 순서를 구조적으로 강제(선분배 금지).
+    # Info(합의용)는 언제든 허용 → Goal을 정하는 논의 자체는 막지 않는다.
+    goal = (flow.current.status.goal or "").strip()
+    if kind == Kind.WORK and not goal:
+        _dbg(f"{tag} ✗거부:Goal미확정")
+        return _ok("Work 위임 거부: 이 Task의 Goal이 아직 확정되지 않았습니다. 먼저 동료와 request(Info)로 "
+                   "목표를 합의하고 set_goal로 확정한 뒤 Work로 맡기세요(목표는 팀 합의의 산물 — 선분배 금지).")
+    me_is_leader = (me_id == flow.leader)
+    # [회로차단기 정지(2026-06-23 S1a 보강) — 경보는 '멈추게'도 해야 한다] loop_escalated가 켜졌는데도
+    # 검증 cross-check Work가 또 들어오면(=사람이 아직 판정 안 함) 새 검증 워커를 띄우지 않는다. 종전
+    # 회로차단기는 경보만 1회 띄우고 흐름은 그대로 루프→사람 부재 시 밤새 토큰을 태웠다(라이브 P-031: 경보
+    # 후에도 검증 계속). 검증 위임을 *보류*하고 '① complete_task 마감 / ② 사용자 방향 제시'를 기다린다.
+    # owner 수정 Work·complete_task는 안 막으므로 데드락이 아니다(리더가 언제든 마감으로 빠져나갈 수 있음).
+    # 정상 e2e는 12회 전에 수렴하므로 이 블록에 닿지 않는다(병리적 루프에서만 작동).
+    if (kind == Kind.WORK and flow.current and getattr(flow.current, "loop_escalated", False)
+            and _is_verifier(flow._info(to) or "") and int(to) != (flow.current.owner or -1)):
+        if flow.log:
+            flow.log("loop_escalated_block", to=to, cross=flow.current.cross_checks)
+        return _ok(
+            f"[수렴 경보 — 검증 보류] 이 Task는 교차검증 {flow.current.cross_checks}회로 *사람 판정 대기 중*입니다 "
+            f"(이미 사용자에게 에스컬레이트됨). 추가 검증을 띄우지 마세요 — 같은 문제를 반복 검증하는 루프입니다. "
+            f"**① 검증이 충분하면 complete_task로 마감**하거나, **② 사용자가 방향을 제시할 때까지 기다리세요**. "
+            f"(코드를 *고친* 뒤의 재검증·다른 작업은 사용자 개입으로 경보가 해제된 뒤 가능합니다.)")
+    # [검증 종료상태 — 재검증 dedup(2026-06-23 전수감사, 사용자 '검증 집계'; 리뷰F1 교정)] *이미 이 산출물을
+    # 독립검증한 그 검증자*(to in cross_checkers)에게, *코드가 변경되지 않았는데*(writes 불변) 또 검증을 맡기려
+    # 하면 막는다 — 복구마다·결함 못 고친 채 "최종 검증"을 반복 요청하던 무한 루프(P-031 ~13회, 1346 run) 차단.
+    # ※ 리뷰F1: 'to in cross_checkers'로 좁혀 — *아직 검증 안 한* 검증자에게 새 작업·새 검증을 시키는 건 통과
+    # (검증자에게 새 Work 주는 것까지 막던 회귀 차단). 코드를 *고친 뒤*(writes 증가)·*첫* 검증도 통과.
+    if (kind == Kind.WORK and flow.current and _is_verifier(flow._info(to) or "")
+            and int(to) in getattr(flow.current, "cross_checkers", set())
+            and getattr(flow.current, "last_verify_writes", -1) >= 0
+            and sum(int(v) for v in (flow.writes_by_role or {}).values()) == flow.current.last_verify_writes
+            and not getattr(flow, "reverify_checked", False)):
+        if flow.log:
+            flow.log("reverify_dedup", to=to, cross=flow.current.cross_checks)
+        return _ok(
+            f"재검증 보류(이 검증자는 이미 이 코드를 검증함 — 변경 0): {flow._info(to) or to}는 이미 이 산출물을 "
+            f"독립 교차검증했고(팀 교차검증 {flow.current.cross_checks}회), 그 뒤 **코드가 한 줄도 안 바뀌었습니다**"
+            f"(Write/Edit 0). 같은 검증자에게 같은 코드를 또 검증시키는 건 무한 '최종 검증' 루프입니다 — 둘 중 "
+            f"하나로 진행하세요: ① 검증이 충분하면 **complete_task로 마감**(교차검증 게이트는 이미 통과). ② 검증에서 "
+            f"나온 결함이 있으면 그 owner에게 Work로 ***고치게* 한 뒤**(코드가 바뀌면) 다시 검증하세요. (아직 검증 "
+            f"안 한 *다른* 검증자에게 맡기거나, 검증자에게 *새 작업*을 주는 건 막지 않습니다.)")
+    # [비-리더 교차도메인 Work 게이트 — 구조적 조율 단일화(2026-06-22, 사용자: '주어진 일과 무관한 일을
+    #  다른 도메인에 시키는 이상한 협업'은 구조 문제다)] 비-리더는 *받은 일*을 한다 — 같은 도메인 동료에게
+    # 분담(서브태스킹)하거나 검증자(QA)에게 검증을 맡기는 건 자유고, 막히거나 궁금한 건 request(Info)로
+    # 어느 도메인 전문가에게든 *자문*(자유·권장)한다. 그러나 *다른 도메인의 새 Work*를 직접 여는 것은
+    # 리더의 조율 역할이다(SINGLE FLOW·중앙 조율). 프롬프트로 '하지 마'가 아니라 구조로 막고 리더로 보낸다.
+    # 검증·자문을 막는 게 아니라 '의미없는 교차도메인 Work 위임'만 막는다(사용자 설계 방향).
+    if (kind == Kind.WORK and goal and not me_is_leader and to != flow.leader
+            and not getattr(flow, "crossdomain_checked", False)):
+        my_jobs = {_norm_job(j) for j in _jobs_of(flow._info(me_id) or "")} - {""}
+        to_jobs = {_norm_job(j) for j in _jobs_of(flow._info(to) or "")} - {""}
+        to_verifier = _is_verifier(flow._info(to) or "")
+        cap_hit = _offdomain_capability_hit(flow, to, body)   # 같은 도메인이라도 내 도메인 밖 능력 요구면 hit
+        # [회귀 교정(2026-06-23, 사용자: '대화가 난장판') — 'not same_domain' 블랭킷 차단 제거] 단지 도메인이
+        # 다르다는 이유만으로 정상 교차도메인 협업(적임자에게 위임)까지 막아 리더 조율 큐로 보냈고, 그게
+        # '[SYS 조율 — 막혀 배정]'·'[직군초과]' 난장판의 뿌리였다(라이브: crossdomain_blocked 140건 중 다수가
+        # caps=[] = 능력 미스매치 없는 false-positive — 프론트엔드→데이터엔지니어 정상 협업까지 차단). 설계
+        # 의도는 '의미없는 교차도메인 위임만 차단'인데 구현이 *모든* 교차도메인 Work를 막았다. 진짜 능력
+        # 미스매치(cap_hit — 그 능력을 가진 다른 전문가가 있는데 못 가진 이에게 맡김)일 때만 리더로 돌린다.
+        if cap_hit and not to_verifier:
+            if flow.log:
+                flow.log("work_crossdomain_blocked", frm=me_id, to=to, my=sorted(my_jobs),
+                         to_jobs=sorted(to_jobs), caps=list(cap_hit.keys()), seg=flow.leader_segment)
+            _dbg(f"{tag} ✗보류→리더조율큐:비리더 교차도메인")
+            # [리더 조율 강제(2026-06-23, 사용자)] 막힌 교차도메인 Work를 그냥 거부하지 않고 '리더 조율
+            # 큐'에 적재한다 — 워커가 이를 '핑계'로 보고하고 리더가 묵살·재발사하던 라이브 루프(P-030
+            # backend2↔PM 핑퐁)를 끊기 위함. sys_core continue 루프가 이 큐를 리더 다음 턴에 'SYS 확인
+            # 사실'로 주입해 리더가 *직접* 그 도메인 전문가에게 위임하게 한다. 같은 (요청자→대상)은 중복 적재 X.
+            try:
+                if not any(c.get("requester") == me_id and c.get("to") == to
+                           for c in flow.pending_coordination):
+                    flow.pending_coordination.append({
+                        "requester": me_id, "req_role": flow._info(me_id) or str(me_id),
+                        "to": to, "to_role": flow._info(to) or str(to),
+                        "to_jobs": sorted(to_jobs), "body": (body or "")[:500]})
+            except Exception:
+                pass
+            return _ok(
+                f"위임 보류(교차도메인 — **리더 조율 큐로 이관됨**): 당신({flow._info(me_id)})은 다른 도메인의 "
+                f"새 작업을 직접 맡길 수 없어, 이 요청을 **리더에게 조율 사안으로 올렸습니다** — 리더가 그 도메인 "
+                f"전문가에게 직접 배정합니다. 지금 이 턴은 **당신 도메인의 일을 계속**하세요(막힌 그 부분은 리더가 "
+                f"처리하니 기다리거나 다른 동료에게 떠넘기지 마세요). 질문·QA 검증은 그대로 자유입니다.")
+    # [직군밖 사전 차단 — 리더 라우팅] 능력표로 *위임 전에* 능력 미스매치를 잡아 그 전문가에게 리다이렉트
+    # (흡수의 씨앗 차단). 리더는 조율 권한이 있어 직접 적임자에게 보낸다(비-리더는 위 교차도메인 게이트가
+    # 이미 리더로 돌렸다). 상세·근거는 _offdomain_capability_hit 참고. offdomain_checked는 테스트 우회 플래그.
+    if kind == Kind.WORK and goal and me_is_leader and not getattr(flow, "offdomain_checked", False):
+        _hit = _offdomain_capability_hit(flow, to, body)
+        if _hit:
+            if flow.log:
+                flow.log("work_offdomain_blocked", to=to, caps=list(_hit.keys()), seg=flow.leader_segment)
+            _who = "; ".join(f"{n} → {flow._names(ms)}" for n, ms in _hit.items())
+            return _ok(
+                f"위임 거부(직군밖 — 능력 미스매치): 이 작업은 **{', '.join(_hit)}** 능력이 필요한데 "
+                f"{flow._info(to) or to}의 직군 밖입니다. 그 능력을 가진 전문가가 팀에 있습니다 — {_who}. "
+                f"**그 전문가에게 위임**하세요(범용·비전문이 떠안으면 흡수 — placeholder 품질). 정말 {to}가 "
+                f"맡아야 할 합당한 이유가 있으면 body에 '[직군초과: <사유>]'를 적어 다시 보내세요.")
+    # Work Response → Accept/Redo (docs Communication.md §5). 이미 이 owner가 '완료 응답'까지 낸
+    # 산출물을 같은 위임자가 또 Work로 보내면, 그건 '새 위임'이 아니라 직전 산출물의 Redo다.
+    # → 새 프레임이 아니라 redo()로 처리한다(한계까지만, 초과 시 반복 위임 거부). 이로써 '되풀이
+    #   위임'이 구조적으로 '직전 결함을 고치는 보완'으로만 성립한다(반사적 중복요청 차단·정당한 보완 허용).
+    is_redo = kind == Kind.WORK and flow.comm.delivered_work(me_id, to)
+    owner_body = body
+    if is_redo:
+        try:
+            frame = flow.comm.redo(me_id, to, "pending", body=body)    # 베턴 점유 + Redo 카운트(한계 시 RedoLimitExceeded)
+        except RedoLimitExceeded:
+            _dbg(f"{tag} ✗재위임 한도초과")
+            # [품질>토큰 — 리더 셀프 마무리 권유 제거] 종전 안내("직접 Write/Edit로 마무리")는
+            # Redo 실패의 끝에서 중앙집권·비전문 마감을 권하는 셈이었다(탈중앙·전문화 역행).
+            return _ok(f"재위임 거부(Redo 한도 초과): {to}({flow._info(to)})는 이미 이 산출물을 여러 번 "
+                       f"보완했습니다. 같은 사람에게 같은 식으로 또 떠넘기지 마세요 — 품질 경로는: "
+                       f"① 검증자(타 멤버)의 결함 보고로 **무엇이 왜 미달인지 정밀화**해 마지막 1회를 명확히 맡기거나 "
+                       f"② 같은 직군의 **다른 전문가**(없으면 recruit)에게 결함 보고와 함께 맡기거나 "
+                       f"③ goal이 이미 충족이면 complete_task, 끝내 미달이면 사용자에게 정직하게 보고하세요"
+                       f"(리더가 비전문 직접 마무리로 덮지 말 것).")
+        owner_body = (f"[보완 요청(Redo) — 직전 산출물이 목표에 못 미쳐 되돌아왔습니다] 고칠 구체적 결함: {body}\n"
+                      f"[이 Task의 Goal] {goal}\n결함만 정확히 고치고 run으로 재검증해 그 증거와 함께 보고하세요.")
+    else:
+        frame = flow.comm.request(me_id, to, "pending", kind, body=body)   # 베턴 점유(alive→to) + 원문(정밀복구)
+        if kind == Kind.WORK:
+            # 위임의 '계약'은 리더가 매번 새로 쓰는 스펙이 아니라 팀 합의로 확정된 Goal이다(스펙 리파인
+            # 루프=재요청의 뿌리를 끊는다). owner가 그 목표를 끝까지(구현+검증) 책임진다.
+            owner_body = (f"[위임 — 이 목표를 끝까지 책임지는 owner는 당신입니다] 이 Task의 Goal: {goal}\n"
+                          f"직접 구현하고 run으로 '목표가 충족됨'을 검증한 뒤(리더에게 되넘기지 말 것), "
+                          f"그 실행 증거와 함께 간결히 보고하세요.\n"
+                          f"큰 목표는 **수직 슬라이스 우선**: '끝까지 관통하는 최소 동작 버전'을 먼저 만들어 "
+                          f"검증하고 그 위에 살을 붙이세요 — 마지막 통합 몰빵 금지(오차를 일찍 드러내는 것이 "
+                          f"빠른 길입니다. RFC-005: 검증 신호는 연속적이어야 한다).\n"
+                          f"보고는 다음 골격으로(보고 계약 — 받은 쪽이 산출물을 재탐색하지 않아도 되게): "
+                          f"[결과] 한 줄 결론(완료/부분/실패) / [변경] 파일·핵심 변경 목록 / "
+                          f"[검증] 방법→결과 / [리스크] 남은 것·주의점.\n"
+                          f"단, 이 Goal에 **당신 직군의 전문성으로 만드는 게 아닌 범주**가 섞여 있으면 — "
+                          f"코드로 흉내낼 수 있다고 당신 일인 게 아닙니다('할 수 있다'와 '그 분야 전문성으로 "
+                          f"잘한다'는 다릅니다 — 비전문 자급은 placeholder일 뿐) — 어설프게 떠안지 말고 보고 "
+                          f"**첫 줄**에 `[직군밖] 필요직군명` 을 적어 반려하세요. 리더가 그 직군을 채용하거나 "
+                          f"실제 제작 자원으로 충족합니다(전문화 원칙: '구현 가능'이 아니라 '전문성 정합'으로 판단).\n"
+                          f"[요청 맥락] {body}")
+            iface = (getattr(flow.current, "interfaces", "") or "").strip()
+            if iface:
+                # [협업 — 인터페이스 직접 전달·합의(2026-06-22 사용자: '전문가끼리 서로 대화하는가')] 종전엔
+                # interfaces가 Task에만 저장되고 owner에게 전달 안 돼(여기 누락) owner가 계약을 못 보고 추측
+                # → 통합 불일치(P-028 API 미스매치). 이제 계약을 owner에게 주고, 맞물리는 부분은 그 도메인
+                # owner에게 *직접 request(Info)*로 확인하게 한다(리더 중계·추측 금지).
+                owner_body += (f"\n[도메인 간 인터페이스 계약 — 준수]\n{_speech_clip(iface, 1500)}"
+                               f"\n[직접 합의 — 리더 중계 금지] 당신 작업이 다른 도메인과 맞물리면(데이터 포맷·"
+                               f"API·이벤트 타이밍 등) 추측하거나 리더에게 되묻지 말고 **그 도메인 owner에게 "
+                               f"직접 request(Info)**로 계약을 확인·합의하세요 — 전문가끼리 직접 소통합니다.")
+            notes = getattr(flow.current, "collab_notes", "")
+            if notes:
+                # [스펙 증발 방지] 회의·표결의 합의는 리더 머릿속이 아니라 위임 계약에 실린다 —
+                # 라이브 P-009: 9직군이 회의로 정한 스펙(상태머신·SLA·타이밍 계약)이 구현자에게
+                # 전달되지 않아(스코프 단절·리더 요약 의존) 결과물 품질로 이어지지 못함.
+                owner_body += f"\n[팀 협의 기록(회의·표결) — 구현·검증 시 이 합의를 준수]\n{_speech_clip(notes, 6000)}"   # 저장 한도(6000)와 일치 — 전달에서 합의가 또 잘리지 않게(품질>토큰)
+            # [RFC-008 P0 — 검증 위임에 루브릭 자동 주입] owner 인도 후 '다른 멤버'에게 가는 Work =
+            # 검증 위임 → owner 산출물 도메인의 직무 기준을 루브릭으로 동봉. 라이브 P-010 1차에서 루브릭이
+            # complete_task 거부 메시지에만 있어 0회 발동(검증이 카운트되면 게이트를 안 탐) — 검증자에게
+            # 직접 주입해야 'owner 도메인 기준 채점'이 실제로 일어난다. '돌아가는가'가 아니라 '충분한가'.
+            if (getattr(flow.current, "owner_delivered", False) and flow.current.owner
+                    and to != flow.current.owner and callable(getattr(flow, "craft_of", None))):
+                owner_job = (flow._info(flow.current.owner) or "").strip()
+                rub = [flow.craft_of(j) for j in owner_job.split("·") if j.strip()]
+                rub = [r for r in rub if r]
+                if rub:
+                    # [발견2 완화] owner 인도 후 타 멤버 Work가 '검증'인지 '후속 구현'인지 구조로 완벽히
+                    # 구분 불가(의도의 문제) — 메시지가 양쪽을 다 커버해 오발동을 무해화한다: 검증 위임이면
+                    # 채점, 후속 구현이면 같은 기준을 '참고'(통합 시 품질 인식). 어느 쪽이든 owner 도메인
+                    # 기준이 주입되는 건 손해가 아니다('충분한가'의 눈을 공유).
+                    owner_body += (f"\n[산출물 품질 기준 — '{owner_job}' 도메인. 이 요청이 **검증**이면 산출물을 "
+                                   f"'사용자처럼 실제로 사용·플레이'하며 아래 각 항목을 충족/미달로 채점하고 미달은 "
+                                   f"구체적 결함으로 보고하세요(돌아가는가 아니라 '충분한가'). 이 요청이 **후속 "
+                                   f"구현/통합**이면 아래 기준을 참고해 같은 품질 수준을 맞추세요:\n"
+                                   + _speech_clip("\n---\n".join(rub), 2500))
+    thread_id = flow.current.thread_id
+    # Owner = 그 일을 Work로 받은 동료(수신=소유). 선배정이 아니라 요청으로 owner가 떠오른다 —
+    # 이 Task에 아직 owner가 없을 때 첫 Work-request 수신자가 책임자가 된다(중앙집권 방지).
+    if kind == Kind.WORK and not flow.current.owner:
+        flow.current.owner = to
+        flow.current.status.owner = flow._info(to) or f"<@{to}>"
+        await flow.refresh(flow.current)
+        _ckpt(flow)                       # 크래시-세이프: owner 확정 영속(복구 때 같은 담당이 잇게)
+    req = await g.send_request(thread_id, me_id, to, kind, body)
+    frame.request_id = str(req)                              # 실제 메시지 id로 기록 갱신
+    if kind == Kind.WORK and flow.current:
+        flow.current.work_delegated_to.add(to)   # 누가 위임했든(리더든 peer든) 'Work를 실제로 받은' 멤버 기록
+        if to == flow.current.owner:
+            # [정밀 복구] owner에게 보낸 Work 원문 보관(레벨1 fallback).
+            flow.current.last_work_body = body
+        if me_id == flow.leader:
+            flow.current.work_delegated += 1   # 리더의 구현 위임 카운트 — 0이면 '자문만 받고 독식'(권한 훅이 차단)
+        # [정밀 복구 — 체인 깊이 영속] 모든 Work 위임마다 체크포인트 → 스냅샷의 active_chain이 *현재 깊이*를
+        # 반영. 끊김 시 가장 깊은 활성 워커(체인 끝)를 그 원문으로 재개(리더로 안 튐). 깊은 전문가 협업 보존.
+        _ckpt(flow)
+    _dbg(f"{tag} ✓전송 req={req}{' (Redo)' if is_redo else ''}")
+    if flow.log:   # 관측: 모든 요청을 '보낸 순서'대로 영속 기록(중첩 PostToolUse 타이밍에 안 묻힘)
+        flow.log("req_sent", frm=me_id, to=to, kind=str(getattr(kind, "value", kind)),
+                 seg=flow.leader_segment, redo=is_redo, body=body[:60])
+    # Task 정의 '실질 협의' 참여 기록 — 보낸 쪽·받은 쪽 모두(누가 물었든: 리더든 peer든). 빈 핑은 제외.
+    # → set_goal 게이트가 'peer 협의도 합의로 인정'하고 '빈 핑은 불인정'하게 만든다(허브 완화·실질 강제).
+    if kind == Kind.INFO and flow.current and _is_substantive(body):
+        for x in (me_id, to):
+            if x in flow.current.team and x != flow.leader:
+                flow.current.participated.add(x)
+        # [협업 — 전문가 간 직접 대화(2026-06-22 사용자 설계)] 양쪽 다 비-리더 팀원이면 owner↔owner 직접
+        # Info(리더 경유 아님) — 쌍으로 기록. 인터페이스 계약을 '리더 중계·추측'이 아니라 *당사자끼리*
+        # 합의했는지 마감 게이트(iface_dialogue)가 본다.
+        if (me_id != flow.leader and to != flow.leader
+                and me_id in flow.current.team and to in flow.current.team):
+            flow.current.peer_info_pairs.add(frozenset((me_id, to)))
+    # ── 위임 완주 보장(detach-safe) ─────────────────────────────────────────
+    # 여기서부터의 '깨우기→응답 처리→프레임 close'는 별도 태스크(_deliver)로 돌고, 도구 호출
+    # 자체는 shield로 감싼다. CLI가 (자체 한도 등으로) 이 도구 호출을 포기·취소해도 위임은
+    # 끝까지 완주하고 규약(베턴·게이트·기록)이 일관되게 닫힌다 — 라이브 관측: 위임 포기가
+    # '이중 활성'(리더+사슬 동시 작업)과 리더의 '비동기 작업 중' 오인을 만들던 결함의 차단.
+    # 완주 결과는 flow.detached_results로 남아 SYS가 이어가기 리더에게 전달한다.
+    detached = {"on": False}
+
+    async def _deliver():
+        runs_before = flow.current.run_count if flow.current else 0
+        acts_before = flow.act_count   # 위임 도중 owner(단일흐름이라 깨운 동료만 활성)가 실제로 일했는지 측정
+        mine_before = flow.act_by.get(me_id, 0) if getattr(flow, "act_by", None) is not None else 0
+        _body_local = owner_body
+        result = ""
+        _nest_guard = 0
+        while True:
+            try:
+                result = await flow.wake(to, _body_local, kind)     # 동료 깨워 응답(중첩 베턴)
+                if _looks_transient(result):                        # 일시 오류면 한 번 더(답으로 취급 X)
+                    result = await flow.wake(to, _body_local, kind)
+            except Exception as e:
+                result = f"(동료 처리 중 오류: {e})"
+            # [중첩 위임 — 동기처럼 완주(논블로킹 핸드오프)] `to`가 자기 턴에서 다른 동료에게 핸드오프했으면
+            # SYS가 그 하위 위임을 호출 *밖*에서 완주시키고 `to`를 그 결과로 이어간다 — 블록킹 도구호출 없이
+            # 중첩이 직렬로 완주(75초 미닿음). 판정은 `to`의 출력 문자열('[위임됨' 등 — 봇 표현은 못 믿음)이
+            # 아니라 **handoff_inflight[to]에 실제로 하위 위임이 등록됐다는 사실**로 한다(견고). _nest_guard는
+            # 폭주 백스톱(같은 `to`가 끝없이 재위임만 하는 병적 경우) — 정상 사슬은 한참 못 미친다.
+            _sub = (getattr(flow, "handoff_inflight", None) or {}).pop(to, None)
+            _nest_guard += 1
+            if _sub is None or _nest_guard > 50:
+                if _sub is not None and flow.log:
+                    flow.log("handoff_nest_guard", to=to, depth=_nest_guard)
+                break
+            try:
+                _sr = await _sub
+                _srt = _sr["content"][0]["text"] if isinstance(_sr, dict) else str(_sr)
+            except Exception as e:
+                _srt = f"(하위 위임 오류: {e})"
+            _body_local = ("[당신이 맡긴 위임의 결과가 도착했습니다 — 이어서 통합·검증·완성하세요(추가 위임이 "
+                           f"더 필요하면 한 번에 하나씩, 끝나면 보고로 응답):\n{_speech_clip(_srt, 4000)}")
+        # 깨운 동료가 '나(위임자)에게 확인요청'을 남기고 턴을 마쳤으면, 그 질문을 응답으로 표면화 →
+        # 내가 답을 정해 다시 맡긴다(되묻기가 에러가 아니라 협업으로 흐름). 이는 '완료'가 아니므로
+        # delivered로 기록하지 않는다(되묻기 후 재위임은 Redo가 아니라 '첫 구현').
+        was_clarify = False
+        if (flow.pending_clarify and flow.pending_clarify.get("to") == me_id
+                and flow.pending_clarify.get("from") == to):
+            q = flow.pending_clarify["q"]
+            flow.pending_clarify = None
+            was_clarify = True
+            result = (f"[확인요청 from {flow._info(to)}] {q}\n"
+                      f"(→ 답을 정한 뒤, 이 작업을 {flow._info(to)}에게 request(Work)로 다시 맡기세요)")
+        failed = _looks_transient(result)
+        # [직군밖 반려 — 전문화의 구조 채널] 도메인 적합성은 시스템이 키워드로 판정하지 않는다 —
+        # 그 분야 전문가(수신 owner)가 판정한다(자기정의 원칙). owner가 첫 줄에 '[직군밖] 필요직군'
+        # 을 적으면: 실패도 미완도 아닌 '올바른 반려'로 분류하고, 소유를 해제하며, 리더에게 채용을
+        # 구조적으로 지시한다 — 관계없는 직군이 일을 흡수해 어설픈 산출물을 내던 경로(라이브:
+        # ML이 백엔드에 묶여 감)의 차단.
+        refused_m = re.match(r"^\s*\[직군밖\]\s*([^\n]*)", result or "")
+        refused = bool(kind == Kind.WORK and not was_clarify and not failed and refused_m)
+        if refused and flow.current is not None and flow.current.owner == to:
+            flow.current.owner = 0                 # 소유 해제 — 채용된 전문가가 새 owner가 되게
+            flow.current.status.owner = ""
+            flow.current.owner_incomplete = False
+            _ckpt(flow)
+        # owner가 '위임 도중 실제로 일했나' — 단일흐름이라 깨운 동료(+그 하위)만 활성이므로 wake 전후
+        # act_count(run/Write/Edit) 증가 = owner 작업. 거짓이면 owner는 깨어났지만 착수 전/계획만 하고
+        # 곧장 반환한 것(허위완료의 씨앗). 이걸로 '검증된 인도'와 '빈 응답'을 가른다.
+        # '요청자 자신'의 활동(detach 뒤 리더가 모델 쪽에서 돌린 폴링 run 등)은 빼고 잰다 —
+        # 위임 측정창의 인도 신호(owner_acted)가 이중 활성 잔재로 오염되지 않게(허위완료 차단 정확성).
+        mine_delta = (flow.act_by.get(me_id, 0) - mine_before) if getattr(flow, "act_by", None) is not None else 0
+        owner_acted = (flow.act_count - acts_before) > mine_delta
+        # 진짜 행(무활동)으로 끊긴 인프라 타임아웃인데 owner가 그 전에 실제로 작업을 했다면, 한 작업은
+        # 작업공간에 남아 있다 → '실패'로 끝내 유실시키지 말고 '이어가기'(미완)로 처리한다. (하트비트
+        # 타임아웃이 일하는 워커는 안 자르므로 드문 경우지만, 안전망으로 작업 유실·허위완료를 막는다.)
+        infra_timeout = (kind == Kind.WORK and not was_clarify
+                         and "api error: timeout" in (result or "").lower())
+        resumable_timeout = infra_timeout and owner_acted
+        # 동료가 'turn 한도'로 미완 반환했나(Work) — 그러면 이 Task는 완료로 못 닫고(complete_task 거부),
+        # 같은 owner에게 '이어서(continuation)' 재위임해 끝내야 한다(허위완료→다음 Task churn 차단). 미완은
+        # delivered(accept)로 안 쳐서 respond 마커를 'incomplete'로 두면, 재위임이 Redo 한도에 안 걸린다
+        # (이어가기는 '직전 결함 보완'이 아니라 '남은 작업 마저 하기'이므로 횟수 제한 없이 계속 가능).
+        incomplete = (kind == Kind.WORK and not was_clarify and not failed and not refused
+                      and "턴 한도 도달" in (result or "")) or resumable_timeout
+        # 미완 게이트(owner_incomplete)는 '의미 있는 신호'로만 갱신한다: 미완 신호면 True, owner가
+        # '실작업을 담은 정상 응답'으로 마무리하면 False(이어가기 완료 = 게이트 자동 해제). 크래시(failed)
+        # ·실작업 없는 응답은 완료의 증거가 아니므로 직전 상태를 유지한다 — 타임아웃 미완이 후속 크래시/
+        # 빈 응답으로 풀려 미완인 채 complete가 통과되는 구멍 차단.
+        if kind == Kind.WORK and not was_clarify and flow.current:
+            if incomplete:
+                flow.current.owner_incomplete = True
+            elif not failed and owner_acted:
+                flow.current.owner_incomplete = False
+        is_owner_work = (kind == Kind.WORK and not was_clarify and not failed and not incomplete
+                         and not refused
+                         and flow.current is not None and to == flow.current.owner)
+        # owner가 Work를 받고도 실작업(run/Write) 0회로 곧장 반환 = 착수 전/계획만 = '인도 아님'.
+        premature = is_owner_work and not owner_acted
+        if premature and flow.current is not None:
+            # 미착수도 '구조적 미완'이다 — 마커를 세워 complete를 막고, 리더 세그먼트가 여기서
+            # 끝나도 SYS 자동 이어가기가 같은 owner를 다시 깨운다(판단이 아니라 기계적 행동).
+            flow.current.owner_incomplete = True
+        if is_owner_work and owner_acted and _is_substantive(result):
+            flow.current.owner_delivered = True   # 이 owner가 실작업+응답을 냈다 → complete_task 허용 근거
+            _ckpt(flow)              # [인도 사실 영속] 복구가 인도 핸드셰이크를 다시 요구하지 않게(마감 닫힘)
+        try:
+            await g.send_response(thread_id, to, req, result)
+            await _react(g, thread_id, req, "⚠️" if failed else "✅")  # 상태=이모지(해소/실패)
+            _dbg(f"{tag} {'⚠실패' if failed else ('…미완' if (incomplete or premature) else '✓응답')} len={len(result)}")
+        finally:
+            # 프레임 close = 베턴 복귀(누수 방지). 정상이면 alive==to 라 그대로 닫힌다. 미완·미착수(premature)는
+            # 'accept'로 안 쳐서 delivered로 기록 안 함 → 같은 owner 재위임이 Redo 한도에 안 걸리고 '실제 첫 인도'로 성립.
+            # 크래시(failed)도 'accept'가 아니다 — 인프라 실패가 '완료 인도'로 기록되면 직후 재요청이
+            # Redo(보완)로 둔갑해 한도를 태우고 owner에게 '직전 산출물 결함' 프레임으로 잘못 전달된다.
+            try:
+                flow.comm.respond(to, "clarify" if was_clarify else
+                                  ("refused" if refused else
+                                   "incomplete" if (incomplete or premature) else
+                                   "failed" if failed else "accept"), result)
+            except CommError:
+                # to의 중첩 하위요청이 응답 없이 끝나(크래시/이탈) 베턴이 to에 '굳은' 비정상 상황 →
+                # me_id(요청자)가 다시 alive 될 때까지 위 프레임을 강제 close. 흐름 교착(굳음) 방지.
+                _stuck = flow.comm.alive
+                if flow.log:
+                    flow.log("baton_recover", me=me_id, stuck_alive=_stuck, to=to)
+                # [막힘 흡수 차단 — 막힌 사람 기록] 베턴이 막힌 하위 담당에서 위임자에게 되돌아온다. 위임자가
+                # '내가 하지'로 그 사람 일을 흡수하지 못하게 막힌 사람을 기록 — 게이트가 '같은 사람 재요청'을
+                # 유도(재채용 X). 막힌 사람이 다시 일하면 해제. (origin/리더 자신이 막힌 건 흡수 대상 아님.)
+                # *새* victim일 때만 기준치·카운터 초기화 — 같은 사람이 반복해 막히면 카운터가 누적돼 N회 후
+                # 게이트가 폴백(통과)하므로, 진짜 죽은 동료에 무한 재요청·무한 차단으로 빌드가 얼지 않는다.
+                if (_stuck and _stuck != flow.comm.origin and _stuck != getattr(flow, "leader", None)
+                        and getattr(flow, "_stall_victim", None) != _stuck):
+                    flow._stall_victim = _stuck
+                    flow._stall_victim_acts = (getattr(flow, "act_by", None) or {}).get(_stuck, 0)
+                    flow._stall_blocks = 0
+                guard = 0
+                # origin 프레임(스택 마지막 1장)은 여기서 닫지 않는다 — 핸들러 레벨 복구가
+                # 흐름 자체를 종료시키면 안 됨(origin 마감은 SYS의 _close_flow 책임). detach로
+                # 프레임 순서가 어긋난 최악 타이밍에 흐름이 통째로 드레인되던 위험 차단.
+                while (not flow.comm.done and flow.comm.alive != me_id
+                       and len(flow.comm.open_requests) > 1 and guard < 30):
+                    flow.comm.escalate("베턴 굳음 안전복구")
+                    guard += 1
+        if failed:
+            if resumable_timeout:
+                # owner가 작업을 진행하다 '무활동'으로 끊긴 경우 — 한 작업은 작업공간에 보존돼 있다.
+                # 실패로 끝내지 말고 같은 owner에게 '이어서' 재위임(연속). owner_incomplete=True라 complete는
+                # 막히고, 프레임 마커가 incomplete라 redo 한도와 무관하게 계속 이어갈 수 있다(유실·허위완료 동시 차단).
+                if flow.log:
+                    flow.log("owner_resumable_timeout", to=to, seg=getattr(flow, "leader_segment", 0))
+                return _ok(f"[{flow._info(to)}] 작업을 진행하던 중 일시 무응답으로 끊겼습니다 — 한 작업은 "
+                           f"작업공간에 보존돼 있습니다. **같은 담당자에게 request(Work)로 '이어서 남은 부분을 "
+                           f"마저 끝내라'**고 다시 맡기세요(이어가기 — 횟수 제한 없음). 다른 사람으로 바꾸거나 "
+                           f"새로 뽑지 마세요(같은 환경이라 같은 문제).")
+            # 구조적 사실: 단일흐름은 한 번에 한 명만 일한다 → 요청자는 그 동료가 끝날 때까지 '블록'된다.
+            # 따라서 여기서의 '실패'는 그 동료가 느리거나 불응한 게 아니라 그 동료의 LLM 서브프로세스가
+            # '크래시'(SIGTERM/143·연결끊김·과부하)한 것 — 즉 인프라/환경 문제다. 새 사람으로 바꾸거나
+            # 충원하면 '같은 환경'에서 똑같이 크래시한다(이게 '백엔드 6명' 루프의 뿌리). 그래서 실패엔
+            # '재배정·채용'을 절대 권하지 않는다 — 같은 동료 1회 재시도(블립 회복용) 또는 사용자 보고만.
+            flow.consec_fail = getattr(flow, "consec_fail", 0) + 1
+            if flow.log:
+                flow.log("req_failed", to=to, consec=flow.consec_fail, seg=flow.leader_segment)
+            if flow.consec_fail >= 2:
+                return _ok(f"[{to}] 또 실패 — **연속 {flow.consec_fail}회**. 이건 그 동료가 아니라 **환경(인프라) 일시 "
+                           f"불안정**입니다(단일흐름이라 한 명만 도는데 그 서브프로세스가 크래시한 것). **새로 뽑거나 "
+                           f"다른 사람으로 바꾸지 마세요 — 같은 환경이라 똑같이 실패합니다.** 진행 상황을 사용자에게 "
+                           f"'환경 불안정으로 일시 중단'이라 보고하고 멈추세요(무한 재시도·충원 금지).")
+            return _ok(f"[{to}] 응답 실패. 단일흐름에선 한 명만 일하므로 이건 그 동료 탓이 아니라 거의 항상 **인프라/일시 "
+                       f"오류(서브프로세스 크래시)**입니다 — **다른 사람으로 바꾸거나 새로 뽑지 마세요(같은 환경이라 똑같이 "
+                       f"실패).** 같은 동료에게 한 번만 다시 요청해보고(블립이면 회복), 또 실패하면 사용자에게 보고하고 멈추세요.")
+        flow.consec_fail = 0   # 정상 응답 → 연속 실패 카운터 리셋(일시 블립 회복)
+        if refused:
+            need = (refused_m.group(1) or "").strip() or "해당 전문 직군"
+            if flow.log:
+                flow.log("work_refused_offdomain", to=to, need=need[:30], seg=flow.leader_segment)
+            return _ok(f"[직군밖 반려] {flow._info(to) or to}가 이 일을 **자기 직군 밖**으로 판정했습니다 — "
+                       f"필요 직군: {need}.\n**recruit(role='{need}')로 예비를 채용해 그 전문가에게 Work로 "
+                       f"맡기세요** — 같은 동료나 관계없는 직군에 다시 떠넘기지 마세요(이 반려는 실패가 아니라 "
+                       f"올바른 전문화 신호입니다. 소유는 해제됐고, 채용된 전문가가 새 owner가 됩니다).\n"
+                       f"--- 반려 보고 원문 ---\n{_speech_clip(result, 1500)}")
+        # owner가 깨어났지만 '실작업 없이'(run/Write/Edit 0회) 곧장 반환 = 아직 착수 전/계획만. 리더가 대신
+        # 구현·완료하지 말 것(독점·허위완료의 정확한 진입점). 같은 owner에게 다시 맡겨 '검증된 산출물'을 받게
+        # 안내한다. 이 응답은 캐시하지 않는다 → 같은 턴에 재위임해도 합쳐지지 않고 실제로 다시 깨운다.
+        if premature:
+            _dbg(f"{tag} ⚠owner 미착수(실작업 0)")
+            if flow.log:
+                flow.log("owner_no_work", to=to, seg=flow.leader_segment)
+            return _ok(f"[{to} 응답] {_speech_clip(result, 1500)}\n\n[중요] {flow._info(to) or to}가 아직 산출물을 만들지 "
+                       f"않았습니다(run/파일작성 0회 — 착수 전이거나 계획만). **당신이 대신 구현하거나 이 Task를 "
+                       f"완료하지 마세요(독점·허위완료 금지).** 같은 owner에게 request(Work)로 다시 맡겨 'run으로 "
+                       f"검증한 실제 산출물'을 받은 뒤 진행하세요. 정말 끝까지 무응답이면 recruit/재배정으로.")
+        # 위임 응답엔 owner가 '직접 돌린 실행 증거(시스템 캡처)'를 붙여 돌려준다 — 위임자가 말이 아니라
+        # 증거로 '검증 후 수락'할 수 있게(반사적 재요청 대신). owner가 이번에 run을 돌렸을 때만.
+        receipt = ""
+        if (kind == Kind.WORK and not was_clarify and flow.current
+                and flow.current.run_count > runs_before and flow.current.evidence):
+            receipt = f"\n[owner 실행 증거(시스템 캡처)] {_speech_clip(flow.current.evidence, 1000)}"
+        # [발견1 교정 2026-06-13] 검증 대상 산출물이 '존재'하면(owner 위임 인도 OR 리더가 직접
+        # 구현=leader_writes>0) 그 후 타 멤버 응답을 교차 검증 참여로 센다 — 리더 독식 Task(owner==0)도
+        # 제3자 검증 대상('누가 만들었든 제3자 검증'은 보편 이치). 종전엔 owner_delivered만 봐서 리더
+        # 독식이 검증 면제되던 구멍.
+        product_ready = (flow.current.owner_delivered
+                         or (not flow.current.owner and getattr(flow.current, "leader_writes", 0) > 0))
+        if flow.current and product_ready and to != flow.current.owner:
+            flow.current.cross_checks += 1
+            # [독립 검증 = 다른 도메인 — 동질 모델] 같은 Claude·같은 직군 검증자는 에코(같은 관점→같은
+            # 맹점). owner와 도메인이 다른 검증자만 '독립'으로 따로 센다(owner 미상이면 리더 기준).
+            _own = flow.current.owner or flow.leader
+            _od = {_norm_job(j) for j in _jobs_of(flow._info(_own) or "")} - {""}
+            _vd = {_norm_job(j) for j in _jobs_of(flow._info(to) or "")} - {""}
+            if _od and _vd and not (_od & _vd):
+                flow.current.cross_check_offdomain += 1
+                # [검증 종료상태 — 리뷰F2 교정] *독립(off-domain)* 검증 시점의 저작수만 기록한다(same-domain
+                # 검증엔 갱신 안 함 — 종전엔 same-domain 검증이 마커를 올려 *변경된* 코드의 정당한 off-domain
+                # 재검증을 막던 staleness). + 이 검증자를 기록(리뷰F1: 재검증 dedup이 '이미 검증한 그 검증자'에게
+                # 만 적용되게 — 검증자에게 새 작업 시키는 것까지 막던 회귀 차단).
+                flow.current.last_verify_writes = sum(int(v) for v in (flow.writes_by_role or {}).values())
+                flow.current.cross_checkers.add(int(to))
+            _ckpt(flow)              # [교차검증 사실 영속] 복구가 교차검증을 다시 요구하지 않게(마감 닫힘)
+            # [회로차단기 — 수렴 경보(2026-06-23 협업재설계 S1)] 교차검증이 임계를 넘는데 안 닫히면 = 수렴이
+            # 아니라 *루프*다. 봇은 '해결 불가'(플랫폼 한계 등)를 스스로 판정 못 해 무한 검증한다(라이브 P-031
+            # 콜드스타트 41회). 봇에게 없는 메타인지를 시스템이 대신 — 사용자에게 *1회* 에스컬레이트해 판정을 넘긴다.
+            if (flow.current.cross_checks >= _LOOP_ESCALATE_CROSS
+                    and not getattr(flow.current, "loop_escalated", False)):
+                flow.current.loop_escalated = True
+                if flow.log:
+                    flow.log("loop_circuit_breaker", task=flow.current.task_id, cross=flow.current.cross_checks)
+                try:
+                    await flow.guide.post(
+                        flow.user_channel, 0,
+                        f"[수렴 경보 — 사람 판정 필요] 이 Task가 교차검증을 {flow.current.cross_checks}회 했는데도 "
+                        f"아직 안 닫힙니다. 봇들이 *같은 문제를 반복해 잡고* 있는데, 흔히 코드로 못 고치는 *한계*"
+                        f"(플랫폼 제약 등)입니다 — 봇은 '해결 불가'를 스스로 판정 못 해 무한 검증합니다. 결정해주세요: "
+                        f"**① 현 상태 수용·마감** / **② 다른 방향 제시**.")
+                except Exception:
+                    pass
+                _ckpt(flow)
+        flow.req_results[dupkey] = result   # 같은 턴 병렬 중복요청이 재사용할 응답 캐시(동료 재호출 방지)
+        return _ok(f"[{to} 응답] {_speech_clip(result, 4000)}{receipt}")
+
+
+    async def _deliver_tracked():
+        payload = await _deliver()
+        if detached["on"]:
+            try:
+                txt = payload["content"][0]["text"]
+            except Exception:
+                txt = str(payload)[:400]
+            flow.detached_results.append(f"{flow._info(to) or to} → {_speech_clip(txt, 4000)}")
+        return payload
+
+    inner = asyncio.ensure_future(_deliver_tracked())
+    flow.inflight_tasks.add(inner)
+    inner.add_done_callback(flow.inflight_tasks.discard)
+    if getattr(flow, "_handoff", False):
+        # [논블로킹 핸드오프 — 단일흐름 안정성(2026-06-22 사용자 설계)] 동료의 *턴 전체*를 도구호출 안에서
+        # 기다리지 않는다. 기다리면 75초 넘을 때 CLI가 도구호출을 포기→CancelledError→detach→백그라운드
+        # 비동기 churn(P-029: 6위임 전부 detach·'처리 중 턴종료' 누수·빈 산출물). 대신 위임을 인플라이트로
+        # 등록하고 *즉시* 반환 — 동료 작업은 SYS 이어가기 루프(_drain_inflight)와 _deliver 중첩 루프가 호출
+        # *밖*에서 완주시켜 결과로 요청자를 잇는다. 베턴은 이미 to로 넘어가 요청자는 비활성 → 재위임 불가
+        # (규약이 막음). 도구호출이 1초라 75초가 닿지 않고, 베턴 1개라 비동기 다중실행이 구조적으로 불가 = 단일흐름.
+        detached["on"] = True
+        flow.handoff_inflight[me_id] = inner
+        return _ok("[위임됨 — SYS가 동료를 끝까지 완주시켜 *결과로 당신을 이어줍니다*(비동기 아님 · 한 번에 "
+                   "한 위임). **'처리 중' 같은 말이나 재위임·추가 행동 없이 이 턴을 여기서 마치세요** — "
+                   "결과가 도착하면 SYS가 자동으로 당신을 재개합니다.]")
+    try:
+        return await asyncio.shield(inner)
+    except asyncio.CancelledError:
+        if not inner.done():
+            detached["on"] = True       # 도구 호출만 죽고 위임은 계속 — 결과는 detached로 전달
+            if flow.log:
+                flow.log("delegation_detached", to=to, seg=flow.leader_segment)
+        raise
+
