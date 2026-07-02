@@ -347,3 +347,136 @@ class CommunicationManager:
             self.done = False
         self.history.append(("restore_chain", len(self._stack), self.alive))
         return self.alive
+
+
+# ══ [팀·역량 라우팅 Rule — guide_tools에서 §7 rule/communication로 이관] ══
+# '누구에게 위임하나'(능력표 _CAPS·직군·전역 점유)를 판정하는 소통 Rule. 잘못된 병합을 원래대로 복원.
+# flow는 duck-typed 인자(Flow 임포트 불필요).
+def _kw(*kws):
+    """키워드 중 하나라도 문자열에 있으면 True인 술어 생성(능력 need/cover 판정용)."""
+    return lambda s: any(k in s for k in kws)
+
+
+# 능력 표 — (표시명, need(goal 소문자)→bool, cover(labels 소문자 합본)→bool). 고신호만(과채용 최소):
+# 그 능력이 *작업의 실질 축*일 때만 need=True. cover는 관대(누군가 plausibly 덮으면 갭 아님).
+# 일반화 동기(2026-06-22 사용자 '데브옵스·DBA 채용이 안 보인다'): 단일 AI/ML만 보던 탓에 반복 수요인
+# 공공데이터 수집이 게이트에 안 걸려 흡수됐고(실데이터를 합성·가짜로 위장하는 사고의 *상류* 원인),
+# 배포 인프라는 아무도 전담 안 해 리더에 귀속됐다(P-028 배포 1인 루프). 기능으로 식별(직군 타이틀 X).
+_CAPS = [
+    # AI/ML 모델링 — 모델 학습·예측이 핵심인데 AI/ML 직군이 없을 때(백엔드는 cover 아님 — 별도 전문성).
+    ("AI/ML(모델 학습·예측)",
+     lambda t: (_kw("학습시키", "머신러닝", "딥러닝", "신경망", "ml 모델", "예측 모델", "ai 모델")(t)
+                or ("ai" in t and _kw("학습", "예측", "모델")(t))),
+     _kw("ai", "머신", "딥러닝", "인공지능", "ml", "데이터 과학", "데이터 사이언", "data scien", "machine learn")),
+    # 실데이터 수집·파이프라인 — 실/공공 데이터를 받아와 쓰는 게 전제일 때(백엔드/AI가 흡수하던 영역이라
+    # 백엔드는 cover 아님 — 전담 데이터 직군 강제 → 데이터엔지니어↔AI엔지니어 핸드오프 협업도 생긴다).
+    ("실데이터 수집·파이프라인",
+     lambda t: (_kw("공공데이터", "공공 데이터", "실데이터", "실제 데이터", "오픈데이터", "open data")(t)
+                and _kw("받아", "수집", "연동", "활용", "파이프라인", "크롤", "가져", "fetch", "적재")(t)),
+     _kw("데이터 엔지니", "데이터엔지니", "data eng", "데이터 수집", "데이터 파이프", "etl", "데이터 분석")),
+    # 데이터 영속·DB — 계정·기록·랭킹 등 지속 저장이 핵심일 때. 기본 CRUD는 백엔드가 덮으니 백엔드·DBA가
+    # 둘 다 없을 때만 갭(과채용 방지 — 백엔드 있으면 발동 안 함).
+    ("데이터 영속·DB",
+     _kw("데이터베이스", "데이터 베이스", "database", "영속 저장", "계정", "로그인", "회원가입",
+         "랭킹 저장", "기록 저장", "쿼리 최적"),
+     _kw("dba", "데이터베이스", "데이터 베이스", "백엔드", "backend", "서버 개발")),
+    # 배포·인프라(DevOps) — 배포 파이프라인·운영 자동화가 *명시적으로* 요구될 때만(평범한 웹 배포는 표준
+    # 파이프라인이 처리 → 안 걸림). 키워드를 좁혀 과채용 방지.
+    ("배포·인프라(DevOps)",
+     _kw("ci/cd", "cicd", "파이프라인 구축", "도커", "컨테이너 오케", "쿠버네티스", "kubernetes",
+         "오토스케일", "무중단", "로드밸런", "인프라 구축", "운영 자동화", "sre"),
+     _kw("devops", "데브옵스", "인프라", "sre", "배포 엔지니", "플랫폼 엔지니")),
+]
+
+
+def _capability_gaps(goal_text, labels):
+    """목표가 요구하는 전문 능력 중 팀(라벨들)이 *아무도 보유 못 한* 것 — 능력명 리스트. 리더가 자기 직군
+    밖 도메인을 흡수(언더스태핑)하는 걸 set_goal에서 잡기 위함. 기능 식별(직군 타이틀 하드코딩 아님)."""
+    t = str(goal_text or "").lower()
+    have = " ".join(str(l or "").lower() for l in (labels or []))
+    return [name for name, need, covered in _CAPS if need(t) and not covered(have)]
+
+
+def _needed_caps_coverage(goal_text, labels):
+    """목표가 *요구하는* 능력(need True)별 '덮는 팀원 수' {능력명: 수}. 깊이 게이트가 '필요 능력이 다 1명뿐'
+    (그 도메인 품질이 한 사람 지능에 인질)인지 보는 데 쓴다 — 갭(0)은 staffing이 먼저 잡으므로 여기선 1명 이상 전제."""
+    t = str(goal_text or "").lower()
+    out = {}
+    for name, need, covered in _CAPS:
+        if need(t):
+            out[name] = sum(1 for l in (labels or []) if covered(str(l or "").lower()))
+    return out
+
+
+def _offdomain_capability_hit(flow, to, body):
+    """[직군밖 사전 차단 — P4 직군밖 거부 부활(2026-06-22)] Work body가 요구하는 능력(_CAPS need) 중 수신자(to)
+    직군이 못 덮고 *다른* 팀원(리더 제외)이 덮는 것 → {능력명: [멤버]}. 비면 직군밖 아님(또는 덮는 전문가가
+    없어 staffing 영역). 종전 [직군밖]는 받은 봇이 거부하는 사후 채널인데 1회만 쓰였다(봇은 받으면 그냥 흡수)
+    — 이건 *위임 전에* 능력표로 잡아 그 전문가에게 리다이렉트(P-022 백엔드가 AI·data 흡수 차단). 의식적 예외는
+    body '[직군초과: 사유]'. 능력표 밖 도메인(사운드↔VFX 등)은 봇-side [직군밖] 반려가 백스톱."""
+    if "[직군초과" in (body or ""):
+        return {}
+    tl = (flow._info(to) or "").lower()
+    bn = [name for name, need, covered in _CAPS if need((body or "").lower()) and not covered(tl)]
+    if not bn:
+        return {}
+    hit = {}
+    for name, need, cov in _CAPS:
+        if name in bn:
+            ms = [m for m in flow.current.team if m != to and m != flow.leader
+                  and cov((flow._info(m) or "").lower())]
+            if ms:
+                hit[name] = ms
+    return hit
+
+
+# 채용 대기 인력(직군 미배정). recruit(role=…)로 런타임에 '게임 기획자·UX 디자이너' 등 필요한 직군으로
+# 채용해 합류시킨다. 로스터에서 라벨이 '예비'인 봇들이며, 첫 '전원 기획'엔 안 들어가고 필요할 때 합류한다.
+_SPARE_LABEL = "예비"
+
+
+def _is_spare(flow, oid) -> bool:
+    return (flow._info(oid) or "").strip().startswith(_SPARE_LABEL)
+
+
+def _norm_job(name: str) -> str:
+    return " ".join((name or "").split()).casefold()
+
+
+# 겸직 라벨 구분자: '백엔드·QA' = 주직군 + 부직군. 겸직은 예외(예비 0명 또는 유사 직무)에서만,
+# 봇당 최대 2개 — 더하기만 하던 시절의 '직군 5~6개 스택'(라이브 관측)으로 회귀하지 않기 위한 한도.
+_JOB_SEP = "·"
+
+
+def _jobs_of(label) -> List[str]:
+    """라벨 → 보유 직군 목록('백엔드·QA' → ['백엔드','QA']). 단일 직군이면 1개짜리 리스트."""
+    return [j.strip() for j in str(label or "").split(_JOB_SEP) if j.strip()]
+
+
+def _job_tokens(name: str):
+    return {t.casefold() for t in (name or "").split() if t}
+
+
+def _free_alternatives(flow, me_id, to) -> str:
+    """[전역 점유] 타 흐름에 점유된 to 대신 '지금 가용한 같은 직군 동료'와 채용 옵션을 안내문으로.
+    재시도(폴링) 대신 구조적 선택지를 줘서, 점유 거부가 막다른 길이 아니라 분기점이 되게 한다."""
+    eng, scope = flow.comm.engagement, flow.comm.scope
+    jobs = {_norm_job(j) for j in _jobs_of(flow._info(to) or "")} - {""}
+    alts = []
+    for b in flow.pool:
+        if b in (to, me_id) or _is_spare(flow, b):
+            continue
+        if jobs and not (jobs & {_norm_job(j) for j in _jobs_of(flow._info(b) or "")}):
+            continue
+        if eng is not None and scope is not None and eng.busy_elsewhere(b, scope):
+            continue
+        alts.append(f"{flow._info(b)}(id {b})")
+    spares = [s for s in flow.pool if _is_spare(flow, s)]
+    parts = []
+    if alts:
+        parts.append("지금 가용한 같은 직군 동료: " + ", ".join(alts[:4]))
+    if spares:
+        parts.append(f"또는 recruit(role=…)로 예비 {len(spares)}명 중 채용")
+    return ("; ".join(parts) if parts else
+            "지금은 같은 직군의 가용 동료가 없습니다 — 다른 직군 동료로 진행 가능한 부분을 먼저 하거나, "
+            "불가하면 그 사정을 보고에 남기세요")
