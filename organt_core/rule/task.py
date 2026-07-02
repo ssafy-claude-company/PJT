@@ -150,3 +150,17 @@ def _is_verifier(label) -> bool:
     """역할 라벨이 '검증/품질(QA) 기능'인가 — 전체·사용자관점 최종 인수의 자연 담당."""
     t = str(label or "").lower()
     return any(h in t for h in _VERIFIER_HINTS)
+
+
+# ── [Task 체크포인트 — guide_tools에서 이관] 흐름의 Task 상태를 크래시-세이프 영속 ──
+def _ckpt(flow):
+    """[크래시-세이프 Task 체크포인트] Task 전이(생성·목표확정·owner 확정·마감)마다 미완 Task를
+    레지스트리에 영속한다 — 종전엔 흐름 '종료'에만 써서, 동면·강제종료처럼 마감 코드가 못 도는
+    죽음이면 진행 중 Task의 정체(블록·스레드·owner·Goal)가 유실돼 복구가 '같은 Task 이어가기'가
+    아니라 '새 Task'로 시작했다(라이브 관측 — 사용자 지적). 콜백은 SYS가 주입(미주입이면 무해)."""
+    fn = getattr(flow, "checkpoint_task", None)
+    if fn:
+        try:
+            fn()
+        except Exception:
+            pass

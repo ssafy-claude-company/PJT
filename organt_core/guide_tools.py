@@ -151,60 +151,11 @@ from .rule.task import (_has_real_asset, _has_visual_runtime, _perceptual_essent
 from .rule.communication import (_kw, _CAPS, _capability_gaps, _needed_caps_coverage, _offdomain_capability_hit, _is_spare, _norm_job, _jobs_of, _job_tokens, _free_alternatives, _SPARE_LABEL, _JOB_SEP)  # noqa: F401
 
 
-def _ckpt(flow):
-    """[크래시-세이프 Task 체크포인트] Task 전이(생성·목표확정·owner 확정·마감)마다 미완 Task를
-    레지스트리에 영속한다 — 종전엔 흐름 '종료'에만 써서, 동면·강제종료처럼 마감 코드가 못 도는
-    죽음이면 진행 중 Task의 정체(블록·스레드·owner·Goal)가 유실돼 복구가 '같은 Task 이어가기'가
-    아니라 '새 Task'로 시작했다(라이브 관측 — 사용자 지적). 콜백은 SYS가 주입(미주입이면 무해)."""
-    fn = getattr(flow, "checkpoint_task", None)
-    if fn:
-        try:
-            fn()
-        except Exception:
-            pass
+# [공유 헬퍼 → rule/] _ckpt(Task 체크포인트)·_group_of·_add_members·_fork_collect 이관(re-export 호환)
+from .rule.task import _ckpt  # noqa: F401
+from .rule.communication import _group_of, _add_members, _fork_collect  # noqa: F401
 
 
-async def _fork_collect(flow, me_id, members, body_of, kind=Kind.INFO):
-    """[병렬 Info fork-join] '독립 의견 수집'(표결·회의 1라운드)을 동시에 돈다 — Communication.md
-    13–14행("여럿(병렬)은 이 제약을 완화하는 Feature로 둔다")의 구현. 완화는 정확히 이 구간뿐:
-    - 가지(branch)는 comm 프레임을 열지 않는다 → 가지 봇은 '활성'이 아니므로 request가 규약
-      에러로 자연 차단된다(가지의 중첩 요청 금지가 프롬프트가 아니라 구조로 강제 — 답만 한다).
-    - 회사 풀 관점은 전역 점유로 일관: 수집 동안 가지 봇은 점유돼 타 흐름이 못 집어가고, 끝나면
-      즉시 풀로 돌아간다. 타 흐름 점유/이 흐름에서 위임 보유 중인 멤버는 건너뛴다(부분 조인 —
-      일부 멤버 때문에 수집 전체가 막히지 않는다).
-    - 행 안전: 각 가지는 워커 침묵 워치독이 종결을 보장 → 조인이 영원히 안 닫히는 일이 구조적으로
-      없다. 동시 폭은 ORGANT_FORK_FAN(기본 3)으로 묶는다(토큰 속도 운영 노브, 1이면 직렬과 동일).
-    kind: 가지의 작업 종류 — Info(의견 수집, 기본)면 훅이 가지의 선구현(Write/Edit)을 종전대로
-    차단한다(flow.fork_kind로 프레임 없는 가지에 게이트 연결; Work 가지는 휴면 — 호출부 없음).
-    수집 동안 flow.fork_active를 올려 신규 요청/중첩 수집을 [대기]로 막는다 — CLI가 같은 턴에
-    병렬 도구 호출을 내도(vote+request 등) 가지와 같은 동료를 이중으로 깨우는 일이 구조적으로 없다.
-    반환: 멤버 순서 보존 [(member, res|None, 제외/실패 사유)]."""
-    eng, scope = flow.comm.engagement, flow.comm.scope
-    sem = asyncio.Semaphore(max(1, int(os.environ.get("ORGANT_FORK_FAN", "3"))))
-
-    async def _branch(m):
-        if flow.comm.is_busy(m):
-            return (m, None, "(이 흐름에서 진행 중인 위임 보유 — 이번 수집에서 제외)")
-        if eng is not None and scope is not None and eng.busy_elsewhere(m, scope):
-            return (m, None, f"(타 흐름({eng.holder(m)}) 참여 중 — 이번 수집에서 제외)")
-        if eng is not None and scope is not None:
-            eng.engage(m, scope)
-        flow.fork_kind[m] = kind
-        try:
-            async with sem:
-                return (m, await flow.wake(m, body_of(m), kind), "")
-        except Exception as e:
-            return (m, None, f"(수집 실패: {e})")
-        finally:
-            flow.fork_kind.pop(m, None)
-            if eng is not None and scope is not None and not flow.comm.is_busy(m):
-                eng.release(m, scope)
-
-    flow.fork_active = getattr(flow, "fork_active", 0) + 1
-    try:
-        return list(await asyncio.gather(*(_branch(m) for m in members)))
-    finally:
-        flow.fork_active -= 1
 
 
 def _reap_pgroup(pgid: int):
@@ -402,8 +353,6 @@ def _ok(text):
     return {"content": [{"type": "text", "text": text}]}
 
 
-def _group_of(flow, team):
-    return [(f"<@{i}>", flow._info(i)) for i in team]
 
 
 async def _react(g, channel_id, message_id, emoji):
@@ -413,11 +362,6 @@ async def _react(g, channel_id, message_id, emoji):
         await fn(channel_id, message_id, emoji)
 
 
-async def _add_members(g, thread_id, member_ids):
-    """Task 스레드에 팀원 추가(멤버십=팀). Guide에 메서드 없으면 건너뜀."""
-    fn = getattr(g, "add_thread_members", None)
-    if fn:
-        await fn(thread_id, member_ids)
 
 
 def _speech_clip(s, n=1500) -> str:
