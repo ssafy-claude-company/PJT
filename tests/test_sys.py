@@ -2295,7 +2295,7 @@ def test_read_thread_시간순과_평문개입_포함():
     판정의 전제). include_plain=True면 평문도 Request(to=None)로 감싼다 — 등록 프로젝트 채널의
     평문 개입을 부팅 복구가 잡을 수 있게(라이브에서 평문 '이어서 계속해'가 복구 누락되던 구멍)."""
     import types
-    from organt_discord.discord_guide import DiscordGuide
+    from guide.discord_guide import DiscordGuide
 
     def _m(mid, author, content):
         return types.SimpleNamespace(id=mid, author=types.SimpleNamespace(id=author),

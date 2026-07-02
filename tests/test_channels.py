@@ -2,7 +2,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from organt_discord.channels import choose_text_channel_id, resolve_channel_id
+from guide.channels import choose_text_channel_id, resolve_channel_id
 
 CHANS = [(100, "일반"), (200, "archive"), (300, "test")]
 

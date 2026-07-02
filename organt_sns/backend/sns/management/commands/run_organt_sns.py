@@ -30,7 +30,7 @@ if _PJT not in sys.path:
     sys.path.insert(0, _PJT)
 
 from sns.sns_guide import SnsGuide                  # noqa: E402
-from sns.http_sns_guide import HttpSnsGuide, ORIGIN_CHANNEL   # noqa: E402
+from guide.http_sns_guide import HttpSnsGuide, ORIGIN_CHANNEL   # noqa: E402
 from sns.models import Agent, GuideMessage          # noqa: E402
 
 SNS_GUILD_ID = 1

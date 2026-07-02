@@ -24,7 +24,7 @@ from claude_agent_sdk import HookMatcher
 from organt_core.audit import AuditLog, make_post_tool_use_hook
 from organt_runtime.builder import _make_builder
 from organt_core.config import Config, load_config
-from .discord_guide import DiscordGuide
+from guide.discord_guide import DiscordGuide
 from organt_core.guide_tools import COORD_TOOLS, FLOW_TOOLS, LEADER_TOOLS
 from organt_runtime.organt import Organt, build_options, load_persona, pinned_cwd
 from organt_core.permissions import make_pre_tool_use_hook
